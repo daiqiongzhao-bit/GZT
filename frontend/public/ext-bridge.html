@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>排班工作台 · 插件授权</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#0b1020; color:#e6ebf5;
+           display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; padding:20px; }
+    .card { width:340px; background:#141b2e; border:1px solid #2a3550; border-radius:16px; padding:26px; text-align:center; }
+    .logo { font-size:34px; }
+    h2 { font-size:16px; margin:10px 0 4px; }
+    p.sub { color:#9aa6bd; font-size:12.5px; margin-bottom:18px; line-height:1.6; }
+    input { width:100%; padding:10px 12px; border-radius:9px; border:1px solid #2a3550; background:#0b1020; color:#fff; margin-bottom:10px; font-size:13px; }
+    button { width:100%; padding:11px; border-radius:10px; border:none; background:#3b82f6; color:#fff; font-size:14px; cursor:pointer; }
+    .ok { color:#4ade80; font-size:13px; margin-top:14px; }
+    .err { color:#f87171; font-size:12.5px; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🔌</div>
+    <h2>插件授权登录</h2>
+    <p class="sub">登录后令牌将同步到「排班工作台助手」浏览器插件，插件即可查看你的任务。</p>
+    <input id="u" placeholder="用户名" autocomplete="username" />
+    <input id="p" type="password" placeholder="密码" autocomplete="current-password" />
+    <button id="go">登录并同步到插件</button>
+    <div id="msg"></div>
+  </div>
+  <script>
+    const WEB = location.origin
+    const msg = document.getElementById('msg')
+    // 扩展通过 popup 打开本页时，会带上 ?extid= 参数（扩展 ID）
+    const extId = new URLSearchParams(location.search).get('extid') || ''
+    document.getElementById('go').onclick = async () => {
+      const u = document.getElementById('u').value.trim()
+      const p = document.getElementById('p').value
+      if (!u || !p) { msg.innerHTML = '<div class="err">请输入用户名和密码</div>'; return }
+      try {
+        const r = await fetch(WEB + '/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p, client_type: 'extension' })
+        })
+        const j = await r.json()
+        if (!r.ok || !j.token) { msg.innerHTML = '<div class="err">' + (j.error || '登录失败') + '</div>'; return }
+        // 方式 1（推荐）：直连扩展 background 写入令牌（依赖 manifest 的 externally_connectable 白名单）
+        let ack = { ok: false }
+        try {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            ack = await new Promise((res) => {
+              try {
+                const cb = (r) => res((r && r.ok) ? { ok: true } : { ok: false })
+                if (extId) chrome.runtime.sendMessage(extId, { type: 'SWB_TOKEN', token: j.token }, cb)
+                else chrome.runtime.sendMessage({ type: 'SWB_TOKEN', token: j.token }, cb)
+              } catch (e) { res({ ok: false }) }
+            })
+          }
+        } catch (e) { ack = { ok: false } }
+        // 方式 2（回退）：通过 postMessage 回传打开本页的 popup
+        if (!ack.ok && window.opener) {
+          window.opener.postMessage({ type: 'SWB_TOKEN', token: j.token }, '*')
+          ack = { ok: true }
+        }
+        if (ack && ack.ok) {
+          msg.innerHTML = '<div class="ok">✓ 已同步到插件，可关闭本页面</div>'
+        } else {
+          msg.innerHTML = '<div class="err">同步失败：请通过插件按钮打开本页再登录</div>' +
+            '<div style="font-size:11px;color:#9aa6bd;margin-top:6px;">提示：请先安装/刷新「排班工作台助手」插件，再从插件弹窗点击「前往网页端登录」打开本页。</div>'
+        }
+      } catch (e) {
+        msg.innerHTML = '<div class="err">网络错误：' + e + '</div>'
+      }
+    }
+  </script>
+</body>
+</html>

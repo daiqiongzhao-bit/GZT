@@ -1,0 +1,11 @@
+**/node_modules
+frontend/node_modules
+backend/web/dist/assets
+.git
+*.md
+data
+*.db
+swb
+backups
+screenshot-*.png
+tests

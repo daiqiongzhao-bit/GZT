@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="hd">
+    <span class="logo">📋</span>
+    <span class="ttl">排班工作台助手</span>
+    <button id="btn-refresh" class="rbtn" title="刷新">⟳</button>
+  </header>
+
+  <details id="settings" class="settings">
+    <summary>⚙ 服务器地址</summary>
+    <input id="inp-base" class="ipt sm" placeholder="https://example.com" />
+    <button id="btn-save-base" class="btn ghost sm">保存</button>
+    <div id="base-err" class="err"></div>
+    <div class="remind-row">
+      <label class="chk"><input type="checkbox" id="chk-remind" /> 任务到点提醒</label>
+      <label class="lead">提前 <input id="inp-lead" type="number" min="0" max="120" class="ipt xs" /> 分钟</label>
+    </div>
+    <div id="remind-msg" class="err"></div>
+  </details>
+
+  <!-- 未登录 -->
+  <section id="login" class="box hidden">
+    <p class="hint">在弹窗内登录，实时查看今日班次、待办与逾期提醒。</p>
+    <input id="inp-u" class="ipt" placeholder="账号" autocomplete="username" />
+    <input id="inp-p" type="password" class="ipt" placeholder="密码" autocomplete="current-password" />
+    <div id="login-err" class="err"></div>
+    <button id="btn-login" class="btn primary">登 录</button>
+    <button id="btn-open-web" class="btn ghost">打开网页端</button>
+  </section>
+
+  <!-- 加载中 -->
+  <section id="loading" class="box hidden">
+    <div class="spin"></div>
+    <p>加载中…</p>
+  </section>
+
+  <!-- 已登录：概览 -->
+  <section id="dash" class="box hidden">
+    <!-- 今日班次 + 更新时间 -->
+    <div class="meta">
+      <span id="my-shift" class="shift-chip">—</span>
+      <span id="updated" class="upd"></span>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b id="st-today">–</b><span>今日待办</span></div>
+      <div class="stat danger"><b id="st-over">–</b><span>逾期</span></div>
+      <div class="stat"><b id="st-month">–</b><span>本月</span></div>
+    </div>
+
+    <h3>今日待办</h3>
+    <ul id="today-list" class="tasks"></ul>
+
+    <div class="foot">
+      <button id="btn-open-today" class="btn ghost">今日任务</button>
+      <button id="btn-open-sched" class="btn ghost">我的班表</button>
+      <button id="btn-logout" class="btn danger sm">退出</button>
+    </div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

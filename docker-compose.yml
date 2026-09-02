@@ -1,0 +1,16 @@
+services:
+  shift-workbench:
+    build: .
+    image: daiqiongzhao/gzt:latest
+    container_name: shift-workbench
+    ports:
+      - "8090:8080"
+    environment:
+      APP_PORT: "8080"
+      DB_PATH: "/data/swb.db"
+      JWT_SECRET: "${JWT_SECRET}"
+      AES_KEY: "${AES_KEY}"
+      TZ: "Asia/Shanghai"
+    volumes:
+      - /opt/swb/data:/data
+    restart: unless-stopped

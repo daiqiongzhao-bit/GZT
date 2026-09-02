@@ -1,0 +1,13 @@
+# 依赖
+frontend/node_modules/
+backend/web/dist/
+*.db
+data/
+
+# 本地二进制（单文件交付物，可经 build.sh 重建）
+/dist/
+*.exe
+/swb
+
+# 环境
+.env

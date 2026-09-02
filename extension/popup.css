@@ -1,0 +1,135 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ===== 浅色默认（与网页 v0.6.0 一致） ===== */
+body {
+  width: 340px;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f1f4f9;
+  color: #1f2733;
+  font-size: 13px;
+}
+
+.hd {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e6e9f2;
+  background: #ffffff;
+}
+.logo { font-size: 18px; }
+.ttl { font-weight: 700; font-size: 14px; flex: 1; }
+.rbtn {
+  width: 30px; height: 30px; border-radius: 8px; border: 1px solid #e6e9f2;
+  background: #f6f8fc; color: #4f46e5; cursor: pointer; font-size: 16px; line-height: 1;
+}
+.rbtn:hover { background: #eef0fe; }
+.rbtn:active { transform: rotate(90deg); transition: transform .2s; }
+
+.box { padding: 14px; }
+.hidden { display: none; }
+
+.settings { margin: 0 12px 4px; font-size: 12px; border-bottom: 1px solid #e6e9f2; }
+.settings summary { cursor: pointer; color: #6b7280; padding: 8px 2px; user-select: none; }
+.settings summary:hover { color: #4f46e5; }
+.settings .ipt { margin: 4px 0 6px; }
+.settings .btn { margin-top: 0; margin-bottom: 6px; }
+.settings .ipt.xs { width: 52px; padding: 3px 6px; font-size: 12px; margin: 0; }
+.remind-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0 4px; }
+.remind-row .chk { display: flex; align-items: center; gap: 5px; color: #374151; cursor: pointer; user-select: none; }
+.remind-row .lead { display: flex; align-items: center; gap: 4px; color: #6b7280; }
+@media (prefers-color-scheme: dark) {
+  .settings { border-color: #233048; }
+  .settings summary { color: #8b96ac; }
+  .settings summary:hover { color: #93b4ff; }
+  .remind-row .chk { color: #c6cede; }
+  .remind-row .lead { color: #8b96ac; }
+}
+
+.hint { color: #6b7280; line-height: 1.6; margin-bottom: 12px; }
+
+.ipt {
+  width: 100%; padding: 9px 11px; border-radius: 9px;
+  border: 1px solid #e0e4ee; background: #fff; color: #1f2733;
+  font-size: 13px; outline: none; margin-bottom: 8px;
+}
+.ipt:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,0.14); }
+
+.err { color: #ef4444; font-size: 12px; min-height: 16px; margin-bottom: 4px; line-height: 1.4; }
+
+.btn {
+  width: 100%; padding: 9px; border-radius: 9px; border: 1px solid #e0e4ee;
+  cursor: pointer; font-size: 13px; margin-top: 8px; background: #fff; color: #1f2733;
+}
+.btn:disabled { opacity: .6; cursor: wait; }
+.btn.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #4338ca; }
+.btn.ghost { background: transparent; color: #4f46e5; border-color: #d8dcf0; }
+.btn.ghost:hover { background: #eef0fe; }
+.btn.danger { background: transparent; border-color: #f2c9cf; color: #ef4444; }
+.btn.danger:hover { background: #fdeef0; }
+.btn.danger.sm { width: auto; padding: 7px 12px; margin-top: 0; }
+
+/* 今日班次 + 更新时间 */
+.meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.shift-chip {
+  font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+  background: #eef0fe; color: #4f46e5;
+}
+.shift-chip.none { background: #f1f3f8; color: #9aa3b2; }
+.upd { font-size: 11px; color: #9aa3b2; }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.stat { background: #ffffff; border: 1px solid #e6e9f2; border-radius: 10px; padding: 10px 6px; text-align: center; }
+.stat b { display: block; font-size: 20px; color: #1f2733; }
+.stat span { font-size: 11px; color: #6b7280; }
+.stat.danger b { color: #ef4444; }
+
+h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
+
+.tasks { list-style: none; display: flex; flex-direction: column; gap: 7px; max-height: 260px; overflow-y: auto; }
+.task { background: #fff; border: 1px solid #eef1f6; border-radius: 9px; padding: 9px 11px; display: flex; align-items: center; gap: 9px; }
+.ck {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid #cbd2e0; background: #fff;
+  cursor: pointer; flex: none; position: relative; transition: all .15s; padding: 0;
+}
+.ck:hover { border-color: #4f46e5; }
+.ck.on { background: #4f46e5; border-color: #4f46e5; }
+.ck.on::after { content: '✓'; color: #fff; font-size: 11px; line-height: 14px; display: block; text-align: center; }
+.ck.busy { border-color: #4f46e5; border-top-color: transparent; animation: sp .7s linear infinite; }
+.t { flex: 1; min-width: 0; }
+.t .n { font-size: 12.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t .m { font-size: 11px; color: #9aa3b2; }
+.badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #fdeef0; color: #ef4444; flex: none; }
+.empty { justify-content: center; color: #9aa3b2; font-size: 12.5px; background: transparent; border: none; }
+
+.foot { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+.foot .btn { margin-top: 0; }
+
+.spin { width: 22px; height: 22px; border: 3px solid #d8dce8; border-top-color: #4f46e5; border-radius: 50%; animation: sp .7s linear infinite; margin: 0 auto 8px; }
+@keyframes sp { to { transform: rotate(360deg); } }
+
+/* ===== 系统深色模式自动适配 ===== */
+@media (prefers-color-scheme: dark) {
+  body { background: #0b1020; color: #e6ebf5; }
+  .hd { background: #141b2e; border-color: #233048; }
+  .rbtn { background: #1b2336; border-color: #2a3550; color: #60a5fa; }
+  .rbtn:hover { background: #233048; }
+  .box { background: #0b1020; }
+  .hint, .upd, h3, .t .m, .empty { color: #8b96ac; }
+  .ipt { background: #0b1020; border-color: #2a3550; color: #fff; }
+  .ipt:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,0.16); }
+  .btn { background: #141b2e; border-color: #2a3550; color: #e6ebf5; }
+  .btn.primary { background: #3b82f6; border-color: #3b82f6; }
+  .btn.ghost { color: #93b4ff; border-color: #2a3550; }
+  .btn.ghost:hover { background: #1b2336; }
+  .btn.danger { border-color: #50202a; color: #f87171; }
+  .btn.danger:hover { background: #2a1418; }
+  .shift-chip { background: #1b2742; color: #93b4ff; }
+  .shift-chip.none { background: #161d2e; color: #6b7689; }
+  .stat { background: #141b2e; border-color: #233048; }
+  .stat b { color: #e6ebf5; }
+  .stat span { color: #8b96ac; }
+  .task { background: #141b2e; border-color: #233048; }
+  .ck { background: #0b1020; border-color: #3a4660; }
+  .badge { background: #2a1418; color: #f87171; }
+  .spin { border-color: #2a3550; border-top-color: #60a5fa; }
+}
