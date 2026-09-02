@@ -104,6 +104,13 @@ echo
 read -r -p "确认发布 $NEW？[y/N] " CONFIRM
 [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && { echo "已取消"; exit 0; }
 
+# ---------- 3.5 同步代码内 AppVersion（避免线上 /api/version 与 tag 不一致） ----------
+echo "==> 0/4 同步 AppVersion -> ${NEW}"
+sed -i "s/AppVersion: \"v[0-9.]*\"/AppVersion: \"${NEW}\"/" backend/internal/config/config.go
+git add backend/internal/config/config.go
+git commit -q -m "${NEW}: 同步 AppVersion"
+git push origin "$BRANCH" -q
+
 # ---------- 4. 打 tag 并推送 GitHub ----------
 echo
 echo "==> 1/4 打 tag ${NEW}"
