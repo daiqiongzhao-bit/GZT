@@ -402,9 +402,9 @@ onMounted(async () => {
 .task-table tbody tr.done .t-title { text-decoration: line-through; }
 .col-check { width: 44px; }
 .check { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; border: 1px solid var(--glass-border); background: transparent; color: var(--accent); display: grid; place-items: center; }
-.check svg { width: 16px; height: 16px; opacity: 0; }
+.check :deep(svg) { width: 16px; height: 16px; opacity: 0; }
 .check.on { background: var(--accent); color: #fff; }
-.check.on svg { opacity: 1; }
+.check.on :deep(svg) { opacity: 1; }
 .col-title { min-width: 180px; }
 .t-title-row { display: flex; align-items: center; gap: 8px; }
 .t-title { font-weight: 600; }
