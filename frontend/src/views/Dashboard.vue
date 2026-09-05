@@ -326,10 +326,11 @@ function prioText(p) { return { high: '高优', medium: '中优', low: '低优' 
 function dlText(s) { return s.replace('T', ' ').slice(0, 16) }
 
 async function toggle(t) {
+  const toDone = t.status !== 'done'
   const prev = t.status
-  t.status = t.status === 'done' ? 'todo' : 'done'
+  t.status = toDone ? 'done' : 'todo'
   try {
-    const updated = await api.post(`/tasks/${t.id}/toggle`)
+    const updated = await api.post(`/tasks/${t.id}/toggle`, { to: toDone ? 'done' : 'todo' })
     if (updated && updated.status) t.status = updated.status
   } catch { t.status = prev }
 }

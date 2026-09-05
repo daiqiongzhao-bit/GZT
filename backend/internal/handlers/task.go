@@ -314,7 +314,12 @@ func UpdateTask(c *gin.Context) {
 	c.JSON(http.StatusOK, t)
 }
 
-// ToggleTask 切换完成状态
+// ToggleTask 完成任务/重开任务。
+// v0.0.2：支持明确意图（幂等）——请求体 {to:"done"|"todo"} 时按意图执行：
+//
+//	点"完成"永远是完成，点"重开"永远是重开，不受其他端陈旧状态影响；
+//
+// 不传 to 时保持旧的"翻转"行为（兼容历史调用）。
 func ToggleTask(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var t models.Task
@@ -327,11 +332,27 @@ func ToggleTask(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作其他部门任务"})
 		return
 	}
-	// 任务按班次负责（谁当班谁负责）：本部门执行者均可完成/重开，不再按具体负责人限制
-	if t.Status == models.TaskStatusDone {
+	// 解析明确意图（可选）
+	var req struct {
+		To string `json:"to"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	target := req.To
+	if target != models.TaskStatusDone && target != models.TaskStatusTodo {
+		target = "" // 未指定 → 翻转
+	}
+	// 幂等：意图与当前状态一致时直接返回现状，不做任何重复写入
+	if target == t.Status {
+		c.JSON(http.StatusOK, t)
+		return
+	}
+	switch {
+	case target == models.TaskStatusTodo || (target == "" && t.Status == models.TaskStatusDone):
+		// 重开（显式 to=todo，或旧翻转语义下原本是 done）
 		t.Status = models.TaskStatusTodo
 		t.CompletedBy = "" // 重开清空"当前完成人"展示
-	} else {
+	case target == models.TaskStatusDone || (target == "" && t.Status != models.TaskStatusDone):
+		// 完成（显式 to=done，或旧翻转语义下原本是 todo）
 		t.Status = models.TaskStatusDone
 		t.CompletedBy = cl.Username // 记录最近一次完成人
 		now := time.Now()

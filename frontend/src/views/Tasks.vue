@@ -502,9 +502,9 @@ async function toggle(t) {
   const msg = toDone ? `确认完成任务「${t.title}」？` : `确认将任务「${t.title}」重新打开？`
   if (!confirm(msg)) return
   const prev = t.status
-  t.status = t.status === 'done' ? 'todo' : 'done'
+  t.status = toDone ? 'done' : 'todo'
   try {
-    const updated = await api.post(`/tasks/${t.id}/toggle`)
+    const updated = await api.post(`/tasks/${t.id}/toggle`, { to: toDone ? 'done' : 'todo' })
     if (updated && updated.status) {
       t.status = updated.status // 以服务端为准
       t.completed_by = updated.completed_by || ''
