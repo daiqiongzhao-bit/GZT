@@ -108,7 +108,7 @@
           </div>
           <div class="day-shifts">
             <div v-for="s in cell.items" :key="s.id" class="sched-item" :class="'si-' + shiftKey(s.shift)" :draggable="auth.canManage" @dragstart="onDragItem($event, s)">
-              <span class="chip" :class="shiftClass(s.shift)">{{ shiftShort(s.shift) }}</span>
+              <span class="chip" :class="shiftClass(s.shift)" :title="auth.canManage ? '点击编辑' : ''" @click.stop="auth.canManage && openEdit(s)">{{ shiftShort(s.shift) }}</span>
               <span v-if="auth.isSuper && deptNameOf(s)" class="chip-dept">{{ deptNameOf(s) }}</span>
               <button v-if="canDel" class="del" @click.stop="remove(s)" title="删除">×</button>
             </div>
@@ -124,8 +124,8 @@
     <section v-if="showAdd && auth.canManage" class="panel add-form">
       <div class="form-title">
         <span v-html="icons.plus"></span>
-        <span>新增排班 · {{ form.date }}<template v-if="auth.isSuper && formDeptName"> · {{ formDeptName }}</template></span>
-        <button class="btn ghost form-close" @click="showAdd = false">收起</button>
+        <span>{{ editingId ? '编辑排班' : '新增排班' }} · {{ form.date }}<template v-if="auth.isSuper && formDeptName"> · {{ formDeptName }}</template></span>
+        <button class="btn ghost form-close" @click="closeForm">收起</button>
       </div>
       <div class="form-grid">
         <div>
@@ -155,7 +155,7 @@
         <span v-if="!users.length" class="section-sub">暂无人员，请先在设置中添加</span>
       </div>
       <div class="form-actions">
-        <button class="btn ghost" @click="showAdd = false">取消</button>
+        <button class="btn ghost" @click="closeForm">取消</button>
         <button class="btn primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存排班' }}</button>
       </div>
     </section>
@@ -199,6 +199,8 @@ function shiftTimeOf(item) {
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 
 const form = reactive({ date: '', shift: '早班', people: [], dept_id: null })
+// 编辑中的班表 ID：null 表示新增模式
+const editingId = ref(null)
 // 实际提交的部门：超管用表单选择值，部门管理员锁定为本部门（后端也会强制覆盖）
 const submitDeptId = computed(() => Number(form.dept_id) || auth.user.dept_id)
 const formDeptName = computed(() => {
@@ -378,7 +380,7 @@ async function onDrop(e, cell) {
     if (data.kind === 'move') {
       const item = schedules.value.find((s) => s.id === data.id)
       if (!item || item.date === cell.key) return
-      await api.put(`/schedules/${data.id}`, { date: cell.key, shift: item.shift, people: peopleOf(item) })
+      await api.put(`/schedules/${data.id}`, { date: cell.key, shift: item.shift, people: peopleOf(item), dept_id: item.dept_id })
       await load()
     } else if (data.kind === 'shift') {
       let people = []
@@ -401,6 +403,7 @@ async function onDrop(e, cell) {
 }
 
 function openAdd(date) {
+  editingId.value = null
   form.date = date || todayStr()
   form.shift = '早班'
   // 部门：超管默认本部门、之后保持上次选择（方便连续给同一部门排班），部门管理员锁定本部门
@@ -417,12 +420,31 @@ function openAdd(date) {
   showAdd.value = true
 }
 
+// openEdit 打开编辑弹窗：预填该条班表的日期/班次/人员/部门
+function openEdit(s) {
+  if (!auth.canManage) return
+  editingId.value = s.id
+  form.date = s.date
+  form.shift = s.shift
+  form.dept_id = s.dept_id || auth.user.dept_id
+  try { form.people = JSON.parse(s.people || '[]') } catch { form.people = [] }
+  showAdd.value = true
+}
+
+function closeForm() {
+  showAdd.value = false
+  editingId.value = null
+}
+
 async function save() {
   if (!form.date || !form.shift || !form.people.length) { alert('日期、班次、人员均必填'); return }
   saving.value = true
   try {
-    await api.post('/schedules', { date: form.date, shift: form.shift, people: [...form.people], dept_id: submitDeptId.value })
-    showAdd.value = false
+    const payload = { date: form.date, shift: form.shift, people: [...form.people], dept_id: submitDeptId.value }
+    // 编辑态走 PUT（支持改部门），新增走 POST
+    if (editingId.value) await api.put(`/schedules/${editingId.value}`, payload)
+    else await api.post('/schedules', payload)
+    closeForm()
     form.people = []
     await load()
   } catch (e) { alert(e.response?.data?.error || '保存失败') }

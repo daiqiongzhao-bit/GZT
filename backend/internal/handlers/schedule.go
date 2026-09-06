@@ -35,7 +35,11 @@ func ListSchedules(c *gin.Context) {
 // 返回被替换（移除）的人员名单，便于日志与提示。
 func replacePersonShifts(date string, deptID uint, people []string, excludeID uint) []string {
 	var existing []models.Schedule
-	q := db.DB.Where("date = ? AND dept_id = ?", date, deptID)
+	// v0.0.5：跨部门清理（原实现带 dept_id 条件，跨部门就失效）。
+	// 同一人同一天只允许存在一个班次，否则超管视角会看到「一人两个班次」。
+	// deptID 仍保留用于日志与未来扩展。
+	_ = deptID
+	q := db.DB.Where("date = ?", date)
 	if excludeID > 0 {
 		q = q.Where("id <> ?", excludeID)
 	}
@@ -86,6 +90,55 @@ func replacePersonShifts(date string, deptID uint, people []string, excludeID ui
 	return replaced
 }
 
+// validatePeopleDept 校验排班人员是否归属该部门（或其上级部门）。
+// v0.0.5：修复「A 部门的人被排进 B 部门班表」——刘海龙属三亚预订仓，却能被排进信息部。
+// 查不到对应账号的历史姓名不做强校验，避免阻断既有数据。
+func validatePeopleDept(deptID uint, people []string) error {
+	if deptID == 0 || len(people) == 0 {
+		return nil
+	}
+	var bad []string
+	seen := map[string]bool{}
+	for _, raw := range people {
+		p := strings.TrimSpace(raw)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		var u models.User
+		if err := db.DB.Where("name = ? OR username = ?", p, p).First(&u).Error; err != nil {
+			continue // 历史遗留姓名，无对应账号 → 不强校验
+		}
+		if u.DeptID == deptID || isAncestorDept(u.DeptID, deptID) {
+			continue // 本部门人员，或上级部门人员下到子部门排班
+		}
+		bad = append(bad, fmt.Sprintf("%s（属%s）", u.Name, deptName(u.DeptID)))
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("以下人员不属于该部门，无法排入：%s", strings.Join(bad, "、"))
+	}
+	return nil
+}
+
+// deptName 返回部门名称，查不到时降级为「部门N」
+func deptName(id uint) string {
+	var d models.Department
+	if err := db.DB.First(&d, id).Error; err != nil {
+		return fmt.Sprintf("部门%d", id)
+	}
+	return d.Name
+}
+
+// isAncestorDept 判断 ancestorID 是否为 deptID 的上级部门（含自身）
+func isAncestorDept(ancestorID, deptID uint) bool {
+	for _, id := range descendantDeptIDs(ancestorID) {
+		if id == deptID {
+			return true
+		}
+	}
+	return false
+}
+
 type scheduleReq struct {
 	Date   string   `json:"date"`
 	Shift  string   `json:"shift"`
@@ -111,6 +164,11 @@ func CreateSchedule(c *gin.Context) {
 	}
 	if !canManageDept(c, deptID) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权在该部门下操作"})
+		return
+	}
+	// v0.0.5：人员必须归属该部门，防止跨部门排班
+	if err := validatePeopleDept(deptID, req.People); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	// 一人一天只在一个班次：先把该批人员当天其他班次的旧记录替换掉
@@ -192,8 +250,23 @@ func UpdateSchedule(c *gin.Context) {
 		peopleJSON, _ := json.Marshal(req.People)
 		s.People = string(peopleJSON)
 	}
+	// v0.0.5：支持跨部门迁移班表（原实现忽略 req.DeptID，部门建错后无法修改，只能删了重建）
+	if req.DeptID > 0 && req.DeptID != s.DeptID {
+		if !canManageDept(c, req.DeptID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权把班表迁移到该部门"})
+			return
+		}
+		s.DeptID = req.DeptID
+	}
+	// 以最终人员名单校验归属（req.People 为空时沿用原有名单）
+	var finalPeople []string
+	_ = json.Unmarshal([]byte(s.People), &finalPeople)
+	if err := validatePeopleDept(s.DeptID, finalPeople); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	// 一人一天只在一个班次：编辑时把该批人员当天其他班次的旧记录替换掉（排除本条自身）
-	replaced := replacePersonShifts(s.Date, s.DeptID, req.People, s.ID)
+	replaced := replacePersonShifts(s.Date, s.DeptID, finalPeople, s.ID)
 	if len(replaced) > 0 {
 		addLog(c, cl.UserID, cl.Username, fmt.Sprintf("班次替换：%s 从其他班次改为 %s %s",
 			strings.Join(replaced, "、"), s.Date, s.Shift))
