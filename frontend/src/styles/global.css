@@ -8,6 +8,11 @@
 [data-theme="light"] {
   --bg-0: #eef1f7;
   --bg-1: #f4f6fb;
+  /* 兼容别名（历史代码引用，避免变量未定义导致样式失效） */
+  --bg: #f4f6fb;              /* 面板/抽屉底色，等同 --bg-1 */
+  --muted: #94a3b8;           /* 弱化文字/标记，等同 --text-faint */
+  --success: #059669;         /* 成功色，等同 --ok */
+  --accent-soft-fg: var(--accent);
   --glass: #ffffff;
   --glass-strong: #ffffff;
   --glass-border: rgba(15, 23, 42, 0.10);
@@ -42,6 +47,11 @@
 [data-theme="dark"] {
   --bg-0: #070b16;
   --bg-1: #0b1020;
+  /* 兼容别名（历史代码引用，避免变量未定义导致样式失效） */
+  --bg: #0b1020;              /* 面板/抽屉底色，等同 --bg-1 */
+  --muted: #6b7494;           /* 弱化文字/标记，等同 --text-faint */
+  --success: #34d399;         /* 成功色，等同 --ok */
+  --accent-soft-fg: var(--accent);
   --glass: rgba(255, 255, 255, 0.06);
   --glass-strong: rgba(255, 255, 255, 0.1);
   --glass-border: rgba(255, 255, 255, 0.14);

@@ -281,12 +281,12 @@ function fmtNotif(t) {
 /* 通知抽屉 */
 .notif-mask {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--mask);
   display: flex; justify-content: flex-end;
 }
 .notif-panel {
   width: 380px; max-width: 92vw; height: 100%;
-  background: var(--bg); border-left: 1px solid var(--glass-border);
+  background: var(--bg-1); border-left: 1px solid var(--glass-border);
   display: flex; flex-direction: column;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
 }
