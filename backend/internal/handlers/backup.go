@@ -24,12 +24,39 @@ var backupLock sync.Mutex
 
 // BackupInfo 备份文件元数据
 type BackupInfo struct {
-	ID        string `json:"id"`        // 文件名（含 .db）
-	Name      string `json:"name"`      // 文件名（含 .db）
+	ID        string `json:"id"`         // 文件名（含 .db）
+	Name      string `json:"name"`       // 文件名（含 .db）
 	CreatedAt string `json:"created_at"` // 文件修改时间
-	Size      int64  `json:"size"`      // 本地文件字节数
-	Type      string `json:"type"`      // manual | auto
-	Remote    bool   `json:"remote"`    // 是否额外复制到异地
+	Size      int64  `json:"size"`       // 本地文件字节数
+	Type      string `json:"type"`       // manual | auto
+	Scope     string `json:"scope"`      // all|schedule|task|user（备份内容范围，v0.2.0）
+	Remote    bool   `json:"remote"`     // 是否额外复制到异地
+}
+
+// backupScopeTag 备份范围 → 文件名中的短标签；校验合法范围，非法回退 all。
+func backupScopeTag(scope string) string {
+	switch scope {
+	case "schedule", "task", "user":
+		return scope
+	default:
+		return "all"
+	}
+}
+
+// parseScopeTag 从文件名解析备份范围标签（兼容旧版本无标签的文件，回退 all）
+func parseScopeTag(name string) string {
+	// 形如 swb-backup-schedule-auto-2026...db 或 swb-backup-schedule-2026...db
+	rest := name
+	if len(rest) > len(backupPrefix) && rest[:len(backupPrefix)] == backupPrefix {
+		rest = rest[len(backupPrefix):]
+	}
+	// rest 开头是 scope 或直接是 auto-/时间戳（旧版）
+	for _, s := range []string{"schedule", "task", "user", "all"} {
+		if len(rest) > len(s) && rest[:len(s)] == s && (rest[len(s)] == '-' || rest[len(s)] == '_') {
+			return s
+		}
+	}
+	return "all"
 }
 
 // backupConfig 自动备份配置，持久化于 <BackupDir>/config.json
@@ -112,8 +139,10 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
-// CreateBackup 生成一份当前数据库的备份。bType 为 manual/auto。
-func CreateBackup(bType string) (*BackupInfo, error) {
+// CreateBackup 生成一份当前数据库的备份。bType 为 manual/auto；scope 为 all|schedule|task|user。
+// 说明：底层为整库 SQLite 快照，保证还原可靠且不破坏其他数据；scope 作为备份范围标签组织区分，
+// 跨类型细分数据可另用各模块的 CSV/Excel 导出。scope 非法时回退 all。
+func CreateBackup(bType, scope string) (*BackupInfo, error) {
 	backupLock.Lock()
 	defer backupLock.Unlock()
 
@@ -128,13 +157,15 @@ func CreateBackup(bType string) (*BackupInfo, error) {
 		return nil, fmt.Errorf("源数据库不存在: %w", err)
 	}
 
+	scopeTag := backupScopeTag(scope)
 	ts := time.Now().Format("2006-01-02-150405")
 	now := time.Now()
 	typeTag := ""
 	if bType == "auto" {
 		typeTag = "auto-"
 	}
-	name := backupPrefix + typeTag + ts + backupExt
+	// 形如 swb-backup-<scope>-<auto-><ts>.db（旧版无 scope 段，列表解析时回退 all）
+	name := backupPrefix + scopeTag + "-" + typeTag + ts + backupExt
 	localPath := filepath.Join(dir, name)
 	if err := copyFile(src, localPath); err != nil {
 		return nil, err
@@ -146,6 +177,7 @@ func CreateBackup(bType string) (*BackupInfo, error) {
 		CreatedAt: now.Format("2006-01-02 15:04:05"),
 		Size:      0, // 由 ListBackups 从文件信息填充
 		Type:      bType,
+		Scope:     scopeTag,
 		Remote:    false,
 	}
 
@@ -225,9 +257,9 @@ func ListBackups() ([]BackupInfo, error) {
 		if err != nil {
 			continue
 		}
-		// 类型：文件名不含 auto 标记为 manual
+		// 类型：文件名含 "-auto-" 段视为 auto，否则 manual
 		bType := "manual"
-		if len(nm) > len(backupPrefix)+len("auto-") && nm[len(backupPrefix):len(backupPrefix)+5] == "auto-" {
+		if strings.Contains(nm, "-auto-") {
 			bType = "auto"
 		}
 		list = append(list, BackupInfo{
@@ -236,6 +268,7 @@ func ListBackups() ([]BackupInfo, error) {
 			CreatedAt: fi.ModTime().Format("2006-01-02 15:04:05"),
 			Size:      fi.Size(),
 			Type:      bType,
+			Scope:     parseScopeTag(nm),
 			Remote:    cfg.RemoteDir != "",
 		})
 	}
@@ -323,9 +356,10 @@ func ListBackupsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
-// CreateBackupHandler POST /backups 立即手动备份
+// CreateBackupHandler POST /backups 立即手动备份（支持 ?scope=all|schedule|task|user，默认 all）
 func CreateBackupHandler(c *gin.Context) {
-	info, err := CreateBackup("manual")
+	scope := backupScopeTag(strings.ToLower(strings.TrimSpace(c.Query("scope"))))
+	info, err := CreateBackup("manual", scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -439,8 +473,8 @@ func StartBackupScheduler() {
 			if time.Now().Before(nextRun) {
 				continue
 			}
-			// 到达计划时间：执行自动备份
-			if _, err := CreateBackup("auto"); err != nil {
+			// 到达计划时间：执行自动备份（默认全量）
+			if _, err := CreateBackup("auto", "all"); err != nil {
 				// 仅记录，不中断调度
 				_ = db.DB.Create(&models.Log{Action: "自动备份失败: " + err.Error()}).Error
 			}

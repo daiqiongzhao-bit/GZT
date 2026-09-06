@@ -38,6 +38,10 @@
           </select>
         </div>
         <div class="actions">
+          <div class="view-seg">
+            <button class="seg" :class="{ on: !matrixMode }" @click="matrixMode = false">日历</button>
+            <button class="seg" :class="{ on: matrixMode }" @click="enterMatrix">整月矩阵</button>
+          </div>
           <button class="btn ghost" @click="goToday">今天</button>
           <button class="btn ghost nav-btn" @click="prevMonth" v-html="icons.chevronLeft"></button>
           <button class="btn ghost nav-btn" @click="nextMonth" v-html="icons.chevronRight"></button>
@@ -46,7 +50,7 @@
     </section>
 
     <!-- 人员卡片 + 统计 -->
-    <section class="panel person-card">
+    <section v-if="!matrixMode" class="panel person-card">
       <div class="pc-left">
         <div class="avatar" :class="{'me': selectedPerson==='__me__'}">{{ personInitial }}</div>
         <div class="pc-info">
@@ -67,7 +71,7 @@
     </section>
 
     <!-- 班次拖拽面板（仅管理端） -->
-    <section v-if="auth.canManage" class="panel shift-palette">
+    <section v-if="!matrixMode && auth.canManage" class="panel shift-palette">
       <span class="sp-label">拖拽班次到日期：</span>
       <div class="sp-chips">
         <span v-for="s in deptShifts" :key="s" class="sp-chip" :class="shiftClass(s)" draggable="true" @dragstart="onDragShift($event, s)">{{ shiftTime(s) }}</span>
@@ -78,7 +82,7 @@
 
     <!-- 空状态引导 -->
     <EmptyState
-      v-if="monthItems.length === 0"
+      v-if="!matrixMode && monthItems.length === 0"
       :title="auth.canManage ? '本月还没有排班' : '本月暂无你的排班'"
       :desc="auth.canManage ? '点击右上角「新增排班」，或直接把上方班次拖到日历日期即可快速排班。' : '联系部门管理员为你排班，或切换到「全部」查看部门排班。'"
       :action-text="auth.canManage ? '新增排班' : ''"
@@ -87,7 +91,7 @@
     />
 
     <!-- 日历网格 -->
-    <section class="panel cal-wrap">
+    <section v-if="!matrixMode" class="panel cal-wrap">
       <div class="cal-grid cal-weekdays">
         <div v-for="w in weekdays" :key="w" class="wk" :class="{ weekend: w === '六' || w === '日' }">{{ w }}</div>
       </div>
@@ -118,6 +122,76 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- 整月部门矩阵（v0.2.0） -->
+    <section v-if="matrixMode" class="panel matrix-panel">
+      <div class="matrix-head">
+        <div class="matrix-title">
+          <span>整月排班矩阵</span>
+          <template v-if="auth.isSuper">
+            <select v-model.number="matrixDeptId" class="glass-input matrix-dept" title="查看哪个部门">
+              <option :value="0" disabled>请选择部门</option>
+              <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
+            </select>
+          </template>
+          <span class="matrix-sub">{{ viewYear }} 年 {{ viewMonth + 1 }} 月 · {{ matrixDeptName }} · {{ matrixMembers.length }} 人</span>
+        </div>
+        <div class="matrix-legend">
+          <span class="ml"><i class="dot ok"></i>早</span>
+          <span class="ml"><i class="dot accent"></i>中</span>
+          <span class="ml"><i class="dot warn"></i>晚</span>
+          <span class="ml"><i class="dot purple"></i>夜</span>
+          <span class="ml"><i class="dot rest"></i>休</span>
+        </div>
+      </div>
+
+      <div v-if="!matrixMembers.length" class="empty">该部门暂无人员，或请先选择部门</div>
+      <div v-else class="matrix-scroll">
+        <table class="matrix-tbl">
+          <thead>
+            <tr>
+              <th class="sticky-col seq">序号</th>
+              <th class="sticky-col name">姓名</th>
+              <th class="sticky-col emp">工号</th>
+              <th v-for="d in matrixDays" :key="d" class="day-col" :class="{ wknd: matrixIsWeekend(d) }">{{ d }}<i v-if="matrixIsWeekend(d)" class="wknd-tag">休</i></th>
+              <th class="sum-col">早</th>
+              <th class="sum-col">中</th>
+              <th class="sum-col">晚</th>
+              <th class="sum-col">夜</th>
+              <th class="sum-col">休息</th>
+              <th class="sum-col">工时(h)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, ri) in matrixRows" :key="row.uid" :class="{ even: ri % 2 }">
+              <td class="sticky-col">{{ ri + 1 }}</td>
+              <td class="sticky-col name">{{ row.name }}</td>
+              <td class="sticky-col emp">{{ row.emp_no }}</td>
+              <td v-for="d in matrixDays" :key="d" class="day-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="row.cells[d]" class="mc" :class="shiftColor(row.cells[d])">{{ matrixCode(row.cells[d]) }}</span>
+              </td>
+              <td class="sum-cell">{{ row.tot.early }}</td>
+              <td class="sum-cell">{{ row.tot.mid }}</td>
+              <td class="sum-cell">{{ row.tot.evening }}</td>
+              <td class="sum-cell">{{ row.tot.night }}</td>
+              <td class="sum-cell">{{ row.tot.rest }}</td>
+              <td class="sum-cell hours">{{ row.tot.hours }}</td>
+            </tr>
+            <tr class="foot-row">
+              <td class="sticky-col" colspan="3">当班人数</td>
+              <td v-for="d in matrixDays" :key="d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">{{ matrixDaily[d] || '' }}</td>
+              <td class="sum-cell">{{ matrixTot.early }}</td>
+              <td class="sum-cell">{{ matrixTot.mid }}</td>
+              <td class="sum-cell">{{ matrixTot.evening }}</td>
+              <td class="sum-cell">{{ matrixTot.night }}</td>
+              <td class="sum-cell">{{ matrixTot.rest }}</td>
+              <td class="sum-cell">{{ matrixTot.hours }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="matrix-note">注：格子显示班次简称，空白表示该日无排班；休息按「当月未排班天数」估算，工时按各班次时段时长累计。</p>
     </section>
 
     <!-- 内联新增表单 -->
@@ -512,6 +586,118 @@ async function load() {
   if (!form.dept_id) form.dept_id = auth.user.dept_id || departments.value[0]?.id || null
 }
 
+// ---------- 整月部门矩阵（v0.2.0） ----------
+const matrixMode = ref(false)
+const matrixDeptId = ref(0)
+function enterMatrix() {
+  matrixMode.value = true
+  if (!matrixDeptId.value) initMatrixDept()
+}
+function initMatrixDept() {
+  // 非超管：只看本部门（管理员一般就管本部门）；超管：默认选第一个有成员的部门，也可手动切
+  if (!auth.isSuper) { matrixDeptId.value = auth.user.dept_id; return }
+  const firstPop = departments.value.find((d) => users.value.some((u) => u.dept_id === d.id))
+  matrixDeptId.value = (firstPop && firstPop.id) || (departments.value[0] && departments.value[0].id) || 0
+}
+const matrixDeptName = computed(() => {
+  const d = departments.value.find((x) => x.id === matrixDeptId.value)
+  return d ? d.name : ''
+})
+// 该部门直属成员（按工号排序）
+const matrixMembers = computed(() => {
+  const id = matrixDeptId.value
+  if (!id) return []
+  return users.value
+    .filter((u) => u.dept_id === id)
+    .slice()
+    .sort((a, b) => (a.emp_no || '').localeCompare(b.emp_no || '', undefined, { numeric: true }))
+})
+const matrixDaysInMonth = computed(() => new Date(viewYear.value, viewMonth.value + 1, 0).getDate())
+const matrixDays = computed(() => { const n = matrixDaysInMonth.value; return Array.from({ length: n }, (_, i) => i + 1) })
+const matrixIsWeekend = (d) => { const wd = new Date(viewYear.value, viewMonth.value, d).getDay(); return wd === 0 || wd === 6 }
+function matrixCode(s) { return shiftShort(s) }
+// 班次短码样式类（复用日历配色语义）
+function shiftColor(s) { return shiftClass(s) }
+
+// 某班次小时数：优先取该部门班次配置的起止时间计算；无配置则按常见时长兜底
+function shiftHours(name) {
+  if (!name || name === '休息') return 0
+  const did = matrixDeptId.value
+  const sc = shiftConfigs.value.find((x) => x.dept_id === did && x.name === name) || shiftConfigs.value.find((x) => x.name === name)
+  if (sc && sc.start_time && sc.end_time) {
+    const toM = (t) => { const [h, m] = (t || '0:0').split(':'); return (+h || 0) * 60 + (+m || 0) }
+    let s = toM(sc.start_time), e = toM(sc.end_time)
+    if (e <= s) e += 24 * 60
+    return Math.round(((e - s) / 60) * 10) / 10
+  }
+  return { '早班': 9, '中班': 8.5, '晚班': 8.5, '夜班': 8 }[name] || 8
+}
+
+// 矩阵行：每人 { name, emp_no, cells: {day: shift}, tot: {...} }
+const matrixRows = computed(() => {
+  const id = matrixDeptId.value
+  const y = viewYear.value, m = viewMonth.value
+  const prefix = `${y}-${String(m + 1).padStart(2, '0')}-`
+  const daysInMonth = matrixDaysInMonth.value
+  // 聚合：dept 匹配 + 当月，person -> date -> shift
+  const personDay = {}
+  for (const s of schedules.value) {
+    if (s.dept_id !== id || !s.date || !s.date.startsWith(prefix)) continue
+    const shift = s.shift
+    const day = +s.date.slice(8) // "YYYY-MM-DD" 取日
+    for (const name of peopleOf(s)) {
+      ;(personDay[name] ||= {})[day] = shift
+    }
+  }
+  return matrixMembers.value.map((u) => {
+    const pd = personDay[u.name] || {}
+    const cells = {}
+    let early = 0, mid = 0, evening = 0, night = 0, hours = 0
+    const workDays = new Set()
+    for (let d = 1; d <= daysInMonth; d++) {
+      const sh = pd[d]
+      if (!sh || sh === '休息') continue
+      cells[d] = sh
+      workDays.add(d)
+      hours += shiftHours(sh)
+      if (sh === '早班') early++
+      else if (sh === '中班') mid++
+      else if (sh === '晚班') evening++
+      else if (sh === '夜班') night++
+    }
+    return {
+      uid: u.id,
+      name: u.name,
+      emp_no: u.emp_no,
+      cells,
+      tot: { early, mid, evening, night, rest: daysInMonth - workDays.size, hours: Math.round(hours * 10) / 10 }
+    }
+  })
+})
+
+// 每日当班人数（底部一行）
+const matrixDaily = computed(() => {
+  const out = {}
+  const rows = matrixRows.value
+  if (!rows.length) return out
+  for (let d = 1; d <= matrixDaysInMonth.value; d++) {
+    let cnt = 0
+    for (const r of rows) if (r.cells[d]) cnt++
+    if (cnt) out[d] = cnt
+  }
+  return out
+})
+
+// 全体汇总（最右与底部）
+const matrixTot = computed(() => {
+  let early = 0, mid = 0, evening = 0, night = 0, rest = 0, hours = 0
+  for (const r of matrixRows.value) {
+    early += r.tot.early; mid += r.tot.mid; evening += r.tot.evening; night += r.tot.night
+    rest += r.tot.rest; hours += r.tot.hours
+  }
+  return { early, mid, evening, night, rest, hours: Math.round(hours * 10) / 10 }
+})
+
 onMounted(load)
 </script>
 
@@ -644,7 +830,58 @@ onMounted(load)
 .person.sel { background: rgba(79,70,229,0.16); border-color: rgba(79,70,229,0.4); color: var(--accent); }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
+/* 视图切换（日历 / 整月矩阵） */
+.view-seg { display: inline-flex; border: 1px solid var(--glass-border); border-radius: 11px; overflow: hidden; background: var(--overlay); }
+.view-seg .seg { padding: 7px 12px; font-size: 12.5px; border: none; background: transparent; color: var(--text-dim); cursor: pointer; }
+.view-seg .seg + .seg { border-left: 1px solid var(--glass-border); }
+.view-seg .seg.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* 整月部门矩阵 */
+.matrix-panel { padding: 14px; overflow: hidden; }
+.matrix-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.matrix-title { display: flex; align-items: center; gap: 10px; font-size: 14.5px; font-weight: 700; flex-wrap: wrap; }
+.matrix-dept { max-width: 170px; padding: 6px 10px; }
+.matrix-sub { font-size: 12px; font-weight: 400; color: var(--text-faint); }
+.matrix-legend { display: flex; gap: 12px; flex-wrap: wrap; }
+.matrix-legend .ml { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); }
+.matrix-legend .dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.accent { background: var(--accent); } .dot.warn { background: var(--warn); } .dot.purple { background: var(--accent-3); } .dot.rest { background: var(--muted); }
+.matrix-scroll { overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--overlay); }
+.matrix-tbl { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
+.matrix-tbl th, .matrix-tbl td { border-bottom: 1px solid var(--hairline); border-right: 1px solid var(--hairline); padding: 4px 5px; text-align: center; white-space: nowrap; }
+.matrix-tbl th { background: var(--overlay-2); color: var(--text-faint); font-weight: 600; position: sticky; top: 0; z-index: 2; }
+/* 冻结最左三列（序号/姓名/工号），滚动时保持可见 */
+.matrix-tbl .sticky-col { position: sticky; left: 0; background: var(--overlay-2); z-index: 3; }
+.matrix-tbl .sticky-col.seq { width: 44px; min-width: 44px; }
+.matrix-tbl .sticky-col.name { left: 44px; width: 88px; min-width: 88px; text-align: left; }
+.matrix-tbl .sticky-col.emp { left: 132px; width: 62px; min-width: 62px; }
+.matrix-tbl thead .sticky-col.name { text-align: center; }
+.matrix-tbl tbody tr { background: var(--bg-1); }
+.matrix-tbl tbody tr td.sticky-col { background: var(--bg-1); }
+.matrix-tbl tbody tr.even td.sticky-col { background: var(--overlay); }
+.matrix-tbl tbody tr:hover td.sticky-col { background: var(--overlay-2); }
+.matrix-tbl .foot-row td.sticky-col { background: var(--accent-soft); }
+.matrix-tbl tr { }
+.matrix-tbl .day-col { min-width: 30px; }
+.matrix-tbl .day-cell { color: var(--text); }
+.matrix-tbl .day-col.wknd, .matrix-tbl .day-cell.wknd { background: rgba(148,163,184,0.08); }
+.matrix-tbl .sum-col { min-width: 44px; color: var(--text-dim); font-size: 11px; }
+.matrix-tbl .sum-cell { font-weight: 600; color: var(--text); }
+.matrix-tbl .sum-cell.hours { color: var(--accent); }
+.matrix-tbl .emp { font-size: 11px; color: var(--text-faint); }
+.matrix-tbl .foot-row td { background: var(--accent-soft); color: var(--accent); font-weight: 700; border-top: 2px solid var(--glass-border-strong); }
+.matrix-tbl .foot-row .foot-cell { font-weight: 700; }
+.mc { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 5px; font-size: 11px; font-weight: 700; }
+.mc.accent { background: rgba(79,70,229,0.14); color: var(--accent); }
+.mc.ok { background: rgba(13,148,136,0.12); color: var(--ok); }
+.mc.warn { background: rgba(217,119,6,0.13); color: var(--warn); }
+.mc.accent-3 { background: rgba(139,92,246,0.14); color: var(--accent-3); }
+.mc.rest { background: rgba(107,114,128,0.14); color: var(--muted); }
+.wknd-tag { font-style: normal; font-size: 9px; color: var(--text-faint); margin-left: 2px; }
+.matrix-note { font-size: 11.5px; color: var(--text-faint); margin: 10px 0 0; line-height: 1.6; }
+
 @media (max-width: 820px) {
+  .matrix-scroll { max-width: 100%; }
   .fg3 { grid-template-columns: 1fr 1fr; }
   .fg3 .actions { grid-column: span 2; justify-content: flex-end; }
   .pc-stats { width: 100%; justify-content: space-between; }

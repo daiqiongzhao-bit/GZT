@@ -117,6 +117,7 @@
           {{ userImporting ? '导入中…' : '⬆ 批量导入人员' }}
           <input type="file" accept=".xlsx,.csv" :disabled="userImporting" @change="importUsers" hidden />
         </label>
+        <button class="btn ghost" @click="exportUsers">⬇ 导出人员</button>
         <span class="section-sub">按模板填好上传即可，登录账号已存在则更新资料</span>
       </div>
       <div v-if="auth.canManage" class="add-user-fold">
@@ -377,8 +378,14 @@
       <p class="hint" style="color:var(--text-dim); font-size:13px; margin:0 0 14px; line-height:1.6;">手动备份可生成当前数据库的完整快照；还原操作危险，会立即覆盖当前数据并自动重启连接。</p>
       <div class="form-col">
         <div>
-          <label class="fld">立即备份</label>
-          <button class="btn primary" :disabled="backupCreating" @click="createBackup">{{ backupCreating ? '备份中…' : '创建备份' }}</button>
+          <label class="fld">立即备份 <span style="font-weight:400;color:var(--text-faint)">（手动备份为全量快照，此选项用于分类标记；分类明细可另用各模块的导出）</span></label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button class="btn ghost" :class="{ active: backupScope === 'all' }" @click="backupScope = 'all'">全部</button>
+            <button class="btn ghost" :class="{ active: backupScope === 'schedule' }" @click="backupScope = 'schedule'">班表</button>
+            <button class="btn ghost" :class="{ active: backupScope === 'task' }" @click="backupScope = 'task'">任务</button>
+            <button class="btn ghost" :class="{ active: backupScope === 'user' }" @click="backupScope = 'user'">人员</button>
+            <button class="btn primary" :disabled="backupCreating" @click="createBackup">{{ backupCreating ? '备份中…' : '创建备份' }}</button>
+          </div>
         </div>
         <div>
           <label class="fld">自动备份频率</label>
@@ -408,7 +415,7 @@
         <div v-for="b in backups" :key="b.id" class="backup-row">
           <div>
             <div class="b-name">{{ b.name }}</div>
-            <div class="b-meta">{{ b.size_human }} · {{ b.created_at }}<span v-if="b.remote" class="b-remote"> · 已同步异地</span></div>
+            <div class="b-meta"><span class="scope-chip" :class="'s-' + (b.scope || 'all')">{{ scopeName(b.scope) }}</span> {{ b.size_human }} · {{ b.created_at }}<span v-if="b.remote" class="b-remote"> · 已同步异地</span></div>
           </div>
           <div class="b-actions">
             <button class="btn ghost" @click="downloadBackup(b)">下载</button>
@@ -800,6 +807,7 @@ async function downloadAuth(path) {
   } catch (e) { alert('下载失败') }
 }
 function exportTasks() { downloadAuth('tasks/export') }
+function exportUsers() { downloadAuth('users/export') } // v0.2.0 人员导出
 function exportLogs() {
   const params = []
   if (logFilter.user_name) params.push('user_name=' + encodeURIComponent(logFilter.user_name))
@@ -811,11 +819,14 @@ function exportLogs() {
 const backups = ref([])
 const backupLoading = ref(false)
 const backupCreating = ref(false)
+const backupScope = ref('all') // v0.2.0：手动备份分类（all/schedule/task/user）
 const backupCfg = reactive({ frequency: 'none', retention: 10, remote_dir: '' })
+const scopeNameMap = { all: '全部', schedule: '班表', task: '任务', user: '人员' }
+function scopeName(s) { return scopeNameMap[s] || '全部' }
 const backupCfgSaving = ref(false)
 async function loadBackups() { backupLoading.value = true; try { const r = await api.get('/backups'); backups.value = Array.isArray(r) ? r : [] } catch { backups.value = [] } finally { backupLoading.value = false } }
 async function loadBackupCfg() { try { Object.assign(backupCfg, await api.get('/backup-config')) } catch {} }
-async function createBackup() { backupCreating.value = true; try { await api.post('/backups'); await loadBackups() } catch (e) { alert(e.response?.data?.error || '备份失败') } finally { backupCreating.value = false } }
+async function createBackup() { backupCreating.value = true; try { await api.post('/backups' + (backupScope.value && backupScope.value !== 'all' ? '?scope=' + backupScope.value : '')); await loadBackups() } catch (e) { alert(e.response?.data?.error || '备份失败') } finally { backupCreating.value = false } }
 async function setBackupFreq(f) { backupCfg.frequency = f; await saveBackupCfg() }
 async function saveBackupCfg() { backupCfgSaving.value = true; try { await api.post('/backup-config', { frequency: backupCfg.frequency, retention: Number(backupCfg.retention), remote_dir: backupCfg.remote_dir }); alert('已保存') } catch (e) { alert(e.response?.data?.error || '保存失败') } finally { backupCfgSaving.value = false } }
 function downloadBackup(b) { downloadAuth('backups/' + b.id + '/download') }
@@ -987,6 +998,11 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .b-name { font-size: 13.5px; font-weight: 600; }
 .b-meta { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
 .b-remote { color: var(--success, #16a34a); }
+.scope-chip { display: inline-block; padding: 1px 7px; border-radius: 7px; font-size: 10.5px; margin-right: 6px; background: var(--overlay-2); color: var(--text-dim); }
+.scope-chip.s-all { background: var(--accent-soft, rgba(79,70,229,.12)); color: var(--accent, #4f46e5); }
+.scope-chip.s-schedule { background: rgba(56,189,248,.12); color: var(--accent-2, #0ea5e9); }
+.scope-chip.s-task { background: rgba(217,119,6,.12); color: var(--warn, #d97706); }
+.scope-chip.s-user { background: rgba(5,150,105,.12); color: var(--ok, #059669); }
 .b-actions { display: flex; gap: 6px; align-items: center; }
 .b-actions .btn { padding: 6px 12px; font-size: 12.5px; }
 .b-actions .del { width: 24px; height: 24px; }

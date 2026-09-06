@@ -68,6 +68,8 @@ func main() {
 			auth.GET("/notifications/unread-count", handlers.UnreadNotificationCount)
 			auth.POST("/notifications/:id/read", handlers.MarkNotificationRead)
 			auth.POST("/notifications/read-all", handlers.MarkAllNotificationsRead)
+			// 部门广播通知（部门管/超管）v0.2.0
+			auth.POST("/notifications/broadcast", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BroadcastNotification)
 
 			// 部门（仅超管写）
 			auth.GET("/departments", handlers.ListDepartments)
@@ -91,6 +93,7 @@ func main() {
 			auth.POST("/users/:id/reset-password", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ResetPassword)
 			auth.DELETE("/users/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUser)
 			auth.POST("/users/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportUsers)
+			auth.GET("/users/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportUsersCSV) // v0.2.0 人员导出
 
 			// 班表
 		auth.GET("/schedules", handlers.ListSchedules)

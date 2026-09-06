@@ -40,12 +40,11 @@
             <div class="avatar">{{ userInitial }}</div>
             <div>
               <div class="uname">{{ auth.user.name }}</div>
-              <div class="urole">{{ auth.roleLabel }}</div>
+              <div class="urole">{{ auth.roleLabel }}<em v-if="appVersion" class="u-ver"> · v{{ appVersion }}</em></div>
             </div>
           </div>
           <button class="logout" @click="onLogout">退出登录</button>
         </div>
-        <div class="side-ver" v-if="appVersion">v{{ appVersion }}</div>
       </aside>
 
       <main class="main">
@@ -99,9 +98,25 @@
             <div class="notif-head">
               <span class="notif-title">站内通知<em v-if="notifUnread > 0" class="notif-num">{{ notifUnread }}</em></span>
               <div class="notif-head-actions">
+                <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: bcastOpen }" @click="toggleBcast">{{ bcastOpen ? '收起' : '发通知' }}</button>
                 <button class="btn ghost sm" :disabled="!notifUnread" @click="readAll">全部已读</button>
                 <button class="notif-close" @click="notifOpen = false" title="关闭">×</button>
               </div>
+            </div>
+            <div v-if="bcastOpen" class="bcast-form">
+              <div v-if="auth.isSuper" class="bcast-row">
+                <span class="bcast-label">发给部门</span>
+                <select v-model="bcastDept" class="bcast-input" :disabled="sendingBcast">
+                  <option :value="0" disabled>请选择部门</option>
+                  <option v-for="d in deptOpts" :key="d.id" :value="d.id">{{ indentOf(d.depth) }}{{ d.name }}</option>
+                </select>
+              </div>
+              <p v-else class="bcast-hint">广播将发送给你所在部门（含子部门）的全部成员</p>
+              <input v-model="bcastTitle" class="bcast-input" maxlength="60" placeholder="通知标题（必填）" :disabled="sendingBcast" />
+              <textarea v-model="bcastContent" class="bcast-input bcast-ta" rows="3" maxlength="500" placeholder="通知内容（必填）" :disabled="sendingBcast"></textarea>
+              <button class="btn primary sm full" :disabled="sendingBcast || !bcastTitle.trim() || !bcastContent.trim()" @click="doBroadcast">
+                {{ sendingBcast ? '发送中…' : '发送广播' }}
+              </button>
             </div>
             <div class="notif-list">
               <div v-for="n in notifs" :key="n.id" class="notif-item" :class="{ unread: !n.read }" @click="markRead(n)">
@@ -127,7 +142,8 @@ import { useAuthStore } from '@/store/auth'
 import { navItems, icons } from '@/icons'
 import { brand, loadBrand } from '@/brand'
 import { applyTheme } from '@/theme'
-import { get } from '@/api'
+import { get, post } from '@/api'
+import { deptOptions, indentOf } from '@/utils/dept'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -243,6 +259,45 @@ function fmtNotif(t) {
   const p = (x) => String(x).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
+
+// ---------- 部门广播（v0.2.0）----------
+const bcastOpen = ref(false)
+const bcastDept = ref(0)
+const bcastTitle = ref('')
+const bcastContent = ref('')
+const sendingBcast = ref(false)
+const deptList = ref([])
+const deptOpts = computed(() => deptOptions(deptList.value))
+
+async function toggleBcast() {
+  bcastOpen.value = !bcastOpen.value
+  if (bcastOpen.value && auth.isSuper && !deptList.value.length) {
+    try { deptList.value = await get('/departments') } catch { /* 忽略 */ }
+  }
+}
+async function doBroadcast() {
+  if (!bcastTitle.value.trim() || !bcastContent.value.trim()) return
+  // 超管必须选部门；部门管理员不选即发给本人部门
+  if (auth.isSuper && !bcastDept.value) { alert('请选择接收部门'); return }
+  sendingBcast.value = true
+  try {
+    const r = await post('/notifications/broadcast', {
+      dept_id: auth.isSuper ? bcastDept.value : 0,
+      title: bcastTitle.value.trim(),
+      content: bcastContent.value.trim()
+    })
+    bcastOpen.value = false
+    bcastTitle.value = ''
+    bcastContent.value = ''
+    const dn = r.dept_name || '部门'
+    alert(`已向「${dn}」${r.sent} 名成员发送广播通知`)
+    // 发送后刷新我的通知列表与未读
+    notifs.value = await get('/notifications')
+    loadNotifCount()
+  } catch (e) {
+    alert((e.response && e.response.data && e.response.data.error) || '发送失败')
+  } finally { sendingBcast.value = false }
+}
 </script>
 
 <style>
@@ -311,7 +366,19 @@ function fmtNotif(t) {
   background: var(--danger); border-radius: 9px; padding: 1px 7px;
 }
 .notif-head-actions { display: flex; align-items: center; gap: 10px; }
+.notif-head-actions .btn { padding: 7px 12px; font-size: 12.5px; border-radius: 10px; }
+.btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .notif-close { font-size: 22px; line-height: 1; color: var(--text-faint); background: none; border: none; cursor: pointer; padding: 4px; }
+/* 部门广播表单（v0.2.0） */
+.bcast-form { padding: 12px 16px 14px; border-bottom: 1px solid var(--glass-border); background: var(--overlay); display: flex; flex-direction: column; gap: 9px; }
+.bcast-row { display: flex; flex-direction: column; gap: 4px; }
+.bcast-label { font-size: 11.5px; color: var(--text-faint); }
+.bcast-input { width: 100%; padding: 9px 11px; border-radius: 10px; background: var(--bg-1); border: 1px solid var(--glass-border); color: var(--text); font-size: 14px; outline: none; box-sizing: border-box; }
+.bcast-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.bcast-input::placeholder { color: var(--text-faint); }
+.bcast-ta { resize: vertical; min-height: 62px; font-family: inherit; line-height: 1.5; }
+.bcast-hint { font-size: 12px; color: var(--text-faint); margin: 0; line-height: 1.5; }
+.full { width: 100%; justify-content: center; }
 .notif-list { flex: 1; overflow-y: auto; padding: 8px 0; }
 .notif-item {
   padding: 13px 18px; border-bottom: 1px solid var(--glass-border); cursor: pointer;
