@@ -52,7 +52,7 @@
                 <button class="btn ghost" :disabled="logoSaving" @click="logoInput && logoInput.click()">{{ brand.logo ? '更换图片' : '上传图片' }}</button>
                 <button v-if="brand.logo" class="btn ghost" :disabled="logoSaving" @click="removeLogo">移除</button>
               </div>
-              <p class="hint">支持 PNG / JPG / WEBP / SVG / ICO，≤2MB。位图（PNG/JPG/ICO）上传后会自动抠掉纯色背景变透明并统一转 PNG，侧边栏与登录页立即生效；点「移除」恢复系统默认图标。</p>
+              <p class="hint">支持 PNG / JPG / WEBP / SVG / ICO，≤2MB。位图（PNG/JPG/ICO）上传后会自动抠掉纯色背景变透明并统一转 PNG，侧边栏与登录页立即生效；点「移除」恢复系统默认图标。<br><b>建议上传 ≥512×512 的清晰原图</b>，否则侧边栏与登录卡放大后会模糊（系统不会强行放大原图，避免失真）。</p>
             </div>
           </div>
         </div>

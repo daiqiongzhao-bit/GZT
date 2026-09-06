@@ -80,6 +80,9 @@
             </transition>
           </router-view>
         </section>
+
+        <!-- 底部版权（设置里「企业信息-版权信息」生效后可见） -->
+        <footer v-if="brand.copyright" class="app-footer">© {{ brand.copyright }}</footer>
       </main>
 
       <!-- 底部悬浮导航（移动端） -->
@@ -182,7 +185,7 @@ function toggleTheme() {
   applyTheme(theme.value)
 }
 
-const company = computed(() => brand.company_name || '企业排班任务工作台')
+const company = computed(() => brand.company_name || '企业任务通知管理')
 const slogan = computed(() => brand.slogan || '三端同步 · 安全可控 · 无限扩展')
 const companyInitial = computed(() => (company.value || '工')[0])
 
@@ -205,6 +208,8 @@ function onLogout() {
 onMounted(async () => {
   if (auth.token) await auth.fetchMe()
   await loadBrand() // 公开接口，未登录也能拿到企业名
+  // 浏览器标签 title 跟随企业名（默认：企业任务通知管理）
+  document.title = brand.company_name || "企业任务通知管理"
   ready.value = true
   if (auth.user) {
     loadBadge()

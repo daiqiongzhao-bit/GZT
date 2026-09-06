@@ -100,11 +100,10 @@ func isDueToday(t models.Task) bool {
 	return false
 }
 
-// isDueThisMonth 判断任务本月内是否应当处理（本月待办）
+// isDueThisMonth 判断任务本月内是否应当处理（本月待办清单，含已完成）
+// 不再过滤已完成状态——本月的「完成率」需要分子分母都包含已完成项
+// （isDueToday/isOverdue 仍过滤已完成，已完成的不是「待办」也不是「逾期」，语义不同）
 func isDueThisMonth(t models.Task) bool {
-	if t.Status == models.TaskStatusDone {
-		return false
-	}
 	now := time.Now()
 	switch t.Type {
 	case models.TaskTypeDaily, models.TaskTypeMonthly:

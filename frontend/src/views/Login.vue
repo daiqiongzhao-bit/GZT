@@ -2,7 +2,7 @@
   <div class="login-wrap">
     <div class="login-card glass">
       <div class="login-head">
-        <div class="logo-lg">
+        <div class="logo-lg" :class="{ 'no-bg': brand.logo }">
           <img v-if="brand.logo" :src="logoUrl" :alt="company" />
           <span v-else v-html="logoSvg"></span>
         </div>
@@ -37,7 +37,7 @@ import { brand, loadBrand } from '@/brand'
 const auth = useAuthStore()
 const router = useRouter()
 const form = reactive({ username: '', password: '' })
-const company = computed(() => brand.company_name || '企业排班任务工作台')
+const company = computed(() => brand.company_name || '企业任务通知管理')
 const slogan = computed(() => brand.slogan || '让每一班、每一事都清晰可循')
 const logoUrl = computed(() => '/api/settings/logo?v=' + encodeURIComponent(brand.logo || ''))
 
@@ -85,6 +85,8 @@ onMounted(loadBrand)
 }
 .logo-lg :deep(svg) { width: 36px; height: 36px; }
 .logo-lg img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* 上传了企业 Logo 后去除蓝紫底，让彩色 logo 不再压在卡片上 */
+.logo-lg.no-bg { background: transparent; box-shadow: none; }
 .login-head h1 { margin: 0; font-size: 19px; font-weight: 700; }
 .sub { margin: 8px 0 0; color: var(--text-faint); font-size: 12.5px; }
 .field { margin-bottom: 16px; }
