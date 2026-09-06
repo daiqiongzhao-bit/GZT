@@ -167,6 +167,7 @@ type Log struct {
 	UserName  string    `json:"user_name" gorm:"size:64"`
 	IP        string    `json:"ip" gorm:"size:64"`  // 操作来源 IP（全部操作留痕）
 	UA        string    `json:"ua" gorm:"size:255"` // 操作来源 User-Agent
+	Client    string    `json:"client" gorm:"size:16"` // 操作来源: web/pwa/extension（v0.0.6）
 	CreatedAt time.Time `json:"created_at"`
 }
 

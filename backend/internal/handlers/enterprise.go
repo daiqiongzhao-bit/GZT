@@ -489,9 +489,9 @@ func ExportLogsCSV(c *gin.Context) {
 	var buf bytes.Buffer
 	buf.Write(csvBOM(nil))
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"ID", "时间", "操作人", "操作内容"})
+	_ = w.Write([]string{"ID", "时间", "操作人", "操作内容", "IP", "来源"})
 	for _, l := range list {
-		_ = w.Write([]string{strconv.Itoa(int(l.ID)), l.CreatedAt.Format("2006-01-02 15:04:05"), l.UserName, l.Action})
+		_ = w.Write([]string{strconv.Itoa(int(l.ID)), l.CreatedAt.Format("2006-01-02 15:04:05"), l.UserName, l.Action, l.IP, clientLabel(l.Client)})
 	}
 	w.Flush()
 	c.Header("Content-Type", "text/csv; charset=utf-8")

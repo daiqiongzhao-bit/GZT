@@ -116,15 +116,46 @@ func currentClaims(c *gin.Context) *models.Claims {
 
 // addLog 记录操作日志（自动带上来源 IP 与 User-Agent；c 可为 nil）
 func addLog(c *gin.Context, userID uint, userName, action string) {
-	ip, ua := "", ""
+	ip, ua, client := "", "", ""
 	if c != nil {
 		ip = c.ClientIP()
 		ua = c.Request.UserAgent()
 		if len(ua) > 255 {
 			ua = ua[:255]
 		}
+		// v0.0.6：操作来源。鉴权请求用令牌里签发的 client（最准）；
+		// 未鉴权请求（登录等）读前端显式头 X-Client-Type；再无则兜底 UA 嗅探。
+		if cl := middleware.GetClaims(c); cl != nil && cl.Client != "" {
+			client = string(cl.Client)
+		} else if x := c.GetHeader("X-Client-Type"); x != "" {
+			client = x
+		} else {
+			client = sniffClient(ua)
+		}
 	}
-	_ = db.DB.Create(&models.Log{UserID: userID, UserName: userName, Action: action, IP: ip, UA: ua}).Error
+	_ = db.DB.Create(&models.Log{UserID: userID, UserName: userName, Action: action, IP: ip, UA: ua, Client: client}).Error
+}
+
+// clientLabel 将 client 枚举映射为界面可读的「来源」；空/未知返回空串由前端兜底。
+// 注意：入库存原始枚举，仅展示时用此函数。
+func clientLabel(client string) string {
+	switch client {
+	case "web":
+		return "网页"
+	case "pwa":
+		return "PWA"
+	case "extension":
+		return "插件"
+	}
+	return ""
+}
+
+// sniffClient 兜底：GZTExt 是扩展插件自定义 UA 标记（插件暂无独立指纹时兜底用）
+func sniffClient(ua string) string {
+	if strings.Contains(ua, "GZTExt") {
+		return "extension"
+	}
+	return "unknown"
 }
 
 // normalizeMobile 归一化手机号：去掉空格、横线、括号等分隔符，只保留数字。

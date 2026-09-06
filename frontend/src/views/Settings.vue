@@ -358,6 +358,7 @@
         <div v-for="l in logs" :key="l.id" class="log">
           <span class="log-time">{{ fmt(l.created_at) }}</span>
           <span class="log-user">{{ l.user_name }}</span>
+          <span class="log-src" v-if="l.client">{{ clientName(l.client) }}</span>
           <span class="log-ip" v-if="l.ip">{{ l.ip }}</span>
           <span class="log-action">{{ l.action }}</span>
         </div>
@@ -482,6 +483,12 @@ async function changePwd() {
 }
 
 function fmt(s) { return (s || '').replace('T', ' ').slice(0, 19) }
+
+// 操作来源显示名
+function clientName(c) {
+  const m = { web: '网页', pwa: 'PWA', extension: '插件' }
+  return m[c] || (c && c !== 'unknown' ? c : '')
+}
 
 async function loadDepts() { departments.value = await api.get('/departments') }
 async function loadUsers() { users.value = await api.get('/users') }
@@ -956,6 +963,7 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .log-time { color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
 .log-user { color: var(--accent); white-space: nowrap; }
 .log-ip { color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
+.log-src { color: var(--text-faint); font-size: 12px; white-space: nowrap; border: 1px solid var(--glass-border); border-radius: 6px; padding: 0 5px; line-height: 16px; }
 .log-action { color: var(--text-dim); }
 .retention-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .retention-hint { font-size: 12px; color: var(--text-faint); }

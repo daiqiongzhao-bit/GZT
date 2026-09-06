@@ -17,7 +17,9 @@ export const useAuthStore = defineStore('auth', {
   },
   actions: {
     async login(username, password) {
-      const res = await api.post('/auth/login', { username, password })
+      // v0.0.6：登录显式声明端类型，便于日志/会话区分来源
+      const ct = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone ? 'pwa' : 'web'
+      const res = await api.post('/auth/login', { username, password, client_type: ct })
       this.token = res.token
       this.user = res.user
       localStorage.setItem('sw_token', res.token)

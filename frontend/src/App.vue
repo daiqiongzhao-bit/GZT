@@ -45,6 +45,7 @@
           </div>
           <button class="logout" @click="onLogout">退出登录</button>
         </div>
+        <div class="side-ver" v-if="appVersion">v{{ appVersion }}</div>
       </aside>
 
       <main class="main">
@@ -61,7 +62,7 @@
         </header>
 
         <div class="mobile-topbar">
-          <div class="top-title">{{ pageTitle }}</div>
+          <div class="top-title">{{ pageTitle }}<em class="m-ver" v-if="appVersion"> v{{ appVersion }}</em></div>
           <div class="mobile-actions">
             <button class="m-icon bell-wrap" @click="openNotifs" :title="'站内通知'">
               <span class="bell-ico" v-html="bellIcon"></span>
@@ -133,6 +134,15 @@ const route = useRoute()
 const router = useRouter()
 const ready = ref(false)
 
+// 左下角 / 顶部版本号（取 /api/version，一次即可）
+const appVersion = ref('')
+async function loadVersion() {
+  try {
+    const v = await get('/version')
+    appVersion.value = (v && v.version && String(v.version).replace(/^v/i, '')) || ''
+  } catch (e) { /* 忽略，版本号非关键 */ }
+}
+
 // 导航栏任务角标：现在就该处理的任务数（打开即见，常驻刷新）
 const badgeTotal = ref(0)
 const badgeOverdue = ref(0)
@@ -185,6 +195,7 @@ onMounted(async () => {
     loadNotifCount()
     badgeTimer = setInterval(() => { loadBadge(); loadNotifCount() }, 60000)
   }
+  loadVersion()
 })
 
 // 切换路由时刷新角标（如从任务页返回）

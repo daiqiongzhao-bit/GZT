@@ -189,6 +189,9 @@ body {
 .nav-ico svg { width: 19px; height: 19px; }
 .nav-badge { margin-left: auto; }
 
+.side-ver { padding: 5px 18px 12px; font-size: 11px; color: var(--text-faint); font-family: ui-monospace, monospace; user-select: none; }
+.m-ver { font-style: normal; font-weight: 400; font-size: 11px; color: var(--text-faint); font-family: ui-monospace, monospace; margin-left: 6px; }
+
 .side-foot { border-top: 1px solid var(--glass-border); padding-top: 14px; }
 .user-mini { display: flex; align-items: center; gap: 10px; }
 .avatar {
