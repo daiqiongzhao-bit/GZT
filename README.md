@@ -99,21 +99,33 @@ bash build.sh            # 安装前端依赖、构建前端、编译后端 -> �
 
 浏览器打开 `http://localhost:8080`
 
-### 方式二：Docker / Compose
+### 方式二：Docker 一条命令部署（推荐，最省事）
+
+服务器已装 Docker（未装也能自动装），直接跑：
 
 ```bash
-docker compose up -d --build
-# 访问 http://localhost:8080 ，数据库持久化于 ./data/swb.db
+# 下载并执行一键安装脚本（自动装 Docker、生成密钥、拉镜像、启动）
+bash <(curl -sL https://gzt.960898.xyz/install.sh)
 ```
 
-直接使用已发布镜像（无需本地构建，amd64 / arm64 自动匹配）：
+或手动分两步：
 
 ```bash
-docker pull daiqiongzhao/gzt:latest
+docker run -d --name shift-workbench --restart unless-stopped \
+  -p 8090:8080 \
+  -v /opt/swb/data:/data \
+  -e DB_PATH=/data/swb.db \
+  -e JWT_SECRET=改成你的随机密钥 \
+  -e AES_KEY=改成你的另一个随机密钥 \
+  -e TZ=Asia/Shanghai \
+  daiqiongzhao/gzt:latest
 ```
 
-> 多架构构建说明：`Dockerfile` 中的前端构建与 Go 编译都固定在 `BUILDPLATFORM`（原生架构）执行，
-> 仅最终运行镜像按目标平台拉取，因此构建 arm64 镜像无需 QEMU 模拟，耗时与单架构基本一致。
+> 说明：
+> - 镜像 `daiqiongzhao/gzt:latest` 为 amd64 + arm64 双架构，Docker 自动按设备架构匹配。
+> - 数据持久化在 `/opt/swb/data`（含数据库 / 上传 Logo / 备份），删除容器不丢。
+> - 端口 `8090:8080`（左侧可改），浏览器访问 `http://服务器IP:8090`。
+> - 详细目录式安装见 [install.sh](./install.sh) 与 [DEPLOY.md](./DEPLOY.md)。
 
 ### 方式三：仅前端开发联调
 
@@ -130,9 +142,9 @@ cd frontend && pnpm install && pnpm dev   # Vite 开发服务器，代理 /api -
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
-| `admin` | `admin123` | 超级管理员 |
+| `admin` | `admin123` | 超级管理员（首次登录必须修改） |
 
-> ⚠️ 部署完成后请**第一时间修改默认密码**（登录 → 右上角 → 修改密码）。
+> ⚠️ 首次登录系统会**强制你设置一个新密码**（须至少 8 位且含字母和数字），之后用新密码登录。请务必设置并记住。
 > 若数据库已存在数据，则不会重复注入。
 
 > **账号 = 工号**：普通员工登录账号统一为工号（如工号 3275 → 账号 3275），新建/编辑/导入时系统自动强制。超管账号无工号，单独设置。

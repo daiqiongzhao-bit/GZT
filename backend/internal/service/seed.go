@@ -25,14 +25,15 @@ func Seed() {
 	deptOps := models.Department{Name: "运维部"}
 	db.DB.Create(&deptOps)
 
-	// 默认超级管理员（admin / admin123），便于首次登录；生产建议登录后修改密码
+	// 默认超级管理员（admin / admin123），便于首次登录；must_change_pwd=true 强制首次登录即修改为强密码
 	hash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
 	super := models.User{
-		Username:     "admin",
-		PasswordHash: string(hash),
-		Name:         "系统管理员",
-		Role:         models.RoleSuperAdmin,
-		DeptID:       dept.ID,
+		Username:      "admin",
+		PasswordHash:  string(hash),
+		Name:          "系统管理员",
+		Role:          models.RoleSuperAdmin,
+		DeptID:        dept.ID,
+		MustChangePwd: true,
 	}
 	db.DB.Create(&super)
 
