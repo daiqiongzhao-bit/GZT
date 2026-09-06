@@ -93,6 +93,7 @@ func main() {
 			auth.POST("/users/:id/reset-password", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ResetPassword)
 			auth.DELETE("/users/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUser)
 			auth.POST("/users/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportUsers)
+			auth.POST("/users/batch", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchUsers)
 			auth.GET("/users/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportUsersCSV) // v0.2.0 人员导出
 
 			// 班表
@@ -158,6 +159,7 @@ func main() {
 			auth.GET("/backups/:id/download", middleware.RequireRole(models.RoleSuperAdmin), handlers.DownloadBackupHandler)
 			auth.POST("/backups/:id/restore", middleware.RequireRole(models.RoleSuperAdmin), handlers.RestoreBackupHandler)
 			auth.DELETE("/backups/:id", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteBackupHandler)
+			auth.POST("/backups/import", middleware.RequireRole(models.RoleSuperAdmin), handlers.ImportBackupHandler)
 			auth.GET("/backup-config", middleware.RequireRole(models.RoleSuperAdmin), handlers.GetBackupConfigHandler)
 			auth.POST("/backup-config", middleware.RequireRole(models.RoleSuperAdmin), handlers.SaveBackupConfigHandler)
 		}

@@ -868,42 +868,47 @@ onMounted(load)
 .matrix-title { display: flex; align-items: center; gap: 10px; font-size: 14.5px; font-weight: 700; flex-wrap: wrap; }
 .matrix-dept { max-width: 170px; padding: 6px 10px; }
 .matrix-sub { font-size: 12px; font-weight: 400; color: var(--text-faint); }
-.matrix-legend { display: flex; gap: 12px; flex-wrap: wrap; }
-.matrix-legend .ml { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); }
-.matrix-legend .dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.matrix-legend { display: flex; gap: 6px; flex-wrap: wrap; background: var(--overlay); border: 1px solid var(--glass-border); border-radius: 999px; padding: 5px 12px; }
+.matrix-legend .ml { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
+.matrix-legend .dot { width: 10px; height: 10px; border-radius: 4px; display: inline-block; }
 .dot.ok { background: var(--ok); } .dot.accent { background: var(--accent); } .dot.warn { background: var(--warn); } .dot.purple { background: var(--accent-3); } .dot.rest { background: var(--muted); }
-.matrix-scroll { overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--overlay); }
-.matrix-tbl { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
-.matrix-tbl th, .matrix-tbl td { border-bottom: 1px solid var(--hairline); border-right: 1px solid var(--hairline); padding: 4px 5px; text-align: center; white-space: nowrap; }
-.matrix-tbl th { background: var(--overlay-2); color: var(--text-faint); font-weight: 600; position: sticky; top: 0; z-index: 2; }
+.matrix-scroll { overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--overlay); box-shadow: 0 6px 20px rgba(15,23,42,0.05); }
+.matrix-scroll::-webkit-scrollbar { height: 9px; }
+.matrix-scroll::-webkit-scrollbar-thumb { background: var(--glass-border-strong); border-radius: 9px; }
+.matrix-scroll::-webkit-scrollbar-track { background: transparent; }
+.matrix-tbl { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12px; }
+.matrix-tbl th, .matrix-tbl td { border-bottom: 1px solid var(--hairline); border-right: 1px solid var(--hairline); padding: 6px 6px; text-align: center; white-space: nowrap; }
+.matrix-tbl th { background: var(--overlay-2); color: var(--text-faint); font-weight: 600; position: sticky; top: 0; z-index: 2; padding: 9px 6px; }
 /* 冻结最左三列（序号/姓名/工号），滚动时保持可见 */
-.matrix-tbl .sticky-col { position: sticky; left: 0; background: var(--overlay-2); z-index: 3; }
-.matrix-tbl .sticky-col.seq { width: 44px; min-width: 44px; }
-.matrix-tbl .sticky-col.name { left: 44px; width: 88px; min-width: 88px; text-align: left; }
-.matrix-tbl .sticky-col.emp { left: 132px; width: 62px; min-width: 62px; }
+.matrix-tbl .sticky-col { position: sticky; left: 0; background: var(--overlay-2); z-index: 3; box-shadow: 1px 0 0 var(--hairline); }
+.matrix-tbl .sticky-col.seq { width: 46px; min-width: 46px; }
+.matrix-tbl .sticky-col.name { left: 46px; width: 92px; min-width: 92px; text-align: left; }
+.matrix-tbl .sticky-col.emp { left: 138px; width: 64px; min-width: 64px; }
 .matrix-tbl thead .sticky-col.name { text-align: center; }
-.matrix-tbl tbody tr { background: var(--bg-1); }
+.matrix-tbl tbody tr { background: var(--bg-1); transition: background .15s ease; }
 .matrix-tbl tbody tr td.sticky-col { background: var(--bg-1); }
 .matrix-tbl tbody tr.even td.sticky-col { background: var(--overlay); }
+.matrix-tbl tbody tr:hover td { background: var(--overlay-2); }
 .matrix-tbl tbody tr:hover td.sticky-col { background: var(--overlay-2); }
 .matrix-tbl .foot-row td.sticky-col { background: var(--accent-soft); }
 .matrix-tbl tr { }
-.matrix-tbl .day-col { min-width: 30px; }
+.matrix-tbl .day-col { min-width: 38px; }
 .matrix-tbl .day-cell { color: var(--text); }
-.matrix-tbl .day-col.wknd, .matrix-tbl .day-cell.wknd { background: rgba(148,163,184,0.08); }
-.matrix-tbl .sum-col { min-width: 44px; color: var(--text-dim); font-size: 11px; }
+.matrix-tbl .day-col.wknd, .matrix-tbl .day-cell.wknd { background: rgba(99,102,241,0.07); }
+.matrix-tbl .sum-col { min-width: 46px; color: var(--text-dim); font-size: 11px; }
 .matrix-tbl .sum-cell { font-weight: 600; color: var(--text); }
 .matrix-tbl .sum-cell.hours { color: var(--accent); }
 .matrix-tbl .emp { font-size: 11px; color: var(--text-faint); }
-.matrix-tbl .foot-row td { background: var(--accent-soft); color: var(--accent); font-weight: 700; border-top: 2px solid var(--glass-border-strong); }
+.matrix-tbl .foot-row td { background: linear-gradient(180deg, var(--accent-soft), var(--overlay)); color: var(--accent); font-weight: 700; border-top: 2px solid var(--accent); }
 .matrix-tbl .foot-row .foot-cell { font-weight: 700; }
-.mc { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 5px; font-size: 11px; font-weight: 700; }
-.mc.accent { background: rgba(79,70,229,0.14); color: var(--accent); }
-.mc.ok { background: rgba(13,148,136,0.12); color: var(--ok); }
-.mc.warn { background: rgba(217,119,6,0.13); color: var(--warn); }
-.mc.accent-3 { background: rgba(139,92,246,0.14); color: var(--accent-3); }
-.mc.rest { background: rgba(107,114,128,0.14); color: var(--muted); }
-.foot-sub { display: block; font-size: 10px; font-weight: 400; color: var(--text-faint); margin-top: 2px; }
+.mc { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 6px; font-size: 11px; font-weight: 700; box-shadow: 0 1px 2px rgba(15,23,42,0.08); transition: transform .12s ease; cursor: default; }
+.mc:hover { transform: scale(1.12); }
+.mc.accent { background: rgba(79,70,229,0.16); color: var(--accent); border: 1px solid rgba(79,70,229,0.30); }
+.mc.ok { background: rgba(13,148,136,0.14); color: var(--ok); border: 1px solid rgba(13,148,136,0.28); }
+.mc.warn { background: rgba(217,119,6,0.15); color: var(--warn); border: 1px solid rgba(217,119,6,0.30); }
+.mc.accent-3 { background: rgba(139,92,246,0.16); color: var(--accent-3); border: 1px solid rgba(139,92,246,0.30); }
+.mc.rest { background: rgba(107,114,128,0.14); color: var(--muted); border: 1px solid rgba(107,114,128,0.26); }
+.foot-sub { display: block; font-size: 10px; font-weight: 400; color: var(--text-faint); margin-top: 3px; }
 /* 每日当班：左 4 个分班小数字竖排，右侧当日总 */
 .matrix-tbl .foot-cell { position: relative; line-height: 1.15; }
 .fd-stack { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }

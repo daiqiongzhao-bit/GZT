@@ -123,7 +123,26 @@
           <input type="file" accept=".xlsx,.csv" :disabled="userImporting" @change="importUsers" hidden />
         </label>
         <button class="btn ghost" @click="exportUsers">⬇ 导出人员</button>
+        <button class="btn ghost" :class="{ active: batchMode }" @click="batchMode = !batchMode">{{ batchMode ? '退出批量' : '批量操作' }}</button>
         <span class="section-sub">按模板填好上传即可，登录账号已存在则更新资料</span>
+      </div>
+      <div v-if="batchMode && auth.canManage" class="batch-bar">
+        <label class="chk-all"><input type="checkbox" :checked="allSelected" @change="toggleAll" /> 全选</label>
+        <span class="sel-count">已选 {{ selectedIds.length }} 人</span>
+        <span class="batch-actions">
+          <select v-model.number="batchDept" class="glass-input sm">
+            <option :value="0">改部门…</option>
+            <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
+          </select>
+          <button class="btn ghost sm" :disabled="!batchDept" @click="runBatch('set_dept')">应用</button>
+          <button class="btn ghost sm" @click="runBatch('set_in_group', { in_group: true })">设群内</button>
+          <button class="btn ghost sm" @click="runBatch('set_in_group', { in_group: false })">取消群内</button>
+          <button class="btn ghost sm" @click="runBatch('freeze')">冻结</button>
+          <button class="btn ghost sm" @click="runBatch('unfreeze')">解冻</button>
+          <button class="btn ghost sm" @click="runBatch('force_logout')">强制下线</button>
+          <button class="btn ghost sm" @click="promptResetPwd">重置密码</button>
+          <button class="btn danger sm" @click="runBatch('delete')">删除</button>
+        </span>
       </div>
       <div v-if="auth.canManage" class="add-user-fold">
         <button class="btn ghost" @click="showAddUser = !showAddUser">
@@ -161,7 +180,8 @@
         </div>
       </div>
       <div class="list">
-        <div v-for="p in users" :key="p.id" class="row" :class="{ frozen: p.frozen }">
+        <div v-for="p in users" :key="p.id" class="row" :class="{ frozen: p.frozen, sel: batchMode && selectedIds.includes(p.id) }">
+          <input v-if="batchMode" type="checkbox" class="row-chk" :value="p.id" v-model="selectedIds" />
           <div class="row-main">
             <span class="avatar sm" :class="{ 'frozen-av': p.frozen }">{{ (p.name || '?')[0] }}</span>
             <div>
@@ -457,6 +477,14 @@ const typeLabel = (t) => ({ wecom: '企业微信', dingtalk: '钉钉', feishu: '
 const saving = ref(false)
 const departments = ref([])
 const users = ref([])
+// 批量操作
+const batchMode = ref(false)
+const selectedIds = ref([])
+const batchDept = ref(0)
+const allSelected = computed(() => users.value.length > 0 && selectedIds.value.length === users.value.length)
+function toggleAll(e) {
+  selectedIds.value = e.target.checked ? users.value.map((x) => x.id) : []
+}
 const hooks = ref([])
 const logs = ref([])
 const templates = ref([])
@@ -509,6 +537,25 @@ function clientName(c) {
 
 async function loadDepts() { departments.value = await api.get('/departments') }
 async function loadUsers() { users.value = await api.get('/users') }
+
+// 批量用户操作
+async function runBatch(action, extra = {}) {
+  if (!selectedIds.value.length) { alert('请先勾选至少一名人员'); return }
+  if (action === 'delete' && !confirm(`确认删除选中的 ${selectedIds.value.length} 名人员？此操作不可撤销。`)) return
+  const body = { ids: selectedIds.value, action, ...extra }
+  try {
+    const r = await api.post('/users/batch', body)
+    alert(`已处理 ${r.processed || 0} 人${r.skipped ? '，跳过 ' + r.skipped + ' 人' : ''}`)
+    selectedIds.value = []
+    await loadUsers()
+  } catch (e) { alert(e.response?.data?.error || '操作失败') }
+}
+async function promptResetPwd() {
+  if (!selectedIds.value.length) { alert('请先勾选至少一名人员'); return }
+  const pwd = prompt('为选中的 ' + selectedIds.value.length + ' 人设置统一新密码（至少 8 位，需同时包含字母和数字）：')
+  if (!pwd) return
+  await runBatch('reset_password', { password: pwd })
+}
 async function loadHooks() { hooks.value = await api.get('/webhooks') }
 async function loadTemplates() { templates.value = await api.get('/templates') }
 async function loadShiftConfigs() { shiftConfigs.value = await api.get('/shift-configs') }
@@ -1014,6 +1061,14 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .row.frozen { opacity: 0.6; }
 .row.frozen .avatar.frozen-av { filter: grayscale(1); }
 .row-actions { display: flex; gap: 6px; align-items: center; }
+.batch-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 10px; border-radius: 12px; background: var(--accent-soft, rgba(79,70,229,0.1)); border: 1px solid rgba(79,70,229,0.3); }
+.chk-all, .sel-count { font-size: 13px; color: var(--text-dim); }
+.sel-count { font-weight: 600; color: var(--accent, #4f46e5); }
+.batch-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.row-chk { width: 17px; height: 17px; flex: none; accent-color: var(--accent, #4f46e5); margin: 0; }
+.row.sel { border-color: var(--accent, #4f46e5); background: var(--accent-soft, rgba(79,70,229,0.08)); }
+.btn.sm, .glass-input.sm { padding: 6px 12px; font-size: 12.5px; }
+.btn.ghost.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft, rgba(79,70,229,0.12)); }
 .chip.online { background: rgba(22,163,74,0.14); color: var(--success, #16a34a); border: 1px solid rgba(22,163,74,0.35); }
 .mini.danger-txt { color: var(--danger, #e11d48); }
 .mini.danger-txt:hover { border-color: var(--danger, #e11d48); color: var(--danger, #e11d48); }

@@ -6,11 +6,18 @@
     <section class="panel">
       <div class="panel-head">
         <h3 class="section-title">备份列表</h3>
-        <button v-if="auth.isSuper" class="btn primary" :disabled="creating" @click="doBackup">
-          {{ creating ? '备份中…' : '立即备份' }}
-        </button>
+        <div class="head-actions">
+          <label v-if="auth.isSuper" class="btn ghost imp">
+            ⬆ 导入备份还原
+            <input type="file" accept=".db" :disabled="importing" @change="importBackup" hidden />
+          </label>
+          <button v-if="auth.isSuper" class="btn primary" :disabled="creating" @click="doBackup">
+            {{ creating ? '备份中…' : '立即备份' }}
+          </button>
+        </div>
       </div>
-      <p v-if="!auth.isSuper" class="section-sub">仅超级管理员可操作备份与还原</p>
+      <p v-if="auth.isSuper" class="section-sub">重装系统后，把之前「下载」的 .db 备份在此「导入备份还原」即可完整恢复</p>
+      <p v-else class="section-sub">仅超级管理员可操作备份与还原</p>
 
       <div class="table">
         <div class="thead">
@@ -75,6 +82,7 @@ const $msg = proxy?.$msg
 
 const backups = ref([])
 const creating = ref(false)
+const importing = ref(false)
 const savingCfg = ref(false)
 const cfg = reactive({ frequency: 'none', retention: 7, remote_dir: '' })
 
@@ -103,6 +111,23 @@ async function doBackup() {
 
 function download(b) { window.open('/api/backups/' + b.id + '/download') }
 
+async function importBackup(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = ''
+  if (!file) return
+  if (!confirm(`导入并还原备份「${file.name}」？将覆盖当前所有数据，且不可撤销。`)) return
+  importing.value = true
+  try {
+    await api.upload('/backups/import', file)
+    toast('导入还原成功，系统已切换至该备份')
+    await loadList()
+  } catch (err) {
+    toast(err.response?.data?.error || '导入失败', 'error')
+  } finally {
+    importing.value = false
+  }
+}
+
 async function restore(b) {
   if (!confirm(`确定还原备份「${b.name}」？将覆盖当前所有数据，且不可撤销。`)) return
   try { await api.post('/backups/' + b.id + '/restore'); toast('还原成功，系统已切换至该备份'); await loadList() }
@@ -129,6 +154,8 @@ onMounted(async () => { await Promise.all([loadList(), loadCfg()]) })
 .page-title { font-size: 20px; font-weight: 700; margin: 0 0 16px; }
 .panel { padding: 18px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glass-border); margin-bottom: 18px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.head-actions { display: flex; gap: 10px; align-items: center; }
+.btn.ghost.imp { cursor: pointer; }
 .section-title { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
 .section-sub { font-size: 12.5px; color: var(--text-faint); margin: 0 0 12px; }
 .form-col { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; max-width: 560px; }

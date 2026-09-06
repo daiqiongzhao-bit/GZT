@@ -393,6 +393,56 @@ func DeleteBackupHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// ImportBackupHandler POST /backups/import 接收上传的 .db 备份文件，存入备份目录后还原。
+// 用于「重装系统后导入恢复」：先在旧系统「下载」备份，重装后在此「导入」即可完整恢复。
+func ImportBackupHandler(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要导入的备份文件（.db）"})
+		return
+	}
+	if filepath.Ext(file.Filename) != backupExt {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持 .db 备份文件（可通过备份列表的「下载」获得）"})
+		return
+	}
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败"})
+		return
+	}
+	defer f.Close()
+	dir, err := backupDir()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份目录不可用"})
+		return
+	}
+	// 用时间戳命名，避免覆盖既有备份；即使重名也安全
+	ts := time.Now().Format("2006-01-02-150405")
+	dstName := backupPrefix + "import-" + ts + backupExt
+	dst := filepath.Join(dir, dstName)
+	out, err := os.Create(dst)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存备份失败: " + err.Error()})
+		return
+	}
+	if _, err := io.Copy(out, f); err != nil {
+		out.Close()
+		_ = os.Remove(dst)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存备份失败: " + err.Error()})
+		return
+	}
+	out.Sync()
+	out.Close()
+	// 还原（内部会先备份当前库以便回滚）
+	if err := RestoreBackup(dstName); err != nil {
+		_ = os.Remove(dst)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "导入还原失败: " + err.Error()})
+		return
+	}
+	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "导入并还原备份 "+dstName)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "file": dstName})
+}
+
 // GetBackupConfigHandler GET /backup-config
 func GetBackupConfigHandler(c *gin.Context) {
 	cfg := readBackupConfig()

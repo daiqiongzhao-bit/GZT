@@ -25,7 +25,7 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
 		return
 	}
-	clientIP := c.ClientIP()
+	clientIP := realClientIP(c)
 	throttleKey := req.Username + "|" + clientIP
 	if locked, left := checkLoginThrottle(throttleKey); locked {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "尝试次数过多，账号已临时锁定，请 " + left + " 秒后再试"})

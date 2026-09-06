@@ -229,6 +229,98 @@ func DeleteUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// userBatchReq 批量用户操作请求
+type userBatchReq struct {
+	IDs      []uint `json:"ids"`
+	Action   string `json:"action"` // set_in_group | set_dept | freeze | unfreeze | reset_password | force_logout | delete
+	InGroup  *bool  `json:"in_group"`
+	DeptID   uint   `json:"dept_id"`
+	Password string `json:"password"`
+}
+
+// BatchUsers 批量用户操作（超管/部门管，限本部门及子孙部门，不可操作超管）
+// 支持：批量修改是否在群内、批量修改部门、批量冻结、批量解冻、批量重置密码、批量强制下线、批量删除
+func BatchUsers(c *gin.Context) {
+	var req userBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择至少一名人员"})
+		return
+	}
+	switch req.Action {
+	case "set_in_group":
+		if req.InGroup == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 in_group 参数"})
+			return
+		}
+	case "set_dept":
+		if req.DeptID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 dept_id 参数"})
+			return
+		}
+	case "reset_password":
+		if !validPassword(req.Password) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 8 位，且需同时包含字母和数字"})
+			return
+		}
+	case "freeze", "unfreeze", "force_logout", "delete":
+		// 无需额外参数
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未知批量操作"})
+		return
+	}
+
+	cl := currentClaims(c)
+	processed, skipped := 0, 0
+	for _, id := range req.IDs {
+		var u models.User
+		if err := db.DB.First(&u, id).Error; err != nil {
+			skipped++
+			continue
+		}
+		if cl.Role != models.RoleSuperAdmin && !canManageDept(c, u.DeptID) {
+			skipped++
+			continue
+		}
+		if u.Role == models.RoleSuperAdmin && cl.Role != models.RoleSuperAdmin {
+			skipped++
+			continue
+		}
+		switch req.Action {
+		case "set_in_group":
+			db.DB.Model(&u).Update("in_group", *req.InGroup)
+		case "set_dept":
+			if cl.Role != models.RoleSuperAdmin && !canManageDept(c, req.DeptID) {
+				skipped++
+				continue
+			}
+			db.DB.Model(&u).Update("dept_id", req.DeptID)
+		case "freeze":
+			db.DB.Model(&u).Updates(map[string]interface{}{"frozen": true, "token_version": gorm.Expr("token_version + 1")})
+			session.RemoveByUser(u.ID)
+		case "unfreeze":
+			db.DB.Model(&u).Update("frozen", false)
+		case "reset_password":
+			ph, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+			db.DB.Model(&u).Updates(map[string]interface{}{
+				"password_hash":    string(ph),
+				"token_version":    gorm.Expr("token_version + 1"),
+				"must_change_pwd":  true,
+			})
+		case "force_logout":
+			db.DB.Model(&u).Update("token_version", gorm.Expr("token_version + 1"))
+			session.RemoveByUser(u.ID)
+		case "delete":
+			if u.ID == cl.UserID {
+				skipped++
+				continue
+			}
+			db.DB.Delete(&u)
+		}
+		processed++
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "processed": processed, "skipped": skipped})
+}
+
 type userUpdateReq struct {
 	Name   string  `json:"name"`
 	EmpNo  *string `json:"emp_no"` // 指针：不传则不改，传 null 表示清空

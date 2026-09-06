@@ -114,11 +114,39 @@ func currentClaims(c *gin.Context) *models.Claims {
 	return middleware.GetClaims(c)
 }
 
+// realClientIP 返回真实客户端 IP。
+// 部署在 Docker 端口映射（docker -p / compose ports）下，c.ClientIP() 恒为网桥网关
+// 地址（如 172.18.0.1），并非真实用户 IP；若前置了反代（Cloudflare / nginx / caddy），
+// 反代会透传 X-Forwarded-For（首个即原始客户端）或 X-Real-IP，优先取之，否则回退 RemoteAddr。
+func realClientIP(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
+		xff = strings.TrimSpace(xff)
+		if i := strings.Index(xff, ","); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return xff
+	}
+	if xri := strings.TrimSpace(c.GetHeader("X-Real-IP")); xri != "" {
+		return xri
+	}
+	// RemoteAddr 形如 1.2.3.4:5678 或 [::1]:5678，去掉端口
+	if ra := c.Request.RemoteAddr; ra != "" {
+		if i := strings.LastIndex(ra, ":"); i > 0 {
+			return ra[:i]
+		}
+		return ra
+	}
+	return ""
+}
+
 // addLog 记录操作日志（自动带上来源 IP 与 User-Agent；c 可为 nil）
 func addLog(c *gin.Context, userID uint, userName, action string) {
 	ip, ua, client := "", "", ""
 	if c != nil {
-		ip = c.ClientIP()
+		ip = realClientIP(c)
 		ua = c.Request.UserAgent()
 		if len(ua) > 255 {
 			ua = ua[:255]

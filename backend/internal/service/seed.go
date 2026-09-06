@@ -19,7 +19,9 @@ func Seed() {
 		return
 	}
 
-	// 默认部门
+	// 默认部门：信息部（admin 默认归属）、客服部、运维部
+	deptIT := models.Department{Name: "信息部"}
+	db.DB.Create(&deptIT)
 	dept := models.Department{Name: "客服部"}
 	db.DB.Create(&dept)
 	deptOps := models.Department{Name: "运维部"}
@@ -32,10 +34,24 @@ func Seed() {
 		PasswordHash:  string(hash),
 		Name:          "系统管理员",
 		Role:          models.RoleSuperAdmin,
-		DeptID:        dept.ID,
+		DeptID:        deptIT.ID,
 		MustChangePwd: true,
 	}
 	db.DB.Create(&super)
+
+	// 演示人员：创建为真实用户，使其出现在「人员管理」并可被删除/管理
+	// （旧版仅以排班姓名字符串存在，导致只能在「今日当班」看到、却无法在人员管理删除）
+	for _, nm := range []string{"林晓", "陈默"} {
+		ph, _ := bcrypt.GenerateFromPassword([]byte("Cdf@123456"), bcrypt.DefaultCost)
+		db.DB.Create(&models.User{
+			Username:     "demo_" + nm,
+			PasswordHash: string(ph),
+			Name:         nm,
+			EmpNo:        "demo_" + nm,
+			Role:         models.RoleExecutor,
+			DeptID:       dept.ID,
+		})
+	}
 
 	// 演示班表
 	today := time.Now()
