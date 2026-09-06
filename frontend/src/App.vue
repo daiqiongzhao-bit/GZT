@@ -8,6 +8,25 @@
       <div class="boot-spin"></div>
     </div>
 
+    <!-- 强制改密（安全策略：must_change_pwd 为真的用户必须先改强密码） -->
+    <div v-else-if="auth.user && auth.user.must_change_pwd" class="force-pwd-wrap">
+      <div class="force-pwd-card glass">
+        <div class="force-pwd-icon" v-html="shieldIcon"></div>
+        <h2 class="force-pwd-title">安全策略：请先修改密码</h2>
+        <p class="force-pwd-tip">系统检测到你的密码强度不足或刚被重置。为账号安全，请先设置一个新密码：<br /><strong>至少 8 位，且需同时包含字母和数字</strong>（如 <code>Cdf123456</code>）。</p>
+        <div class="force-pwd-form">
+          <label class="fld">当前密码</label>
+          <input v-model="fpwd.old_password" type="password" class="glass-input" autocomplete="current-password" placeholder="输入你正在使用的密码" />
+          <label class="fld">新密码</label>
+          <input v-model="fpwd.new_password" type="password" class="glass-input" autocomplete="new-password" placeholder="至少 8 位，含字母和数字" />
+          <label class="fld">确认新密码</label>
+          <input v-model="fpwd.confirm" type="password" class="glass-input" autocomplete="new-password" placeholder="再次输入新密码" @keyup.enter="doForceChangePwd" />
+        </div>
+        <button class="btn primary force-pwd-btn" :disabled="fpwdSaving" @click="doForceChangePwd">{{ fpwdSaving ? '保存中…' : '保存并进入系统' }}</button>
+        <button class="force-pwd-logout" @click="onLogout">退出登录</button>
+      </div>
+    </div>
+
     <div v-else-if="auth.user" class="shell">
       <!-- 侧边栏（桌面） -->
       <aside class="sidebar glass">
@@ -139,7 +158,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { navItems, icons } from '@/icons'
@@ -195,6 +214,7 @@ const pageTitle = computed(() => route.meta.title || '工作台')
 const logoUrl = computed(() => '/api/settings/logo?v=' + encodeURIComponent(brand.logo || ''))
 const brandLogo = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8.5 14.5l2.2 2.2 4.3-4.4" stroke-width="2.4"/></svg>'
 const logoutIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>'
+const shieldIcon = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="M9 12.5l2 2 4-4.5"/></svg>'
 const puzzleIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 4v3m-6 4h3m0 0a2 2 0 1 0 4 0 2 2 0 0 0-4 0zm4 0h3m-3-6V6a2 2 0 1 1 4 0v3m0 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 4v3a2 2 0 1 1-4 0"/></svg>'
 const todayText = computed(() =>
   new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
@@ -203,6 +223,29 @@ const todayText = computed(() =>
 function onLogout() {
   auth.logout()
   router.replace('/login')
+}
+
+// ---------- 强制改密（v0.3.0 密码安全加固）----------
+const fpwd = reactive({ old_password: '', new_password: '', confirm: '' })
+const fpwdSaving = ref(false)
+function isStrongPwd(p) {
+  if (!p || p.length < 8) return false
+  return /[0-9]/.test(p) && /[A-Za-z]/.test(p)
+}
+async function doForceChangePwd() {
+  if (!fpwd.old_password || !fpwd.new_password) { alert('请填写当前密码和新密码'); return }
+  if (!isStrongPwd(fpwd.new_password)) { alert('新密码至少 8 位，且需同时包含字母和数字'); return }
+  if (fpwd.new_password !== fpwd.confirm) { alert('两次输入的新密码不一致'); return }
+  fpwdSaving.value = true
+  try {
+    await post('/auth/change-password', { old_password: fpwd.old_password, new_password: fpwd.new_password })
+    // 改密成功后清除强制标记，进入系统
+    await auth.fetchMe()
+    Object.assign(fpwd, { old_password: '', new_password: '', confirm: '' })
+    router.replace('/')
+  } catch (e) {
+    alert((e.response && e.response.data && e.response.data.error) || '修改密码失败，请稍后重试')
+  } finally { fpwdSaving.value = false }
 }
 
 onMounted(async () => {
@@ -315,6 +358,21 @@ async function doBroadcast() {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 强制改密（v0.3.0 密码安全加固） */
+.force-pwd-wrap { position: relative; z-index: 2; height: 100%; display: grid; place-items: center; padding: 20px; box-sizing: border-box; }
+.force-pwd-card { width: 100%; max-width: 420px; padding: 30px 26px; border-radius: 20px; text-align: center; }
+.force-pwd-icon { width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.force-pwd-title { margin: 0 0 8px; font-size: 18px; font-weight: 800; color: var(--text); }
+.force-pwd-tip { margin: 0 0 20px; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+.force-pwd-tip strong { color: var(--danger); }
+.force-pwd-tip code { background: var(--overlay-2); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+.force-pwd-form { text-align: left; display: flex; flex-direction: column; gap: 6px; }
+.force-pwd-form .fld { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+.force-pwd-form .glass-input { width: 100%; box-sizing: border-box; padding: 11px 13px; font-size: 16px; }
+.force-pwd-btn { width: 100%; margin-top: 16px; padding: 12px; font-size: 15px; border-radius: 12px; }
+.force-pwd-logout { margin-top: 14px; background: none; border: none; color: var(--text-faint); font-size: 13px; cursor: pointer; padding: 6px; text-decoration: underline; }
+.force-pwd-logout:hover { color: var(--danger); }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
 .fade-enter-from { opacity: 0; transform: translateY(8px); }

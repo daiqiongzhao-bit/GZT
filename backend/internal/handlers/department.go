@@ -151,6 +151,10 @@ func CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "姓名、密码均必填"})
 		return
 	}
+	if !validPassword(req.Password) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "密码至少 8 位，且需同时包含字母和数字"})
+		return
+	}
 	cl := currentClaims(c)
 	// 部门管理员不能提拔超管（与导入逻辑一致）
 	if req.Role == string(models.RoleSuperAdmin) && cl.Role != models.RoleSuperAdmin {
@@ -379,15 +383,17 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 	if !validPassword(req.Password) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 6 位"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 8 位，且需同时包含字母和数字"})
 		return
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	// 重置密码后让旧 token 全部失效
-	if err := db.DB.Model(&u).Updates(map[string]interface{}{
-		"password_hash": string(hash),
-		"token_version": gorm.Expr("token_version + 1"),
-	}).Error; err != nil {
+	// 重置密码后让旧 token 全部失效；被重置者下次登录需强制改密（管理员替他设的密码他本人应再改一次）
+	updates := map[string]interface{}{
+		"password_hash":  string(hash),
+		"token_version":  gorm.Expr("token_version + 1"),
+		"must_change_pwd": true,
+	}
+	if err := db.DB.Model(&u).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

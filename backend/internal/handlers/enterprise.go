@@ -856,9 +856,21 @@ func UnlockLogin(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "cleared": cleared})
 }
 
-// ===================== 重置密码后端强度校验 =====================
+// ===================== 密码强度校验 =====================
 
-// validPassword 密码至少 6 位
+// validPassword 密码至少 8 位，且必须同时包含字母与数字（禁止纯数字/纯字母弱密码）
 func validPassword(p string) bool {
-	return len(p) >= 6
+	if len(p) < 8 {
+		return false
+	}
+	hasDigit, hasLetter := false, false
+	for _, ch := range p {
+		if ch >= '0' && ch <= '9' {
+			hasDigit = true
+		}
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+			hasLetter = true
+		}
+	}
+	return hasDigit && hasLetter
 }

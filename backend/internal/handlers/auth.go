@@ -104,8 +104,8 @@ func ChangePassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
 		return
 	}
-	if len(req.NewPassword) < 6 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 6 位"})
+	if !validPassword(req.NewPassword) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少 8 位，且需同时包含字母和数字"})
 		return
 	}
 	var user models.User
@@ -118,7 +118,12 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
-	if err := db.DB.Model(&user).Update("password_hash", string(hash)).Error; err != nil {
+	// 更新密码，同时若处于"必须改密"状态则一并解除（强制改密流程靠此复位）
+	updates := map[string]interface{}{"password_hash": string(hash)}
+	if user.MustChangePwd {
+		updates["must_change_pwd"] = false
+	}
+	if err := db.DB.Model(&user).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

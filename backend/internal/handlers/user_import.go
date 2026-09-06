@@ -42,7 +42,7 @@ func getUserTemplateXLSX() *excelize.File {
 		}
 	}
 	f.SetCellValue(sheet, "A6", "填写说明：")
-	f.SetCellValue(sheet, "A7", "1. 姓名、工号必填；登录账号 = 工号（登录账号列可留空，填了也以工号为准）。初始密码留空则默认 123456（至少 6 位）。")
+	f.SetCellValue(sheet, "A7", "1. 姓名、工号必填；登录账号 = 工号（登录账号列可留空，填了也以工号为准）。初始密码留空则默认 Cdf123456（密码至少 8 位且需同时包含字母和数字）。")
 	f.SetCellValue(sheet, "A8", "2. 角色填 执行者 / 部门管理员 / 超级管理员（留空默认执行者）。")
 	f.SetCellValue(sheet, "A9", "3. 部门填系统内已有部门名称（留空则导入到当前操作人所在部门）。")
 	f.SetCellValue(sheet, "A10", "4. 工号或登录账号已存在时按表内资料更新该员工，不会重复建号。")
@@ -105,7 +105,7 @@ func ImportUsers(c *gin.Context) {
 		deptByName[strings.TrimSpace(d.Name)] = d.ID
 	}
 
-	const defaultPwd = "123456"
+	const defaultPwd = "Cdf123456"
 	created, updated, failed := 0, 0, 0
 	var errs []string
 
@@ -152,9 +152,9 @@ func ImportUsers(c *gin.Context) {
 		if password == "" {
 			password = defaultPwd
 		}
-		if len(password) < 6 {
+		if !validPassword(password) {
 			failed++
-			errs = append(errs, fmt.Sprintf("第%d行 密码至少 6 位", lineNo))
+			errs = append(errs, fmt.Sprintf("第%d行 密码至少 8 位且需同时包含字母和数字", lineNo))
 			continue
 		}
 

@@ -25,7 +25,7 @@
       <h3 class="section-title" style="margin-top:20px;">修改密码</h3>
       <div class="form-col" style="max-width:380px;">
         <div><label class="fld">当前密码</label><input v-model="pw.old_password" type="password" class="glass-input" autocomplete="current-password" /></div>
-        <div><label class="fld">新密码</label><input v-model="pw.new_password" type="password" class="glass-input" autocomplete="new-password" placeholder="至少 6 位" /></div>
+        <div><label class="fld">新密码</label><input v-model="pw.new_password" type="password" class="glass-input" autocomplete="new-password" placeholder="至少 8 位，含字母和数字" /></div>
         <div><label class="fld">确认新密码</label><input v-model="pw.confirm" type="password" class="glass-input" autocomplete="new-password" /></div>
         <button class="btn primary" :disabled="pwSaving" @click="changePwd">{{ pwSaving ? '保存中…' : '修改密码' }}</button>
       </div>
@@ -481,9 +481,14 @@ function deptNameOf(id) {
 // 修改个人密码
 const pw = reactive({ old_password: '', new_password: '', confirm: '' })
 const pwSaving = ref(false)
+// 密码强度：至少 8 位且同时包含字母与数字（与后端 validPassword 一致）
+function isStrongPwd(p) {
+  if (!p || p.length < 8) return false
+  return /[0-9]/.test(p) && /[A-Za-z]/.test(p)
+}
 async function changePwd() {
   if (!pw.old_password || !pw.new_password) { alert('请填写当前密码和新密码'); return }
-  if (pw.new_password.length < 6) { alert('新密码至少 6 位'); return }
+  if (!isStrongPwd(pw.new_password)) { alert('新密码至少 8 位，且需同时包含字母和数字'); return }
   if (pw.new_password !== pw.confirm) { alert('两次输入的新密码不一致'); return }
   pwSaving.value = true
   try {
@@ -614,7 +619,7 @@ async function addUser() {
   if (!u.name || !u.password) { alert('姓名、密码均必填'); return }
   if (u.role === 'super_admin') { if (!u.username) { alert('超级管理员需填写登录账号'); return } }
   else if (!u.emp_no) { alert('工号必填（登录账号 = 工号）'); return }
-  if (u.password.length < 6) { alert('密码至少 6 位'); return }
+  if (u.password.length < 8 || !/[0-9]/.test(u.password) || !/[A-Za-z]/.test(u.password)) { alert('密码至少 8 位，且需同时包含字母和数字'); return }
   savingU.value = true
   try { await api.post('/users', { ...u }); Object.assign(u, { name: '', emp_no: '', username: '', password: '', mobile: '', role: 'executor', in_group: false }); showAddUser.value = false; await loadUsers() } catch (e) { alert(e.response?.data?.error || '添加失败') }
   finally { savingU.value = false }
@@ -651,8 +656,8 @@ async function toggleFreeze(p) {
 async function resetPwd(p) {
   const np = prompt(`为「${p.name}」设置新密码：`)
   if (!np) return
-  if (np.length < 6) { alert('密码至少 6 位'); return }
-  try { await api.post(`/users/${p.id}/reset-password`, { password: np }); alert('密码已重置') } catch (e) { alert(e.response?.data?.error || '重置失败') }
+  if (!isStrongPwd(np)) { alert('密码至少 8 位，且需同时包含字母和数字'); return }
+  try { await api.post(`/users/${p.id}/reset-password`, { password: np }); alert('密码已重置（该员工下次登录将需先修改为本人密码）') } catch (e) { alert(e.response?.data?.error || '重置失败') }
 }
 async function unlockUser(p) {
   if (!confirm(`解除「${p.name}」的登录锁定？该账号所有设备上的 15 分钟锁定将立即清除。`)) return

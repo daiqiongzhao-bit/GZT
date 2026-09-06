@@ -64,9 +64,10 @@ type User struct {
 	Mobile       string    `json:"mobile" gorm:"size:20"` // 手机号：企业微信@提醒用
 	Role         Role      `json:"role" gorm:"size:24;not null;default:executor"`
 	DeptID       uint      `json:"dept_id"`
-	Frozen       bool      `json:"frozen"` // 冻结：禁止登录
-	InGroup      bool      `json:"in_group" gorm:"default:false"` // 已加入企业微信通知群：推送@对象，名单中不重复列出
-	TokenVersion uint      `json:"token_version"` // 令牌版本：自增即令所有已签发token失效
+	Frozen        bool      `json:"frozen"` // 冻结：禁止登录
+	MustChangePwd bool      `json:"must_change_pwd" gorm:"default:false"` // 必须修改密码：弱密码/管理员重置后登录强制改密
+	InGroup       bool      `json:"in_group" gorm:"default:false"` // 已加入企业微信通知群：推送@对象，名单中不重复列出
+	TokenVersion  uint      `json:"token_version"` // 令牌版本：自增即令所有已签发token失效
 	Dept         *Department `json:"dept,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }

@@ -38,13 +38,23 @@ func AuthRequired() gin.HandlerFunc {
 		}
 		// 令牌版本校验：用户 token_version 自增后，旧 token 立即失效（登出/强制下线）
 		var u models.User
-		if err := db.DB.Select("token_version, name").First(&u, claims.UserID).Error; err != nil {
+		if err := db.DB.Select("token_version, name, must_change_pwd").First(&u, claims.UserID).Error; err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
 			return
 		}
 		if u.TokenVersion != claims.Version {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "令牌已失效，请重新登录"})
 			return
+		}
+		// 强制改密拦截：必须改密用户只能访问改密相关白名单接口，改密完成前禁止使用业务功能
+		if u.MustChangePwd {
+			path := c.FullPath()
+			allow := path == "/api/auth/me" || path == "/api/auth/change-password" ||
+				path == "/api/logout" || path == "/api/version"
+			if !allow {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "安全策略：请先修改为强密码后再操作", "must_change_pwd": true})
+				return
+			}
 		}
 		c.Set(CtxUserKey, claims)
 		// 会话跟踪：记录/刷新在线活跃（登录方式来自 token 的 client 声明）
