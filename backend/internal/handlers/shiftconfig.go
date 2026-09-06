@@ -31,6 +31,7 @@ type shiftConfigReq struct {
 	Name      string `json:"name"`
 	StartTime string `json:"start_time"`
 	EndTime   string `json:"end_time"`
+	ColorKey  string `json:"color_key"`
 }
 
 // UpsertShiftConfig POST /shift-configs 新建或更新班次定义（部门管/超管）
@@ -71,6 +72,7 @@ func UpsertShiftConfig(c *gin.Context) {
 		old.Name = req.Name
 		old.StartTime = req.StartTime
 		old.EndTime = req.EndTime
+		old.ColorKey = req.ColorKey
 		if err := db.DB.Save(&old).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -85,7 +87,7 @@ func UpsertShiftConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "该部门已存在同名班次"})
 		return
 	}
-	sc := models.ShiftConfig{DeptID: deptID, Name: req.Name, StartTime: req.StartTime, EndTime: req.EndTime}
+	sc := models.ShiftConfig{DeptID: deptID, Name: req.Name, StartTime: req.StartTime, EndTime: req.EndTime, ColorKey: req.ColorKey}
 	if err := db.DB.Create(&sc).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

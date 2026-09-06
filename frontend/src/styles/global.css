@@ -164,6 +164,8 @@ body {
 }
 .logo svg { width: 24px; height: 24px; }
 .logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* 上传了企业 Logo 后去除蓝紫底——容器内含 <img> 即代表有真实 logo */
+.logo:has(img) { background: transparent; box-shadow: none; }
 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: 0.3px; }
 .brand-slogan { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 

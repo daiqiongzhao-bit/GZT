@@ -12,7 +12,7 @@
       <!-- 侧边栏（桌面） -->
       <aside class="sidebar glass">
         <div class="brand">
-          <div class="logo">
+          <div class="logo" :class="{ 'has-logo': brand.logo }">
             <img v-if="brand.logo" :src="logoUrl" :alt="company" />
             <span v-else v-html="brandLogo"></span>
           </div>
@@ -306,6 +306,8 @@ async function doBroadcast() {
 </script>
 
 <style>
+/* 上传企业 Logo 后去除侧边栏品牌 logo 的蓝紫底 */
+.logo.has-logo { background: transparent; box-shadow: none; }
 .boot { position: relative; z-index: 2; height: 100%; display: grid; place-items: center; }
 .boot-spin {
   width: 38px; height: 38px; border-radius: 50%;

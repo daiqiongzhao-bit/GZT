@@ -138,8 +138,8 @@
           <span class="matrix-sub">{{ viewYear }} 年 {{ viewMonth + 1 }} 月 · {{ matrixDeptName }} · {{ matrixMembers.length }} 人</span>
         </div>
         <div class="matrix-legend">
-          <span class="ml"><i class="dot ok"></i>早</span>
-          <span class="ml"><i class="dot accent"></i>中</span>
+          <span class="ml"><i class="dot accent"></i>早</span>
+          <span class="ml"><i class="dot ok"></i>中</span>
           <span class="ml"><i class="dot warn"></i>晚</span>
           <span class="ml"><i class="dot purple"></i>夜</span>
           <span class="ml"><i class="dot rest"></i>休</span>
@@ -179,8 +179,18 @@
               <td class="sum-cell hours">{{ row.tot.hours }}</td>
             </tr>
             <tr class="foot-row">
-              <td class="sticky-col" colspan="3">当班人数</td>
-              <td v-for="d in matrixDays" :key="d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">{{ matrixDaily[d] || '' }}</td>
+              <td class="sticky-col" colspan="3">每日当班<span class="foot-sub">早·中·晚·夜/总</span></td>
+              <td v-for="d in matrixDays" :key="d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <template v-if="matrixDaily[d]">
+                  <div class="fd-stack">
+                    <span class="fd-i" :class="'mc ' + shiftColor('早班')" title="早班">{{ matrixDaily[d].early }}</span>
+                    <span class="fd-i" :class="'mc ' + shiftColor('中班')" title="中班">{{ matrixDaily[d].mid }}</span>
+                    <span class="fd-i" :class="'mc ' + shiftColor('晚班')" title="晚班">{{ matrixDaily[d].evening }}</span>
+                    <span class="fd-i" :class="'mc ' + shiftColor('夜班')" title="夜班">{{ matrixDaily[d].night }}</span>
+                  </div>
+                  <span class="fd-total">{{ matrixDaily[d].total }}</span>
+                </template>
+              </td>
               <td class="sum-cell">{{ matrixTot.early }}</td>
               <td class="sum-cell">{{ matrixTot.mid }}</td>
               <td class="sum-cell">{{ matrixTot.evening }}</td>
@@ -616,8 +626,15 @@ const matrixDaysInMonth = computed(() => new Date(viewYear.value, viewMonth.valu
 const matrixDays = computed(() => { const n = matrixDaysInMonth.value; return Array.from({ length: n }, (_, i) => i + 1) })
 const matrixIsWeekend = (d) => { const wd = new Date(viewYear.value, viewMonth.value, d).getDay(); return wd === 0 || wd === 6 }
 function matrixCode(s) { return shiftShort(s) }
-// 班次短码样式类（复用日历配色语义）
-function shiftColor(s) { return shiftClass(s) }
+// 整月矩阵班次配色：优先用该部门班次配置的 color_key（Settings-部门管理可改），否则用系统默认色
+const MATRIX_COLOR_MAP = { blue: 'accent', green: 'ok', orange: 'warn', purple: 'accent-3' }
+function matrixShiftClass(name) {
+  const did = matrixDeptId.value
+  const sc = shiftConfigs.value.find((x) => x.dept_id === did && x.name === name)
+  if (sc && sc.color_key) return MATRIX_COLOR_MAP[sc.color_key] || shiftClass(name)
+  return shiftClass(name) // 默认：早=蓝、中=绿、晚=橙、夜=紫
+}
+function shiftColor(s) { return matrixShiftClass(s) }
 
 // 某班次小时数：优先取该部门班次配置的起止时间计算；无配置则按常见时长兜底
 function shiftHours(name) {
@@ -656,7 +673,8 @@ const matrixRows = computed(() => {
     const workDays = new Set()
     for (let d = 1; d <= daysInMonth; d++) {
       const sh = pd[d]
-      if (!sh || sh === '休息') continue
+      if (!sh) continue
+      if (sh === '休息') { cells[d] = '休息'; continue } // 格子里也标「休」，不计工时/当班
       cells[d] = sh
       workDays.add(d)
       hours += shiftHours(sh)
@@ -675,15 +693,23 @@ const matrixRows = computed(() => {
   })
 })
 
-// 每日当班人数（底部一行）
+// 每日当班人数（底部统计）：{ day: { early,mid,evening,night, total } }
 const matrixDaily = computed(() => {
   const out = {}
   const rows = matrixRows.value
   if (!rows.length) return out
   for (let d = 1; d <= matrixDaysInMonth.value; d++) {
-    let cnt = 0
-    for (const r of rows) if (r.cells[d]) cnt++
-    if (cnt) out[d] = cnt
+    let early = 0, mid = 0, evening = 0, night = 0
+    for (const r of rows) {
+      const sh = r.cells[d]
+      if (!sh || sh === '休息') continue
+      if (sh === '早班') early++
+      else if (sh === '中班') mid++
+      else if (sh === '晚班') evening++
+      else if (sh === '夜班') night++
+    }
+    const total = early + mid + evening + night
+    if (total) out[d] = { early, mid, evening, night, total }
   }
   return out
 })
@@ -877,6 +903,12 @@ onMounted(load)
 .mc.warn { background: rgba(217,119,6,0.13); color: var(--warn); }
 .mc.accent-3 { background: rgba(139,92,246,0.14); color: var(--accent-3); }
 .mc.rest { background: rgba(107,114,128,0.14); color: var(--muted); }
+.foot-sub { display: block; font-size: 10px; font-weight: 400; color: var(--text-faint); margin-top: 2px; }
+/* 每日当班：左 4 个分班小数字竖排，右侧当日总 */
+.matrix-tbl .foot-cell { position: relative; line-height: 1.15; }
+.fd-stack { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }
+.fd-stack .fd-i { min-width: 14px; height: 14px; font-size: 9px; border-radius: 3px; padding: 0 1px; line-height: 1; }
+.fd-total { display: inline-block; min-width: 12px; font-size: 11px; color: var(--accent); margin-left: 2px; font-weight: 700; vertical-align: middle; }
 .wknd-tag { font-style: normal; font-size: 9px; color: var(--text-faint); margin-left: 2px; }
 .matrix-note { font-size: 11.5px; color: var(--text-faint); margin: 10px 0 0; line-height: 1.6; }
 

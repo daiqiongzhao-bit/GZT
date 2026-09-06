@@ -90,6 +90,7 @@
           <div class="shift-cfg">
             <div class="shift-cfg-list">
               <span v-for="sc in shiftsOf(d.id)" :key="sc.id" class="shift-chip">
+                <i class="sc-dot" :style="{ background: shiftColorCss(sc.color_key) }" title="点击切换矩阵配色" @click="cycleShiftColor(sc)"></i>
                 {{ sc.name }} {{ sc.start_time }}-{{ sc.end_time }}
                 <button class="mini" @click="delShift(sc)">×</button>
               </span>
@@ -100,6 +101,10 @@
               <input v-model="scForm.start_time" type="time" class="glass-input sm" />
               <span class="shift-sep">至</span>
               <input v-model="scForm.end_time" type="time" class="glass-input sm" />
+              <div class="shift-palette" title="整月矩阵里的格子颜色">
+                <i v-for="pc in shiftPalette" :key="pc.key" class="sc-dot" :class="{ on: scForm.color_key === pc.key }" :style="{ background: pc.css }" :title="pc.name" @click="scForm.color_key = pc.key"></i>
+                <span class="shift-palette-tip">格子色</span>
+              </div>
               <button class="btn ghost sm" @click="addShift(d)">添加班次</button>
             </div>
           </div>
@@ -504,15 +509,35 @@ async function loadTemplates() { templates.value = await api.get('/templates') }
 async function loadShiftConfigs() { shiftConfigs.value = await api.get('/shift-configs') }
 
 // 部门班次配置
-const scForm = reactive({ name: '', start_time: '09:00', end_time: '18:00' })
+const scForm = reactive({ name: '', start_time: '09:00', end_time: '18:00', color_key: '' })
 function shiftsOf(deptId) { return shiftConfigs.value.filter((sc) => sc.dept_id === deptId) }
+// 整月矩阵班次配色色板（key 与 Schedule 矩阵色类对应；空=用系统默认色）
+const SHIFT_COLOR_MAP = { blue: '#4f46e5', green: '#059669', orange: '#d97706', purple: '#8b5cf6' }
+const shiftPalette = [
+  { key: 'blue',   name: '蓝（默认早班色）', css: '#4f46e5' },
+  { key: 'green',  name: '绿', css: '#059669' },
+  { key: 'orange', name: '橙（晚班/夜班默认色）', css: '#d97706' },
+  { key: 'purple', name: '紫（夜班默认色）', css: '#8b5cf6' }
+]
+function shiftColorCss(key) { return SHIFT_COLOR_MAP[key] || '#cbd5e1' }
+// 点击已建班次的色点：在 4 色板里循环切换并保存
+async function cycleShiftColor(sc) {
+  const keys = ['', ...shiftPalette.map(p => p.key)] // 从默认开始循环
+  const i = keys.indexOf(sc.color_key || '')
+  const next = keys[(i + 1) % keys.length]
+  try {
+    await api.post('/shift-configs', { id: sc.id, dept_id: sc.dept_id, name: sc.name, start_time: sc.start_time, end_time: sc.end_time, color_key: next })
+    sc.color_key = next
+    await loadShiftConfigs()
+  } catch (e) { alert(e.response?.data?.error || '改色失败') }
+}
 async function addShift(d) {
   const name = scForm.name.trim()
   if (!name) { alert('请填写班次名称，如 中班'); return }
   if (!scForm.start_time || !scForm.end_time) { alert('请选择上班/下班时间'); return }
   try {
-    await api.post('/shift-configs', { dept_id: d.id, name, start_time: scForm.start_time, end_time: scForm.end_time })
-    scForm.name = ''
+    await api.post('/shift-configs', { dept_id: d.id, name, start_time: scForm.start_time, end_time: scForm.end_time, color_key: scForm.color_key })
+    scForm.name = ''; scForm.color_key = ''
     await loadShiftConfigs()
   } catch (e) { alert(e.response?.data?.error || '添加失败') }
 }
@@ -1017,6 +1042,11 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .shift-cfg-list { display: flex; gap: 6px; flex-wrap: wrap; }
 .shift-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--overlay-2); border: 1px solid var(--glass-border); color: var(--text-dim); }
 .shift-chip .mini { padding: 0 5px; font-size: 13px; line-height: 1; }
+.sc-dot { width: 14px; height: 14px; border-radius: 50%; cursor: pointer; display: inline-block; flex: none; border: 2px solid transparent; box-sizing: border-box; transition: transform 0.1s, border-color 0.1s; }
+.sc-dot:hover { transform: scale(1.15); }
+.sc-dot.on { border-color: #111827; }
+.shift-palette { display: inline-flex; align-items: center; gap: 5px; }
+.shift-palette-tip { font-size: 11px; color: var(--text-faint); margin-left: 2px; }
 .shift-none { font-size: 12px; color: var(--text-faint); }
 .shift-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shift-add .glass-input.sm { max-width: 120px; padding: 7px 10px; font-size: 13px; }

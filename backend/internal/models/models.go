@@ -51,6 +51,7 @@ type ShiftConfig struct {
 	Name      string    `json:"name" gorm:"size:16;not null"` // 早班 / 晚班 / 中班 ...
 	StartTime string    `json:"start_time" gorm:"size:5"`     // 09:00
 	EndTime   string    `json:"end_time" gorm:"size:5"`       // 18:00
+	ColorKey  string    `json:"color_key" gorm:"size:20"`     // matrix color key
 	CreatedAt time.Time `json:"created_at"`
 }
 
