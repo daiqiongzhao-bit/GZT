@@ -2,12 +2,13 @@
 # ============================================================
 # 企业任务通知管理（GZT）v0.4.0 一键安装脚本
 #
-# 用法（任选其一，均不依赖任何个人服务器）：
-#   方式A（推荐）— 服务器能联网，直接远程执行，无需下载文件（脚本托管于
-#     GitHub 公开仓库 + 全球 CDN 镜像，与作者个人服务器/域名无关）：
+# 用法（任选其一，脚本托管于 GitHub 公开仓库，与作者个人服务器/域名完全无关）：
+#   方式A（推荐）— 服务器能联网，直接远程执行，无需下载文件：
+#     bash <(curl -sL https://raw.githubusercontent.com/daiqiongzhao-bit/GZT/main/install.sh)
+#   （国内加速备选）— 同上，走 CDN 镜像：
 #     bash <(curl -sL https://cdn.jsdelivr.net/gh/daiqiongzhao-bit/GZT@main/install.sh)
 #   方式B — 下载到本地再执行：
-#     curl -sL https://cdn.jsdelivr.net/gh/daiqiongzhao-bit/GZT@main/install.sh -o gzt-install.sh && bash gzt-install.sh
+#     curl -sL https://raw.githubusercontent.com/daiqiongzhao-bit/GZT/main/install.sh -o gzt-install.sh && bash gzt-install.sh
 #
 # 自动完成：装 Docker → 生成密钥 → 拉镜像 → 启动 → 打印网址
 # 支持系统：Ubuntu / Debian / CentOS 7+（64 位）

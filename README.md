@@ -105,8 +105,8 @@ bash build.sh            # 安装前端依赖、构建前端、编译后端 -> �
 
 ```bash
 # 下载并执行一键安装脚本（自动装 Docker、生成密钥、拉镜像、启动）
-# 脚本托管在 GitHub 公开仓库 + CDN 镜像，与作者个人服务器/域名无关
-bash <(curl -sL https://cdn.jsdelivr.net/gh/daiqiongzhao-bit/GZT@main/install.sh)
+# 脚本托管在 GitHub 公开仓库，与作者个人服务器/域名无关
+bash <(curl -sL https://raw.githubusercontent.com/daiqiongzhao-bit/GZT/main/install.sh)
 ```
 
 或手动分两步：
