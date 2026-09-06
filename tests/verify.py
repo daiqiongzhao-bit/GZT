@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""GZT v0.0.1 全面体检：动态断言，不硬编码版本/日期/人数"""
+"""GZT 全面体检：动态断言，不硬编码版本/日期/人数"""
 import json
+import re
+import os
 import sqlite3
 import urllib.error
 import urllib.request
@@ -57,24 +59,36 @@ def norm(s):
     return out
 
 
+# 管理员凭据：优先从环境变量读取（密码不入库、可随时更换）
+#   GZT_ADMIN_USER=admin GZT_ADMIN_PASS=xxx python3 tests/verify.py
+ADMIN_USER = os.environ.get('GZT_ADMIN_USER', 'admin')
+ADMIN_PASS = os.environ.get('GZT_ADMIN_PASS', '')
+
 today = datetime.date.today().isoformat()
 token = None
 
 print('=' * 60)
-print('GZT v0.0.1 全面体检 · %s' % today)
+print('GZT 全面体检 · %s' % today)
 print('=' * 60)
 
 # ---------- [A] 版本与认证 ----------
 print('\n[A] 版本与认证')
 st, v = req('/api/version')
-check(st == 200 and isinstance(v, dict) and v.get('version') == 'v0.0.1', '版本号为 v0.0.1（实际 %s）' % (v.get('version') if isinstance(v, dict) else v))
-st, auth = req('/api/auth/login', method='POST', body={'username': 'admin', 'password': 'admin123'})
-check(st == 200 and isinstance(auth, dict) and auth.get('token'), 'admin 登录成功')
+check(st == 200 and isinstance(v, dict) and re.fullmatch(r'v\d+\.\d+\.\d+', str(v.get('version')) or '') is not None,
+      '版本号符合语义化格式（实际 %s）' % (v.get('version') if isinstance(v, dict) else v))
+if not ADMIN_PASS:
+    print('SKIP  未配置 GZT_ADMIN_PASS，跳过需登录的体检项（不影响只读项）')
+    auth = {}
+else:
+    st, auth = req('/api/auth/login', method='POST', body={'username': ADMIN_USER, 'password': ADMIN_PASS})
+check(isinstance(auth, dict) and auth.get('token'), '管理员登录成功（%s）' % ADMIN_USER,
+      '请设置环境变量 GZT_ADMIN_PASS 为当前密码' if not auth.get('token') else '')
 token = auth.get('token', '') if isinstance(auth, dict) else ''
 st, me = req('/api/auth/me', token)
 check(st == 200 and isinstance(me, dict) and me.get('role') == 'super_admin', '当前用户为超管')
-st, _ = req('/api/auth/login', method='POST', body={'username': 'admin', 'password': 'wrong-pass'})
-check(st == 401, '错误密码被拒绝')
+# 用不存在的用户名探测，避免消耗真实账号的登录失败额度（5 次/10 分钟会锁定 15 分钟）
+st, _ = req('/api/auth/login', method='POST', body={'username': 'probe-not-exist-user', 'password': 'wrong-pass'})
+check(st == 401, '错误凭据被拒绝')
 
 # ---------- [B] 部门与人员 ----------
 print('\n[B] 部门与人员')
