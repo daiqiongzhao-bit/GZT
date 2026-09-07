@@ -49,7 +49,7 @@ func main() {
 	{
 		// 公开
 		api.POST("/auth/login", handlers.Login)
-		api.GET("/settings", handlers.GetSetting) // 企业信息公开可读（登录页展示）
+		api.GET("/settings", handlers.GetSetting)   // 企业信息公开可读（登录页展示）
 		api.GET("/settings/logo", handlers.GetLogo) // 企业 Logo 公开可读（登录页展示）
 		api.GET("/version", func(c *gin.Context) {
 			c.JSON(200, gin.H{"version": config.C.AppVersion})
@@ -94,13 +94,13 @@ func main() {
 			auth.DELETE("/users/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUser)
 			auth.POST("/users/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportUsers)
 			auth.POST("/users/batch", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchUsers)
-			auth.GET("/users/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportUsersCSV) // v0.2.0 人员导出
+			auth.GET("/users/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportUsersXLSX) // v0.2.0 人员导出（v0.8.0 起 .xlsx）
 
 			// 班表
-		auth.GET("/schedules", handlers.ListSchedules)
-		auth.POST("/schedules", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateSchedule)
-		auth.PUT("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateSchedule)
-		auth.DELETE("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSchedule)
+			auth.GET("/schedules", handlers.ListSchedules)
+			auth.POST("/schedules", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateSchedule)
+			auth.PUT("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateSchedule)
+			auth.DELETE("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSchedule)
 
 			// 任务
 			auth.GET("/tasks", handlers.ListTasks)
@@ -119,9 +119,9 @@ func main() {
 			auth.POST("/tasks/batch", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchTasks)
 			auth.POST("/tasks/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportTasksCSV)
 			auth.POST("/schedules/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportSchedulesCSV)
-			auth.GET("/schedules/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportSchedulesCSV)
-			auth.GET("/tasks/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportTasksCSV)
-			auth.GET("/logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportLogsCSV)
+			auth.GET("/schedules/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportSchedulesXLSX)
+			auth.GET("/tasks/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportTasksXLSX)
+			auth.GET("/logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportLogsXLSX)
 
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
@@ -129,6 +129,7 @@ func main() {
 			auth.GET("/workspace/knowledge/export", handlers.ExportKnowledge)
 			auth.GET("/workspace/export/bundle", handlers.ExportWorkspaceBundle)
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
+			auth.GET("/workspace/knowledge/:id/history", handlers.ListKnowledgeHistory)
 			auth.POST("/workspace/knowledge/:id/attachments", handlers.UploadKnowledgeAttachment)
 			auth.GET("/workspace/knowledge_attachments/:aid/download", handlers.DownloadKnowledgeAttachment)
 			auth.DELETE("/workspace/knowledge_attachments/:aid", handlers.DeleteKnowledgeAttachment)

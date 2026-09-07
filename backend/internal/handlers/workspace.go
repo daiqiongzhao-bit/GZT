@@ -42,6 +42,43 @@ func scopeVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 
 // ============================ 迷你知识库 ============================
 
+// ==================== 知识库：变更 / 协作日志（v0.8.0） ====================
+
+// recordKnowledgeLog 写一条知识条目变更日志（操作人/操作时间/操作前后内容）
+func recordKnowledgeLog(entryID uint, cl *models.Claims, action, detail string) {
+	if cl == nil {
+		return
+	}
+	_ = db.DB.Create(&models.KnowledgeChangeLog{
+		EntryID:      entryID,
+		Action:       action,
+		OperatorID:   cl.UserID,
+		OperatorName: cl.Username,
+		DeptID:       cl.DeptID,
+		Detail:       detail,
+	}).Error
+}
+
+// clipRunes 截断长文本用于日志明细（中文按字符计）
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// ListKnowledgeHistory GET /workspace/knowledge/:id/history
+// 知识条目变更/协作日志（按时间倒序）：完整记录谁、何时、改了什么（含修改前/后内容）
+func ListKnowledgeHistory(c *gin.Context) {
+	if _, ok := loadVisibleKnowledge(c); !ok {
+		return
+	}
+	var list []models.KnowledgeChangeLog
+	db.DB.Where("entry_id = ?", c.Param("id")).Order("id desc").Find(&list)
+	c.JSON(http.StatusOK, list)
+}
+
 // ListKnowledge 知识库列表（可见范围内），支持 ?kw 全文搜索、?category 分类、?mine 只看自己
 func ListKnowledge(c *gin.Context) {
 	cl := middleware.GetClaims(c)
@@ -112,6 +149,9 @@ func CreateKnowledge(c *gin.Context) {
 		return
 	}
 	addLog(c, cl.UserID, cl.Username, "新增知识库: "+entry.Title)
+	recordKnowledgeLog(entry.ID, cl, "create",
+		fmt.Sprintf("创建条目：标题「%s」、分类「%s」、可见范围「%s」。正文：%s",
+			entry.Title, entry.Category, scopeLabelShort(entry.Scope), clipRunes(entry.Content, 200)))
 	c.JSON(http.StatusOK, entry)
 }
 
@@ -150,6 +190,8 @@ func UpdateKnowledge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "标题不能为空"})
 		return
 	}
+	// 记录修改前的旧值（用于变更日志的「修改前/后内容」）
+	oldTitle, oldCategory, oldContent, oldScope := entry.Title, entry.Category, entry.Content, entry.Scope
 	entry.Title = strings.TrimSpace(req.Title)
 	entry.Category = strings.TrimSpace(req.Category)
 	entry.Content = req.Content
@@ -160,7 +202,27 @@ func UpdateKnowledge(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	addLog(c, middleware.GetClaims(c).UserID, middleware.GetClaims(c).Username, "更新知识库: "+entry.Title)
+	cl := middleware.GetClaims(c)
+	addLog(c, cl.UserID, cl.Username, "更新知识库: "+entry.Title)
+	// 变更/协作日志：逐字段记录「修改前 → 修改后」
+	var parts []string
+	if oldTitle != entry.Title {
+		parts = append(parts, fmt.Sprintf("标题：%q → %q", oldTitle, entry.Title))
+	}
+	if oldCategory != entry.Category {
+		parts = append(parts, fmt.Sprintf("分类：%q → %q", oldCategory, entry.Category))
+	}
+	if oldScope != entry.Scope {
+		parts = append(parts, fmt.Sprintf("可见范围：%s → %s", scopeLabelShort(oldScope), scopeLabelShort(entry.Scope)))
+	}
+	if oldContent != entry.Content {
+		parts = append(parts, fmt.Sprintf("正文：\n【修改前】%s\n【修改后】%s",
+			clipRunes(oldContent, 400), clipRunes(entry.Content, 400)))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "内容未发生变化（仅刷新时间）")
+	}
+	recordKnowledgeLog(entry.ID, cl, "update", strings.Join(parts, "\n"))
 	c.JSON(http.StatusOK, entry)
 }
 
@@ -174,7 +236,9 @@ func DeleteKnowledge(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	addLog(c, middleware.GetClaims(c).UserID, middleware.GetClaims(c).Username, "删除知识库: "+entry.Title)
+	cl := middleware.GetClaims(c)
+	addLog(c, cl.UserID, cl.Username, "删除知识库: "+entry.Title)
+	recordKnowledgeLog(entry.ID, cl, "delete", fmt.Sprintf("删除条目：标题「%s」（条目及其可见附件记录一并删除）", entry.Title))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -392,8 +456,8 @@ func CreateHandover(c *gin.Context) {
 	// 写站内通知给接收人，确保"下个人能看到"
 	db.DB.Create(&models.Notification{
 		UserID: u.ID, Kind: "user", Title: "你收到一份新的工作交接",
-		Content:   "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。",
-		ActorID:   cl.UserID, ActorName: cl.Username,
+		Content: "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。",
+		ActorID: cl.UserID, ActorName: cl.Username,
 	})
 	addLog(c, cl.UserID, cl.Username, "创建交接→"+u.Name+": "+hv.Title)
 	c.JSON(http.StatusOK, hv)
@@ -565,6 +629,8 @@ func UploadKnowledgeAttachment(c *gin.Context) {
 	}
 	_ = db.DB.Model(&models.KnowledgeEntry{}).Where("id = ?", e.ID).Update("updated_at", time.Now())
 	addLog(c, cl.UserID, cl.Username, "知识["+e.Title+"]上传附件: "+origName)
+	recordKnowledgeLog(e.ID, cl, "attachment_upload",
+		fmt.Sprintf("新增附件「%s」（%d 字节，类型 %s）", origName, file.Size, mimeT))
 	c.JSON(http.StatusOK, att)
 }
 
@@ -625,6 +691,9 @@ func DeleteKnowledgeAttachment(c *gin.Context) {
 	}
 	db.DB.Delete(&att)
 	addLog(c, cl.UserID, cl.Username, "删除知识附件: "+att.FileName)
+	if e.ID != 0 {
+		recordKnowledgeLog(e.ID, cl, "attachment_delete", fmt.Sprintf("删除附件「%s」", att.FileName))
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

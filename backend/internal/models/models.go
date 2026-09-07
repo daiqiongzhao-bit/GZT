@@ -19,16 +19,16 @@ const (
 type ClientType string
 
 const (
-	ClientWeb      ClientType = "web"
-	ClientPWA      ClientType = "pwa"
+	ClientWeb       ClientType = "web"
+	ClientPWA       ClientType = "pwa"
 	ClientExtension ClientType = "extension"
 )
 
 // 任务类型
 const (
-	TaskTypeDaily  = "daily"
+	TaskTypeDaily   = "daily"
 	TaskTypeMonthly = "monthly"
-	TaskTypeOnce   = "once"
+	TaskTypeOnce    = "once"
 )
 
 // 任务状态
@@ -56,20 +56,20 @@ type ShiftConfig struct {
 }
 
 type User struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	Username     string    `json:"username" gorm:"size:64;not null;uniqueIndex"`
-	PasswordHash string    `json:"-" gorm:"size:128;not null"`
-	Name         string    `json:"name" gorm:"size:64;not null"`
-	EmpNo        string    `json:"emp_no" gorm:"size:32;index"` // 工号：通知与名单展示用
-	Mobile       string    `json:"mobile" gorm:"size:20"` // 手机号：企业微信@提醒用
-	Role         Role      `json:"role" gorm:"size:24;not null;default:executor"`
-	DeptID       uint      `json:"dept_id"`
-	Frozen        bool      `json:"frozen"` // 冻结：禁止登录
-	MustChangePwd bool      `json:"must_change_pwd" gorm:"default:false"` // 必须修改密码：弱密码/管理员重置后登录强制改密
-	InGroup       bool      `json:"in_group" gorm:"default:false"` // 已加入企业微信通知群：推送@对象，名单中不重复列出
-	TokenVersion  uint      `json:"token_version"` // 令牌版本：自增即令所有已签发token失效
-	Dept         *Department `json:"dept,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            uint        `json:"id" gorm:"primaryKey"`
+	Username      string      `json:"username" gorm:"size:64;not null;uniqueIndex"`
+	PasswordHash  string      `json:"-" gorm:"size:128;not null"`
+	Name          string      `json:"name" gorm:"size:64;not null"`
+	EmpNo         string      `json:"emp_no" gorm:"size:32;index"` // 工号：通知与名单展示用
+	Mobile        string      `json:"mobile" gorm:"size:20"`       // 手机号：企业微信@提醒用
+	Role          Role        `json:"role" gorm:"size:24;not null;default:executor"`
+	DeptID        uint        `json:"dept_id"`
+	Frozen        bool        `json:"frozen"`                               // 冻结：禁止登录
+	MustChangePwd bool        `json:"must_change_pwd" gorm:"default:false"` // 必须修改密码：弱密码/管理员重置后登录强制改密
+	InGroup       bool        `json:"in_group" gorm:"default:false"`        // 已加入企业微信通知群：推送@对象，名单中不重复列出
+	TokenVersion  uint        `json:"token_version"`                        // 令牌版本：自增即令所有已签发token失效
+	Dept          *Department `json:"dept,omitempty"`
+	CreatedAt     time.Time   `json:"created_at"`
 }
 
 // Schedule 班表：某日某部门某班次的多名当班人员
@@ -82,27 +82,31 @@ type Schedule struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Task 任务：每日/每月/临时单次，支持逾期。
-// Shift 班次归属：早班/晚班/早晚/全员（谁当班谁负责）
+// Task 任务：每日/每周/每月/临时单次，支持逾期。
+// Shift 班次归属：早班/中班/晚班/早晚/全员（谁当班谁负责）
+// WeekDays 为「按周执行」：Type=daily 时可勾选星期几触发（1=周一…7=周日，空=每天都执行）
 type Task struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	Title      string    `json:"title" gorm:"size:255;not null"`
-	Type       string    `json:"type" gorm:"size:16;not null"`
-	Shift      string    `json:"shift" gorm:"size:16;default:all"` // 早班/晚班/早晚/全员
-	Time       string    `json:"time" gorm:"size:8"`              // 每日任务执行时间 HH:MM
-	Deadline   string    `json:"deadline" gorm:"size:16"`         // 截止时间 YYYY-MM-DDTHH:MM
-	Assignee   string    `json:"assignee" gorm:"size:64"`         // 负责人姓名（兼容旧数据，新任务不再必填）
-	AssigneeID uint      `json:"assignee_id"`                      // 负责人用户ID（0=未分配/部门公共）
-	CompletedBy string    `json:"completed_by" gorm:"size:64"`      // 完成人姓名（谁打的☑️）
-	CompletedAt time.Time `json:"completed_at"`                      // 最近一次完成时间
-	Status     string    `json:"status" gorm:"size:16;not null;default:todo"`
-	Priority   string    `json:"priority" gorm:"size:16;default:medium"` // high/medium/low
-	Note       string    `json:"note" gorm:"type:text"`
-	DeptID     uint      `json:"dept_id" gorm:"index"`
-	Overdue       bool      `json:"overdue" gorm:"-"`          // 瞬态：是否逾期
-	DueToday      bool      `json:"due_today" gorm:"-"`        // 瞬态：今日是否应处理
-	DueThisMonth  bool      `json:"due_this_month" gorm:"-"`   // 瞬态：本月是否应处理
-	CreatedAt  time.Time `json:"created_at"`
+	ID           uint      `json:"id" gorm:"primaryKey"`
+	Title        string    `json:"title" gorm:"size:255;not null"`
+	Type         string    `json:"type" gorm:"size:16;not null"`
+	Shift        string    `json:"shift" gorm:"size:16;default:all"` // 早班/中班/晚班/早晚/全员
+	Time         string    `json:"time" gorm:"size:8"`               // 每日任务执行时间 HH:MM
+	Deadline     string    `json:"deadline" gorm:"size:16"`          // 截止时间 YYYY-MM-DDTHH:MM
+	WeekDays     string    `json:"week_days" gorm:"size:32"`         // 按周执行：逗号分隔的星期，如 "1,3,5"（1=周一…7=周日）；空=每天
+	Assignee     string    `json:"assignee" gorm:"size:64"`          // 负责人姓名展示（多人用顿号连接；兼容旧数据）
+	AssigneeID   uint      `json:"assignee_id"`                      // 负责人用户ID（首个，0=未分配/部门公共；权限判断用）
+	Assignees    string    `json:"assignees" gorm:"type:text"`       // 负责人（单人/多人）姓名：JSON 数组 ["甲","乙"]
+	AssigneeIDs  string    `json:"assignee_ids" gorm:"type:text"`    // 负责人用户ID：JSON 数组 [1,2]
+	CompletedBy  string    `json:"completed_by" gorm:"size:64"`      // 完成人姓名（谁打的☑️）
+	CompletedAt  time.Time `json:"completed_at"`                     // 最近一次完成时间
+	Status       string    `json:"status" gorm:"size:16;not null;default:todo"`
+	Priority     string    `json:"priority" gorm:"size:16;default:medium"` // high/medium/low
+	Note         string    `json:"note" gorm:"type:text"`
+	DeptID       uint      `json:"dept_id" gorm:"index"`
+	Overdue      bool      `json:"overdue" gorm:"-"`        // 瞬态：是否逾期
+	DueToday     bool      `json:"due_today" gorm:"-"`      // 瞬态：今日是否应处理
+	DueThisMonth bool      `json:"due_this_month" gorm:"-"` // 瞬态：本月是否应处理
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Webhook 部门机器人推送地址（AES 加密存储）
@@ -111,8 +115,8 @@ type Webhook struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	Name      string    `json:"name" gorm:"size:64;not null"`
 	Type      string    `json:"type" gorm:"size:16;not null;default:wecom"` // wecom|dingtalk|feishu
-	URL       string    `json:"url" gorm:"type:text;not null"`             // 加密后
-	Secret    string    `json:"-" gorm:"type:text"`                        // 加密后（加签密钥）
+	URL       string    `json:"url" gorm:"type:text;not null"`              // 加密后
+	Secret    string    `json:"-" gorm:"type:text"`                         // 加密后（加签密钥）
 	DeptID    uint      `json:"dept_id" gorm:"index"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -131,23 +135,23 @@ type Template struct {
 
 // TaskCompletion 任务完成记录（审计日志：谁在何时完成）
 type TaskCompletion struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	TaskID     uint      `json:"task_id" gorm:"index"`
-	TaskTitle  string    `json:"task_title" gorm:"size:255"`
-	UserID     uint      `json:"user_id"`
-	UserName   string    `json:"user_name" gorm:"size:64"`
-	DeptID     uint      `json:"dept_id" gorm:"index"`
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	TaskID      uint      `json:"task_id" gorm:"index"`
+	TaskTitle   string    `json:"task_title" gorm:"size:255"`
+	UserID      uint      `json:"user_id"`
+	UserName    string    `json:"user_name" gorm:"size:64"`
+	DeptID      uint      `json:"dept_id" gorm:"index"`
 	CompletedAt time.Time `json:"completed_at"`
 }
 
 // Setting 企业品牌设置（单行）
 type Setting struct {
-	ID           uint   `json:"-" gorm:"primaryKey"`
-	CompanyName  string `json:"company_name" gorm:"size:128"`
-	Slogan       string `json:"slogan" gorm:"size:255"`
-	Version      string `json:"version" gorm:"size:16"`
-	Copyright    string `json:"copyright" gorm:"size:255"`
-	Logo         string `json:"logo" gorm:"size:128"` // 企业 Logo 文件名，存于数据目录下
+	ID          uint   `json:"-" gorm:"primaryKey"`
+	CompanyName string `json:"company_name" gorm:"size:128"`
+	Slogan      string `json:"slogan" gorm:"size:255"`
+	Version     string `json:"version" gorm:"size:16"`
+	Copyright   string `json:"copyright" gorm:"size:255"`
+	Logo        string `json:"logo" gorm:"size:128"` // 企业 Logo 文件名，存于数据目录下
 	// 邮件通知（SMTP）配置
 	SmtpHost     string `json:"smtp_host" gorm:"size:128"`
 	SmtpPort     int    `json:"smtp_port"`
@@ -167,8 +171,8 @@ type Log struct {
 	Action    string    `json:"action" gorm:"size:255"`
 	UserID    uint      `json:"user_id"`
 	UserName  string    `json:"user_name" gorm:"size:64"`
-	IP        string    `json:"ip" gorm:"size:64"`  // 操作来源 IP（全部操作留痕）
-	UA        string    `json:"ua" gorm:"size:255"` // 操作来源 User-Agent
+	IP        string    `json:"ip" gorm:"size:64"`     // 操作来源 IP（全部操作留痕）
+	UA        string    `json:"ua" gorm:"size:255"`    // 操作来源 User-Agent
 	Client    string    `json:"client" gorm:"size:16"` // 操作来源: web/pwa/extension（v0.0.6）
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -176,24 +180,24 @@ type Log struct {
 // Notification 站内通知：管理员修改与用户相关信息时推送给当事人
 type Notification struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
-	UserID    uint      `json:"user_id" gorm:"index"`          // 接收人
-	Kind      string    `json:"kind" gorm:"size:16"`           // schedule / user / password
-	Title     string    `json:"title" gorm:"size:128"`         // 短标题
-	Content   string    `json:"content" gorm:"size:512"`       // 详情：谁、何时、改了啥
-	ActorID   uint      `json:"actor_id"`                      // 操作人
-	ActorName string    `json:"actor_name" gorm:"size:64"`     // 操作人姓名
-	Read      bool      `json:"read" gorm:"default:false"`     // 是否已读
+	UserID    uint      `json:"user_id" gorm:"index"`      // 接收人
+	Kind      string    `json:"kind" gorm:"size:16"`       // schedule / user / password
+	Title     string    `json:"title" gorm:"size:128"`     // 短标题
+	Content   string    `json:"content" gorm:"size:512"`   // 详情：谁、何时、改了啥
+	ActorID   uint      `json:"actor_id"`                  // 操作人
+	ActorName string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
+	Read      bool      `json:"read" gorm:"default:false"` // 是否已读
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // Claims JWT 载荷
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID   uint   `json:"uid"`
-	Username string `json:"username"`
-	Role     Role   `json:"role"`
-	DeptID   uint   `json:"dept_id"`
-	Version  uint   `json:"ver"` // 令牌版本，需与 user.token_version 一致
+	UserID   uint       `json:"uid"`
+	Username string     `json:"username"`
+	Role     Role       `json:"role"`
+	DeptID   uint       `json:"dept_id"`
+	Version  uint       `json:"ver"`    // 令牌版本，需与 user.token_version 一致
 	Client   ClientType `json:"client"` // 客户端类型：web/pwa/extension
 }
 
@@ -217,36 +221,48 @@ const (
 
 // HandoverStatus 交接单状态
 const (
-	HandoverPending   = "pending"   // 已发出，等待接收人处理
+	HandoverPending    = "pending"     // 已发出，等待接收人处理
 	HandoverInProgress = "in_progress" // 接收人已接手处理中
-	HandoverDone      = "done"      // 已完成
+	HandoverDone       = "done"        // 已完成
 )
 
 // KnowledgeEntry 迷你知识库条目：方法/流程/制度等长期内容
 type KnowledgeEntry struct {
 	ID        uint           `json:"id" gorm:"primaryKey"`
 	Title     string         `json:"title" gorm:"size:255;not null"`
-	Category  string         `json:"category" gorm:"size:64"`            // 分类标签（可自由填）
-	Content   string         `json:"content" gorm:"type:text"`           // 正文（多行）
+	Category  string         `json:"category" gorm:"size:64"`  // 分类标签（可自由填）
+	Content   string         `json:"content" gorm:"type:text"` // 正文（多行）
 	Scope     WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
-	OwnerID   uint           `json:"owner_id" gorm:"index"`              // 创建者
-	OwnerName string         `json:"owner_name" gorm:"size:64"`          // 创建者姓名（展示用）
-	DeptID    uint           `json:"dept_id" gorm:"index"`               // 所属部门（隔离范围）
+	OwnerID   uint           `json:"owner_id" gorm:"index"`     // 创建者
+	OwnerName string         `json:"owner_name" gorm:"size:64"` // 创建者姓名（展示用）
+	DeptID    uint           `json:"dept_id" gorm:"index"`      // 所属部门（隔离范围）
 	UpdatedAt time.Time      `json:"updated_at"`
 	CreatedAt time.Time      `json:"created_at"`
 }
 
 // KnowledgeAttachment 知识条目附件：文件存服务器磁盘（与数据库同盘目录），仅存元数据
 type KnowledgeAttachment struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	EntryID   uint      `json:"entry_id" gorm:"index;not null"` // 所属知识条目
-	FileName  string    `json:"file_name" gorm:"size:255"`      // 原始文件名（下载展示用）
-	StoredName string   `json:"stored_name" gorm:"size:128"`    // 磁盘存储文件名（唯一）
-	Mime      string    `json:"mime" gorm:"size:64"`            // Content-Type
-	Size      int64     `json:"size"`                            // 字节
-	OwnerID   uint      `json:"owner_id" gorm:"index"`           // 上传者
-	OwnerName string    `json:"owner_name" gorm:"size:64"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	EntryID    uint      `json:"entry_id" gorm:"index;not null"` // 所属知识条目
+	FileName   string    `json:"file_name" gorm:"size:255"`      // 原始文件名（下载展示用）
+	StoredName string    `json:"stored_name" gorm:"size:128"`    // 磁盘存储文件名（唯一）
+	Mime       string    `json:"mime" gorm:"size:64"`            // Content-Type
+	Size       int64     `json:"size"`                           // 字节
+	OwnerID    uint      `json:"owner_id" gorm:"index"`          // 上传者
+	OwnerName  string    `json:"owner_name" gorm:"size:64"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// KnowledgeChangeLog 知识条目变更/协作日志：完整记录操作人、操作时间、修改前后内容（审计追溯）
+type KnowledgeChangeLog struct {
+	ID           uint      `json:"id" gorm:"primaryKey"`
+	EntryID      uint      `json:"entry_id" gorm:"index;not null"` // 所属知识条目
+	Action       string    `json:"action" gorm:"size:24"`          // create / update / delete / attachment_upload / attachment_delete
+	OperatorID   uint      `json:"operator_id" gorm:"index"`       // 操作人
+	OperatorName string    `json:"operator_name" gorm:"size:64"`
+	DeptID       uint      `json:"dept_id" gorm:"index"`    // 操作人所属部门
+	Detail       string    `json:"detail" gorm:"type:text"` // 变更说明：修改了哪些字段、修改前/修改后内容
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // WorkLog 工作日志：某日记录当天做了什么 / 还没做完的（一天可多篇）
@@ -271,13 +287,13 @@ type WorkHandover struct {
 	FromProgress string         `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
 	Todo         string         `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
 	Scope        WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
-	SenderID     uint           `json:"sender_id" gorm:"index"`         // 发出人
+	SenderID     uint           `json:"sender_id" gorm:"index"` // 发出人
 	SenderName   string         `json:"sender_name" gorm:"size:64"`
-	AssigneeID   uint           `json:"assignee_id" gorm:"index"`       // 接收人（系统注册人员）
+	AssigneeID   uint           `json:"assignee_id" gorm:"index"` // 接收人（系统注册人员）
 	AssigneeName string         `json:"assignee_name" gorm:"size:64"`
-	DeptID       uint           `json:"dept_id" gorm:"index"`           // 发出人所属部门
+	DeptID       uint           `json:"dept_id" gorm:"index"` // 发出人所属部门
 	Status       string         `json:"status" gorm:"size:16;default:pending"`
-	Note         string         `json:"note" gorm:"type:text"`          // 接收人完成时的备注
+	Note         string         `json:"note" gorm:"type:text"` // 接收人完成时的备注
 	CompletedAt  *time.Time     `json:"completed_at"`
 	CreatedAt    time.Time      `json:"created_at"`
 }

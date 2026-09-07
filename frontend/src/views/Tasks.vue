@@ -121,6 +121,25 @@
           <input v-else v-model="form.deadline" type="datetime-local" class="glass-input" />
         </div>
       </div>
+      <div v-if="form.type === 'daily'" class="fg1">
+        <label class="fld">按周执行 <em class="faint">（勾选星期才做，不勾选=每天执行）</em></label>
+        <div class="wd-pick">
+          <label v-for="d in [1, 2, 3, 4, 5, 6, 7]" :key="d" class="wd-chip" :class="{ on: form.weekdays.includes(d) }">
+            <input type="checkbox" :value="d" v-model="form.weekdays" />
+            <span>{{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][d - 1] }}</span>
+          </label>
+        </div>
+      </div>
+      <div class="fg1">
+        <label class="fld">负责人 <em class="faint">（单人/多人，可空；空=部门公共任务）</em></label>
+        <div class="wd-pick ap-pick">
+          <label v-for="u in userOptions" :key="u.id" class="wd-chip ap" :class="{ on: form.assignees.includes(u.name) }">
+            <input type="checkbox" :value="u.name" v-model="form.assignees" />
+            <span>{{ u.name }}<em v-if="u.dept">（{{ u.dept.name }}）</em></span>
+          </label>
+          <span v-if="!userOptions.length" class="faint">所选部门暂无人员，请先在「设置-人员」中添加后再指派</span>
+        </div>
+      </div>
       <div class="fg2">
         <div>
           <label class="fld">优先级</label>
@@ -202,6 +221,10 @@
                   <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                 </div>
                 <div v-if="t.note" class="t-note">{{ t.note }}</div>
+                <div v-if="assigneeTextOf(t) || (t.week_days && t.type === 'daily')" class="t-tags">
+                  <span v-if="assigneeTextOf(t)" class="t-tag">👤 {{ assigneeTextOf(t) }}</span>
+                  <span v-if="t.week_days && t.type === 'daily' && weekLabelOf(t.week_days)" class="t-tag">🗓 {{ weekLabelOf(t.week_days) }}</span>
+                </div>
                 <div v-if="t.status === 'done' && t.completed_by" class="t-done-by">
                   ✓ 由 {{ t.completed_by }} 于 {{ fmtDone(t.completed_at) }} 完成
                 </div>
@@ -264,9 +287,19 @@ const showAdd = ref(false)
 const calIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4M9 14l2 2 4-4"/></svg>'
 const saving = ref(false)
 const editId = ref(null)
-const form = reactive({ title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null })
+// v0.8.0：weekdays=按周执行（1=周一…7=周日，多选，空=每天）；assignees=负责人（多人姓名）
+const form = reactive({ title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null, weekdays: [], assignees: [] })
+const users = ref([])
 const shiftConfigs = ref([])
 const departments = ref([])
+// 表单可选的负责人：按所选部门过滤（超管跨部门时可任选系统人员）
+const userOptions = computed(() => {
+  let list = users.value
+  const did = form.dept_id
+  if (did) list = list.filter((u) => u.dept_id === did || (u.dept && u.dept.parent_id === did))
+  return list
+})
+const emptyForm = { title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null, weekdays: [], assignees: [] }
 // 当前表单所选部门的班次（含时间）
 const deptShifts = computed(() => {
   const did = form.dept_id || auth.user.dept_id
@@ -404,6 +437,17 @@ function shiftLabel(t) {
   if (t.shift === '全员' || t.shift === '早晚') return base
   const sc = shiftConfigs.value.find((x) => x.dept_id === t.dept_id && x.name === t.shift)
   return sc ? `${base} ${sc.start_time}-${sc.end_time}` : base
+}
+// 按周执行可读文案：week_days="1,3,5" → "周一、周三、周五"
+function weekLabelOf(wd) {
+  if (!wd) return ''
+  const names = { 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日' }
+  return String(wd).split(',').map((n) => names[parseInt(n, 10)]).filter(Boolean).join('、')
+}
+// 负责人可读文案：优先解析 assignees(JSON 数组)，否则回退 assignee
+function assigneeTextOf(t) {
+  if (t.assignees) { try { const arr = JSON.parse(t.assignees); if (Array.isArray(arr) && arr.length) return arr.join('、') } catch (e) {} }
+  return t.assignee || ''
 }
 
 // 执行者按今日班次过滤：谁当班谁负责
@@ -558,16 +602,22 @@ function toggleAdd() {
   showAdd.value = !showAdd.value
   if (showAdd.value) {
     editId.value = null
-    Object.assign(form, { title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: auth.isSuper ? (departments.value[0]?.id || null) : (auth.user.dept_id || null) })
+    Object.assign(form, { ...emptyForm, dept_id: auth.isSuper ? (departments.value[0]?.id || null) : (auth.user.dept_id || null) })
   }
 }
 function openEdit(t) {
   editId.value = t.id
+  let names = []
+  if (t.assignees) { try { const arr = JSON.parse(t.assignees); if (Array.isArray(arr)) names = arr } catch (e) {} }
+  if (!names.length && t.assignee) names = t.assignee.split(/[、;；,，/]+/).map((s) => s.trim()).filter(Boolean)
+  let wds = []
+  if (t.week_days) wds = String(t.week_days).split(',').map((s) => parseInt(s, 10)).filter((n) => n >= 1 && n <= 7)
   Object.assign(form, {
     title: t.title, type: t.type, shift: t.shift || '全员',
     time: t.time || '', deadline: t.deadline || '',
     priority: t.priority || 'medium', note: t.note || '',
-    dept_id: t.dept_id || auth.user.dept_id
+    dept_id: t.dept_id || auth.user.dept_id,
+    weekdays: wds, assignees: names
   })
   showAdd.value = true
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -586,13 +636,15 @@ async function save() {
     const payload = {
       title: form.title, type: form.type, shift: form.shift, time: form.time,
       deadline: fillDueTime(form.type, form.deadline),
-      priority: form.priority, note: form.note, dept_id: form.dept_id
+      priority: form.priority, note: form.note, dept_id: form.dept_id,
+      assignees: form.assignees,
+      week_days: form.type === 'daily' && form.weekdays.length ? form.weekdays.join(',') : ''
     }
     if (editId.value) await api.put(`/tasks/${editId.value}`, payload)
     else await api.post('/tasks', payload)
     showAdd.value = false
     editId.value = null
-    Object.assign(form, { title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null })
+    Object.assign(form, emptyForm)
     await load()
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { saving.value = false }
@@ -611,16 +663,18 @@ async function sendNotify() {
 }
 
 async function load() {
-  const [ts, sc, scs, deps] = await Promise.all([
+  const [ts, sc, scs, deps, us] = await Promise.all([
     api.get('/tasks'),
     api.get('/schedules'),
     api.get('/shift-configs').catch(() => []),
-    api.get('/departments').catch(() => [])
+    api.get('/departments').catch(() => []),
+    api.get('/users').catch(() => [])
   ])
   tasks.value = ts
   schedules.value = sc
   shiftConfigs.value = scs
   departments.value = deps
+  users.value = us
   if (auth.isSuper && !form.dept_id && departments.value.length) form.dept_id = departments.value[0].id
 }
 onMounted(load)
@@ -727,6 +781,17 @@ onMounted(load)
 .col-act { width: 44px; text-align: right; }
 .del { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--glass-border); background: transparent; color: var(--text-faint); cursor: pointer; font-size: 16px; line-height: 1; }
 .del:hover { color: var(--danger); border-color: rgba(225,29,72,0.4); }
+/* 按周执行 + 负责人选择 */
+.fg1 { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.fld { font-size: 13px; color: var(--text-dim); }
+.wd-pick { display: flex; flex-wrap: wrap; gap: 8px; }
+.wd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--glass-border); cursor: pointer; font-size: 13px; color: var(--text-dim); background: transparent; }
+.wd-chip input { display: none; }
+.wd-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wd-chip em { font-style: normal; opacity: 0.75; font-size: 12px; }
+.t-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.t-tag { font-size: 12px; color: var(--text-dim); background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 999px; padding: 1px 8px; }
+.ap-pick .wd-chip.on { background: var(--ok); border-color: var(--ok); }
 
 @media (max-width: 820px) {
   .overview { grid-template-columns: 1fr; }

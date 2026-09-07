@@ -12,15 +12,16 @@ import (
 	"shiftworkbench/internal/models"
 )
 
-// TestTodayOnDutyExcludesRest 通知推送的「今日当班」必须排除休息班次：
-// 休息的人不列进当班列表、不会被推送 @（与 Dashboard 口径一致，v0.14.2 修复）
-func TestTodayOnDutyExcludesRest(t *testing.T) {
+// TestScopeSemantics 人员范围口径（v0.8.0 与需求对齐）：
+//   - 当班 = 今日有排班且非休息的人员（覆盖 早/中/晚/夜 等全部班次），休息不计入当班；
+//   - 全员 = 系统内所有人员（含正在休息），与今日是否排班无关。
+func TestScopeSemantics(t *testing.T) {
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
 	d, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.Schedule{}); err != nil {
+	if err := d.AutoMigrate(&models.Schedule{}, &models.User{}); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d
@@ -36,23 +37,38 @@ func TestTodayOnDutyExcludesRest(t *testing.T) {
 		}
 		return b + "]"
 	}
+	// 人员表：张三/李四/王五/赵六/钱七 均为系统人员
+	for _, n := range []string{"张三", "李四", "王五", "赵六", "钱七"} {
+		db.DB.Create(&models.User{Name: n, Username: n})
+	}
+	// 班表：早班2人、中班1人、休息2人
 	db.DB.Create(&models.Schedule{Date: today, Shift: "早班", People: peo("张三", "李四")})
 	db.DB.Create(&models.Schedule{Date: today, Shift: "中班", People: peo("王五")})
 	db.DB.Create(&models.Schedule{Date: today, Shift: "休息", People: peo("赵六", "钱七")})
 
+	// —— 当班：休息不计入（今日班表只统计真正上班的班次）——
 	onDuty := todayOnDuty(nil)
 	if _, ok := onDuty["休息"]; ok {
 		t.Fatalf("休息班次不应出现在当班映射里，实际 onDuty=%v", onDuty)
 	}
-	all := taskShiftPeople(models.Task{Shift: "全员"}, onDuty)
-	for _, n := range []string{"赵六", "钱七"} {
-		for _, got := range all {
-			if got == n {
-				t.Errorf("休息人员 %s 不应出现在全员任务的当班/@名单里，实际 %v", n, all)
-			}
+	// 中班任务 → 只@中班当班（王五）
+	mid := taskShiftPeople(models.Task{Shift: "中班"}, onDuty, nil)
+	if len(mid) != 1 || mid[0] != "王五" {
+		t.Errorf("中班任务当班应为 [王五]，实际 %v", mid)
+	}
+
+	// —— 全员：所有人员（含正在休息），不看今日班表 ——
+	all := taskShiftPeople(models.Task{Shift: "全员"}, onDuty, nil)
+	allMap := map[string]bool{}
+	for _, n := range all {
+		allMap[n] = true
+	}
+	for _, n := range []string{"张三", "李四", "王五", "赵六", "钱七"} {
+		if !allMap[n] {
+			t.Errorf("全员任务应包含 %s（含休息人员），实际 %v", n, all)
 		}
 	}
-	if len(all) != 3 {
-		t.Errorf("当班应为 3 人（早2+中1），实际 %d 人 %v", len(all), all)
+	if len(all) != 5 {
+		t.Errorf("全员应为 5 人（含休息的赵六/钱七），实际 %d 人 %v", len(all), all)
 	}
 }

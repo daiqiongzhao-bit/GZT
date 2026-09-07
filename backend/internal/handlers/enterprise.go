@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,18 +27,22 @@ import (
 	"shiftworkbench/internal/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 )
 
 // ===================== 模板管理 =====================
 
-// taskSampleCSV 任务导入样例 CSV（含表头）
-const taskSampleCSV = `标题,班次,类型,时间,优先级,备注,负责人
-开门检查,早班,每日,09:00,高,每日开门前安全巡检,
-晚班盘点,晚班,每日,21:00,中,,
-月底对账,早晚,每月,2026-08-31T17:00,高,当月账务核对,
+// taskSampleCSV 任务导入样例 CSV（含表头）。第 8 列为「按周执行」星期（可选）：
+// 类型为「每日」时可填写，格式 1=周一…7=周日，多天用逗号分隔（如 1,3,5），留空=每天执行。
+const taskSampleCSV = `标题,班次,类型,时间,优先级,备注,负责人,星期(按周执行,可选)
+开门检查,早班,每日,09:00,高,每日开门前安全巡检,,"1,3,5"
+晚班盘点,晚班,每日,21:00,中,,,
+月底对账,早晚,每月,2026-08-31T17:00,高,当月账务核对,,
 临时巡检,全员,单次,2026-08-30T15:00,低,,`
 
 // scheduleSampleCSV 班表导入样例 CSV（含表头）
+// 班次列只能填真实班次枚举：早班/中班/晚班/夜班/休息（可简写 早/中/晚/夜/休），
+// 不能填「全员」——班表是「谁在哪个班」，全员不是班次；人员列填具体人员姓名，多人用 ; 或 、 分隔。
 const scheduleSampleCSV = `日期,班次,人员
 2026-08-28,早班,林晓;陈默
 2026-08-28,晚班,王芳
@@ -315,19 +320,21 @@ func importTasksFromCSVText(c *gin.Context, text string, cl *models.Claims, dept
 		}
 		note := strings.TrimSpace(getCol(row, 5))
 		assignee := strings.TrimSpace(getCol(row, 6))
+		weekRaw := strings.TrimSpace(getCol(row, 7)) // 第8列：按周执行（可选，仅每日任务生效）
 		t := models.Task{
-			Title:      title,
-			Type:       typ,
-			Shift:      shift,
-			Priority:   prio,
-			Note:       note,
-			DeptID:     deptID,
-			Status:     models.TaskStatusTodo,
-			Assignee:   assignee,
-			AssigneeID: resolveAssigneeID(assignee, deptID, super),
+			Title:    title,
+			Type:     typ,
+			Shift:    shift,
+			Priority: prio,
+			Note:     note,
+			DeptID:   deptID,
+			Status:   models.TaskStatusTodo,
 		}
+		// 负责人支持多人（顿号/分号/逗号分隔）
+		applyAssignees(&t, splitNames(assignee), deptID, super)
 		if typ == "daily" {
 			t.Time = normalizeClock(when)
+			t.WeekDays = normalizeWeekDays(weekRaw) // 按周执行：如 1,3,5 / 周一,周三
 		} else {
 			t.Deadline = normalizeTaskDeadline(typ, when)
 		}
@@ -524,10 +531,10 @@ func importSchedulesFromCSVText(c *gin.Context, text string, cl *models.Claims, 
 	return created, failed, errs, unknownScheduleNames(impNames)
 }
 
-// ===================== 导出 =====================
+// ===================== 导出（统一 .xlsx，v0.8.0 起默认 Excel） =====================
 
-// ExportTasksCSV GET /api/tasks/export 导出当前可见部门任务为 CSV
-func ExportTasksCSV(c *gin.Context) {
+// ExportTasksXLSX GET /api/tasks/export 导出当前可见部门任务为 Excel(.xlsx)
+func ExportTasksXLSX(c *gin.Context) {
 	ResetRecurringTasks() // 周期任务跨日/跨月自动回到待办（幂等，同一周期只落库一次）
 
 	scope := deptScopeIDs(c)
@@ -540,26 +547,36 @@ func ExportTasksCSV(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	var buf bytes.Buffer
-	buf.Write(csvBOM(nil))
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"ID", "标题", "类型", "班次", "时间", "截止", "优先级", "状态", "负责人", "完成人", "创建时间"})
-	for _, t := range list {
-		typ := map[string]string{"daily": "每日", "monthly": "每月", "once": "单次"}[t.Type]
-		status := map[string]string{"done": "已完成", "todo": "待办"}[t.Status]
-		_ = w.Write([]string{
-			strconv.Itoa(int(t.ID)), t.Title, typ, t.Shift, t.Time, t.Deadline, t.Priority,
-			status, t.Assignee, t.CompletedBy, t.CreatedAt.Format("2006-01-02 15:04:05"),
-		})
+	f := excelize.NewFile()
+	sheet := "任务"
+	f.SetSheetName("Sheet1", sheet)
+	heads := []string{"ID", "标题", "类型", "班次", "执行时间", "按周执行(星期)", "截止", "优先级", "状态", "负责人", "完成人", "创建时间"}
+	widths := []float64{6, 40, 8, 8, 10, 18, 18, 8, 8, 24, 12, 20}
+	for j, h := range heads {
+		col, _ := excelize.CoordinatesToCellName(1+j, 1)
+		f.SetCellValue(sheet, col, h)
+		name, _ := excelize.ColumnNumberToName(j + 1)
+		f.SetColWidth(sheet, name, name, widths[j])
 	}
-	w.Flush()
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\"tasks_export.csv\"")
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+	typLabel := map[string]string{"daily": "每日", "monthly": "每月", "once": "单次"}
+	statusLabel := map[string]string{"done": "已完成", "todo": "待办"}
+	prioLabel := map[string]string{"high": "高", "medium": "中", "low": "低"}
+	for i, t := range list {
+		row := []interface{}{
+			t.ID, t.Title, typLabel[t.Type], t.Shift, t.Time, weekDaysLabel(t.WeekDays),
+			t.Deadline, prioLabel[t.Priority], statusLabel[t.Status], t.Assignee, t.CompletedBy,
+			t.CreatedAt.Format("2006-01-02 15:04:05"),
+		}
+		for j, v := range row {
+			col, _ := excelize.CoordinatesToCellName(1+j, 2+i)
+			f.SetCellValue(sheet, col, v)
+		}
+	}
+	writeXLSX(c, f, "tasks_export.xlsx")
 }
 
-// ExportLogsCSV GET /api/logs/export 导出操作日志为 CSV（支持与列表一致的筛选）
-func ExportLogsCSV(c *gin.Context) {
+// ExportLogsXLSX GET /api/logs/export 导出操作日志为 Excel(.xlsx)（支持与列表一致的筛选）
+func ExportLogsXLSX(c *gin.Context) {
 	q := db.DB.Order("created_at desc")
 	if v := c.Query("user_name"); v != "" {
 		q = q.Where("user_name LIKE ?", "%"+v+"%")
@@ -578,21 +595,26 @@ func ExportLogsCSV(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	var buf bytes.Buffer
-	buf.Write(csvBOM(nil))
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"ID", "时间", "操作人", "操作内容", "IP", "来源"})
-	for _, l := range list {
-		_ = w.Write([]string{strconv.Itoa(int(l.ID)), l.CreatedAt.Format("2006-01-02 15:04:05"), l.UserName, l.Action, l.IP, clientLabel(l.Client)})
+	f := excelize.NewFile()
+	sheet := "操作日志"
+	f.SetSheetName("Sheet1", sheet)
+	heads := []string{"ID", "时间", "操作人", "操作内容", "IP", "来源"}
+	for j, h := range heads {
+		col, _ := excelize.CoordinatesToCellName(1+j, 1)
+		f.SetCellValue(sheet, col, h)
 	}
-	w.Flush()
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\"logs_export.csv\"")
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+	for i, l := range list {
+		row := []interface{}{l.ID, l.CreatedAt.Format("2006-01-02 15:04:05"), l.UserName, l.Action, l.IP, clientLabel(l.Client)}
+		for j, v := range row {
+			col, _ := excelize.CoordinatesToCellName(1+j, 2+i)
+			f.SetCellValue(sheet, col, v)
+		}
+	}
+	writeXLSX(c, f, "logs_export.xlsx")
 }
 
-// ExportSchedulesCSV GET /api/schedules/export 导出当前可见部门班表为 CSV
-func ExportSchedulesCSV(c *gin.Context) {
+// ExportSchedulesXLSX GET /api/schedules/export 导出当前可见部门班表为 Excel(.xlsx)
+func ExportSchedulesXLSX(c *gin.Context) {
 	scope := deptScopeIDs(c)
 	q := db.DB.Order("date asc")
 	if len(scope) > 0 {
@@ -603,19 +625,35 @@ func ExportSchedulesCSV(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	var buf bytes.Buffer
-	buf.Write(csvBOM(nil))
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"ID", "日期", "班次", "人员"})
-	for _, s := range list {
+	f := excelize.NewFile()
+	sheet := "班表"
+	f.SetSheetName("Sheet1", sheet)
+	heads := []string{"ID", "日期", "班次", "人员"}
+	for j, h := range heads {
+		col, _ := excelize.CoordinatesToCellName(1+j, 1)
+		f.SetCellValue(sheet, col, h)
+	}
+	for i, s := range list {
 		var people []string
 		_ = json.Unmarshal([]byte(s.People), &people)
-		_ = w.Write([]string{strconv.Itoa(int(s.ID)), s.Date, s.Shift, strings.Join(people, ";")})
+		row := []interface{}{s.ID, s.Date, s.Shift, strings.Join(people, ";")}
+		for j, v := range row {
+			col, _ := excelize.CoordinatesToCellName(1+j, 2+i)
+			f.SetCellValue(sheet, col, v)
+		}
 	}
-	w.Flush()
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\"schedules_export.csv\"")
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+	writeXLSX(c, f, "schedules_export.xlsx")
+}
+
+// contentDispositionRFC5987 生成中文文件名安全的 Content-Disposition（RFC 5987）
+func contentDispositionRFC5987(filename string) string {
+	ascii := strings.Map(func(r rune) rune {
+		if r > 127 {
+			return '_'
+		}
+		return r
+	}, filename)
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, ascii, url.QueryEscape(filename))
 }
 
 type batchReq struct {

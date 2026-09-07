@@ -135,6 +135,24 @@
               </div>
               <div v-else class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
             </div>
+
+            <!-- 变更 / 协作记录（v0.8.0） -->
+            <div v-if="viewK" class="modal-history">
+              <button class="btn ghost sm hist-toggle" @click="toggleKHist(viewK)">
+                {{ kHistOpen ? '▾ 收起变更 / 协作记录' : '▸ 变更 / 协作记录（谁、何时、改了啥）' }}
+              </button>
+              <ul v-if="kHistOpen" class="hist-list">
+                <li v-if="!kHist.length" class="dim hist-empty">暂无变更记录</li>
+                <li v-for="h in kHist" :key="h.id" class="hist-item">
+                  <div class="hist-head">
+                    <span class="chip accent hist-act">{{ histActionLabel(h.action) }}</span>
+                    <b>{{ h.operator_name }}</b>
+                    <span class="dim">{{ fmtTime(h.created_at) }}</span>
+                  </div>
+                  <pre v-if="h.detail" class="hist-detail">{{ h.detail }}</pre>
+                </li>
+              </ul>
+            </div>
           </div>
 
           <div class="modal-foot">
@@ -405,6 +423,8 @@ async function saveK() {
 }
 function openDetailK(k) {
   viewK.value = k
+  kHistOpen.value = false
+  kHist.value = []
   loadKAtts(k.id)
 }
 function editFromView() {
@@ -412,6 +432,21 @@ function editFromView() {
   const k = viewK.value
   viewK.value = null
   openEditK(k)
+}
+
+// ---- 知识库：变更 / 协作记录（v0.8.0） ----
+const kHistOpen = ref(false)
+const kHist = ref([])
+async function toggleKHist(k) {
+  if (!k) return
+  if (kHistOpen.value) { kHistOpen.value = false; return }
+  kHist.value = []
+  kHistOpen.value = true
+  try { kHist.value = await api.get('/workspace/knowledge/' + k.id + '/history') }
+  catch (e) { toast(e.response?.data?.error || '变更记录加载失败', 'error') }
+}
+function histActionLabel(a) {
+  return { create: '创建', update: '更新', delete: '删除', attachment_upload: '上传附件', attachment_delete: '删除附件' }[a] || a
 }
 
 // ---- 知识库附件 ----
@@ -793,4 +828,14 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   .att-name { min-width: 120px; }
   .att-list { max-height: 200px; }
 }
+
+/* 知识库：变更 / 协作记录（v0.8.0） */
+.modal-history { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--glass-border, rgba(255,255,255,0.12)); }
+.hist-toggle { font-size: 12.5px; }
+.hist-list { list-style: none; margin: 10px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.hist-item { background: var(--overlay-2, rgba(255,255,255,0.04)); border: 1px solid var(--glass-border, rgba(255,255,255,0.12)); border-radius: 10px; padding: 8px 10px; }
+.hist-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.hist-act { font-size: 11px; padding: 1px 7px; }
+.hist-detail { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12.5px; color: var(--text-dim, rgba(255,255,255,0.65)); line-height: 1.6; }
+.hist-empty { padding: 10px 0; }
 </style>

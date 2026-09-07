@@ -1,20 +1,25 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/csv"
 	"net/http"
-	"strconv"
+	"time"
 
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 )
 
-// ExportUsersCSV GET /api/users/export 导出当前可见部门的人员列表为 CSV。
+// ExportUsersXLSX GET /api/users/export 导出当前可见部门的人员为 Excel(.xlsx)。
 // 权限同 ListUsers（部门管/执行者=本部门+子孙部门，超管=全部）。
-func ExportUsersCSV(c *gin.Context) {
+//
+// v0.8.0 起改为与「人员导入模板」同构的 xlsx：前 7 列与导入模板完全一致
+// （姓名/登录账号/初始密码/工号/手机号/角色/部门），因此导出结果可直接在
+// 另一台服务器上再次导入。其中「初始密码」列统一留空：
+//   - 导入到空系统 → 全部按新员工创建，密码使用默认初始密码（导入模板说明中有写）；
+//   - 导入到已有账号的系统 → 仅更新资料，不会改动原密码。
+func ExportUsersXLSX(c *gin.Context) {
 	scope := deptScopeIDs(c)
 	q := db.DB.Preload("Dept").Order("id asc")
 	if len(scope) > 0 {
@@ -25,32 +30,44 @@ func ExportUsersCSV(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	var buf bytes.Buffer
-	buf.Write(csvBOM(nil))
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"ID", "账号", "工号", "姓名", "手机号", "角色", "部门", "已入群", "已冻结", "创建时间"})
-	for _, u := range list {
+	f := excelize.NewFile()
+	sheet := "人员名单"
+	f.SetSheetName("Sheet1", sheet)
+	f.SetCellValue(sheet, "A1", "人员名单导出（与导入模板同构）：初始密码列留空；在另一台服务器导入时请自行填写新的初始密码或留空使用默认密码")
+	headers := []string{"姓名*", "登录账号(可空)", "初始密码", "工号*", "手机号", "角色", "部门", "已入群", "已冻结", "创建时间"}
+	for j, h := range headers {
+		col, _ := excelize.CoordinatesToCellName(1+j, 2)
+		f.SetCellValue(sheet, col, h)
+	}
+	widths := []float64{12, 16, 12, 12, 14, 14, 18, 10, 10, 20}
+	for j, w := range widths {
+		name, _ := excelize.ColumnNumberToName(j + 1)
+		f.SetColWidth(sheet, name, name, w)
+	}
+	for i, u := range list {
 		deptName := ""
 		if u.Dept != nil {
 			deptName = u.Dept.Name
 		}
-		_ = w.Write([]string{
-			strconv.Itoa(int(u.ID)),
-			u.Username,
-			u.EmpNo,
+		row := []interface{}{
 			u.Name,
+			u.Username,
+			"", // 初始密码留空：已有账号导入不改密码；新账号使用默认初始密码
+			u.EmpNo,
 			u.Mobile,
 			roleLabel(u.Role),
 			deptName,
 			yesNo(u.InGroup),
 			yesNo(u.Frozen),
 			u.CreatedAt.Format("2006-01-02 15:04"),
-		})
+		}
+		for j, v := range row {
+			col, _ := excelize.CoordinatesToCellName(1+j, 3+i)
+			f.SetCellValue(sheet, col, v)
+		}
 	}
-	w.Flush()
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", `attachment; filename="users_export.csv"`)
-	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
+	fname := "users_export_" + time.Now().Format("20060102_1504") + ".xlsx"
+	writeXLSX(c, f, fname)
 }
 
 // roleLabel 角色可读文案

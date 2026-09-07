@@ -44,7 +44,7 @@ func DownloadScheduleTemplateXLSX(c *gin.Context) {
 		f.SetCellValue(sheet, col, v)
 	}
 	// 说明行
-	f.SetCellValue(sheet, "A4", "填写说明：每个员工一行；第 1~31 列填当天班次：早/中/晚/夜/休（可写「早班/中班/休息」）。姓名与工号必填，工号须与系统一致（新员工需先在设置-人员里添加）。")
+	f.SetCellValue(sheet, "A4", "填写说明：每个员工一行；第 1~31 列填当天班次：早/中/晚/夜/休（可写「早班/中班/休息」）。注意班次只能填上述真实班次，不能填「全员」（全员不是班次）。姓名与工号必填，工号须与系统一致（新员工需先在设置-人员里添加）。")
 	f.SetCellValue(sheet, "A5", "Sheet「信息」里填写部门与年月；或把文件名命名为「部门2026年9月份班表」。上传后按此部门/年月导入。")
 
 	// 信息 sheet
@@ -70,16 +70,18 @@ func DownloadTaskTemplateXLSX(c *gin.Context) {
 	f := excelize.NewFile()
 	daily := "每日工作内容"
 	f.SetSheetName("Sheet1", daily)
-	f.SetCellValue(daily, "A1", "每日工作内容（固定模板）：每天固定时间要做的任务")
-	// 表头：时间 时段工作 负责班次
+	f.SetCellValue(daily, "A1", "每日/每周工作内容（固定模板）：每天（或勾选星期）固定时间要做的任务")
+	// 表头：时间 时段工作 负责班次 负责人 星期
 	f.SetCellValue(daily, "A2", "时间")
 	f.SetCellValue(daily, "B2", "时段工作")
 	f.SetCellValue(daily, "C2", "负责班次")
-	dailySample := [][3]string{
-		{"09:00", "发数据（每日作业数据）", "早班"},
-		{"10:00", "巡检仓库", "早班"},
-		{"14:00", "盘点（抽盘、循环盘）", "中班"},
-		{"20:00", "与外包公司核对当天作业数据", "中班"},
+	f.SetCellValue(daily, "D2", "负责人")
+	f.SetCellValue(daily, "E2", "星期(按周执行,可选)")
+	dailySample := [][5]string{
+		{"09:00", "发数据（每日作业数据）", "早班", "张三", ""},
+		{"10:00", "巡检仓库", "早班", "张三;李四", "周一,周三,周五"},
+		{"14:00", "盘点（抽盘、循环盘）", "中班", "", ""},
+		{"20:00", "与外包公司核对当天作业数据", "中班", "王五", ""},
 	}
 	for i, r := range dailySample {
 		for j, v := range r {
@@ -87,7 +89,8 @@ func DownloadTaskTemplateXLSX(c *gin.Context) {
 			f.SetCellValue(daily, col, v)
 		}
 	}
-	f.SetCellValue(daily, "A7", "填写说明：时间格式 HH:MM；负责班次填 早班/中班/晚班/早晚/全员（交接班按中班导入）。")
+	f.SetCellValue(daily, "A8", "填写说明：时间格式 HH:MM；负责班次填 早班/中班/晚班/早晚/全员（交接班按中班导入）。「星期」列用于按周执行：填 周一,周三 或 1,3,5（1=周一…7=周日），留空=每天都做。")
+	f.SetCellValue(daily, "A9", "负责人：可空；可填 1 个或多个姓名（多人用 ; 或 、 分隔，须为系统人员）。注意：此处不能写「全员」，负责人是按人的维度，与班次列不同。")
 
 	monthly := "月度工作内容"
 	f.NewSheet(monthly)
@@ -107,7 +110,7 @@ func DownloadTaskTemplateXLSX(c *gin.Context) {
 			f.SetCellValue(monthly, col, v)
 		}
 	}
-	f.SetCellValue(monthly, "A6", "填写说明：日期填「N号」；处理人填系统内员工姓名（可空）；工作内容为任务备注。")
+	f.SetCellValue(monthly, "A6", "填写说明：日期填「N号」；处理人填系统内员工姓名（可空，多人用 ; 或 、 分隔，不能写「全员」）；工作内容为任务备注。")
 
 	info := "信息"
 	f.NewSheet(info)
@@ -339,6 +342,7 @@ var taskHeadAlias = map[string]string{
 	"序号": "skip", "编号": "skip", "序": "skip", "no": "skip",
 	"时间": "time", "执行时间": "time", "时间点": "time", "时段": "time", "开始时间": "time",
 	"日期": "day", "几号": "day", "每月日期": "day",
+	"星期": "week", "周几": "week", "每周几": "week", "按周": "week", "执行星期": "week", "按周执行": "week",
 	"时段工作": "title", "工作事项": "title", "任务内容": "title", "任务名称": "title",
 	"任务": "title", "标题": "title", "事项": "title", "项目": "title",
 	"业务主题": "subject", "主题": "subject",
@@ -525,7 +529,8 @@ func readTaskSheet(xf *excelize.File, keys []string, fallback []string) (data []
 // describeColMap 生成「第N列(表头) → 字段」的可读映射，供导入结果回显
 var taskFieldLabel = map[string]string{
 	"time": "时间", "day": "日期", "title": "任务内容", "subject": "业务主题",
-	"content": "工作内容", "shift": "负责班次", "assignee": "处理人", "note": "备注", "skip": "（忽略）",
+	"content": "工作内容", "shift": "负责班次", "assignee": "处理人", "note": "备注",
+	"week": "星期(按周执行)", "skip": "（忽略）",
 }
 
 func describeColMap(m taskColMap) string {
@@ -583,7 +588,7 @@ func importTasksFromXLSX(c *gin.Context, f multipart.File, cl *models.Claims, de
 	}
 
 	// ---------- 每日工作内容：时间 / 时段工作(任务内容) / 负责班次 / 备注 ----------
-	if data, colMap, _, ok := readTaskSheet(xf, []string{"每日", "每天", "日工作"}, []string{"time", "title", "shift"}); ok {
+	if data, colMap, _, ok := readTaskSheet(xf, []string{"每日", "每天", "日工作"}, []string{"time", "title", "shift", "note", "assignee", "week"}); ok {
 		maps = append(maps, "每日工作内容："+describeColMap(colMap))
 		lastTime, dup := "", 0 // 合并单元格造成时间空行时沿用上一行；同部门同标题同时间视为重复
 		for _, r := range data {
@@ -614,6 +619,9 @@ func importTasksFromXLSX(c *gin.Context, f multipart.File, cl *models.Claims, de
 			if s, mok := shiftMap(cellAt(r, colMap, "shift")); mok {
 				t.Shift = s
 			}
+			// 负责人：支持多人（顿号/分号/逗号分隔）；「星期」列支持按周执行（周一/周三 或 1,3,5）
+			applyAssignees(&t, splitNames(cellAt(r, colMap, "assignee")), deptID, super)
+			t.WeekDays = normalizeWeekDays(cellAt(r, colMap, "week"))
 			var exists int64
 			db.DB.Model(&models.Task{}).Where("dept_id = ? AND type = ? AND title = ? AND time = ?", deptID, models.TaskTypeDaily, t.Title, t.Time).Count(&exists)
 			if exists > 0 {
@@ -636,7 +644,7 @@ func importTasksFromXLSX(c *gin.Context, f multipart.File, cl *models.Claims, de
 	}
 
 	// ---------- 月度工作内容：日期 / 业务主题(任务内容) / 工作内容(备注) / 处理人 ----------
-	if data, colMap, _, ok := readTaskSheet(xf, []string{"月度", "每月", "月工作"}, []string{"day", "subject", "content", "assignee"}); ok {
+	if data, colMap, _, ok := readTaskSheet(xf, []string{"月度", "每月", "月工作"}, []string{"day", "subject", "content", "assignee", "note", "shift"}); ok {
 		maps = append(maps, "月度工作内容："+describeColMap(colMap))
 		if len(data) > 0 && !metaOK {
 			return created, failed, []string{"月度任务需要年份/月份：请在 Sheet「信息」填写，或把文件名命名为「…2026年9月份…」"}, strings.Join(maps, " | ")
@@ -666,7 +674,6 @@ func importTasksFromXLSX(c *gin.Context, f multipart.File, cl *models.Claims, de
 				Title:    title,
 				Type:     models.TaskTypeMonthly,
 				Note:     note,
-				Assignee: cellAt(r, colMap, "assignee"),
 				DeptID:   deptID,
 				Status:   models.TaskStatusTodo,
 				Priority: "medium",
@@ -677,7 +684,8 @@ func importTasksFromXLSX(c *gin.Context, f multipart.File, cl *models.Claims, de
 			if s, mok := shiftMap(cellAt(r, colMap, "shift")); mok {
 				t.Shift = s
 			}
-			t.AssigneeID = resolveAssigneeID(t.Assignee, deptID, super)
+			// 处理人支持多人（顿号/分号/逗号分隔）
+			applyAssignees(&t, splitNames(cellAt(r, colMap, "assignee")), deptID, super)
 			var exists int64
 			db.DB.Model(&models.Task{}).Where("dept_id = ? AND type = ? AND title = ? AND deadline = ?", deptID, models.TaskTypeMonthly, t.Title, t.Deadline).Count(&exists)
 			if exists > 0 {

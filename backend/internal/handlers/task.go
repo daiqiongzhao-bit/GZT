@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -84,7 +85,8 @@ func isDueToday(t models.Task) bool {
 	now := time.Now()
 	switch t.Type {
 	case models.TaskTypeDaily:
-		return true
+		// 每日任务可选「按周执行」：命中勾选的星期才处理；未勾选=每天都要处理
+		return isWeekDayMatch(t.WeekDays)
 	case models.TaskTypeOnce:
 		if t.Deadline == "" {
 			return false
@@ -134,6 +136,209 @@ func resolveAssigneeID(name string, deptID uint, super bool) uint {
 		return 0
 	}
 	return u.ID
+}
+
+// ===================== 单人/多人负责人 + 按周执行 辅助 =====================
+
+// resolveAssigneeIDs 按姓名批量解析用户ID（逐名解析，跳过解析不到/重复的）
+func resolveAssigneeIDs(names []string, deptID uint, super bool) []uint {
+	var ids []uint
+	seen := map[uint]bool{}
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
+		id := resolveAssigneeID(n, deptID, super)
+		if id != 0 && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// splitNames 把负责人字符串切成姓名列表（兼容 、;；,，/空格 分隔）
+func splitNames(s string) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == '、' || r == ';' || r == '；' || r == ',' || r == '，' || r == '/' || r == ' ' || r == '\t'
+	}) {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return dedupeStrs(out)
+}
+
+// assigneeNamesFrom 归一前端/CSV 传入的负责人：优先取 assignees 数组，空则解析 assignee 字符串
+func assigneeNamesFrom(assignee string, assignees []string) []string {
+	if len(assignees) == 0 {
+		return splitNames(assignee)
+	}
+	var out []string
+	for _, a := range assignees {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return dedupeStrs(out)
+}
+
+func dedupeStrs(ss []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range ss {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func jsonStrings(ss []string) string {
+	b, _ := json.Marshal(ss)
+	return string(b)
+}
+
+func jsonUints(ids []uint) string {
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+// applyAssignees 把负责人名单写入任务：展示名（顿号连接）、首个ID、姓名JSON、ID JSON
+func applyAssignees(t *models.Task, names []string, deptID uint, super bool) {
+	names = dedupeStrs(names)
+	if len(names) == 0 {
+		t.Assignee = ""
+		t.AssigneeID = 0
+		t.Assignees = ""
+		t.AssigneeIDs = ""
+		return
+	}
+	ids := resolveAssigneeIDs(names, deptID, super)
+	t.Assignee = strings.Join(names, "、")
+	t.Assignees = jsonStrings(names)
+	t.AssigneeIDs = jsonUints(ids)
+	t.AssigneeID = 0
+	if len(ids) > 0 {
+		t.AssigneeID = ids[0]
+	}
+}
+
+// taskAssigneeNames 返回任务负责人姓名列表（多人解析；兼容旧的单 Assignee 字段）
+func taskAssigneeNames(t models.Task) []string {
+	if t.Assignees != "" {
+		var names []string
+		if json.Unmarshal([]byte(t.Assignees), &names) == nil && len(names) > 0 {
+			return names
+		}
+	}
+	return splitNames(t.Assignee)
+}
+
+// taskAssigneeIDs 返回负责人用户ID列表（兼容旧的 AssigneeID 字段）
+func taskAssigneeIDs(t models.Task) []uint {
+	if t.AssigneeIDs != "" {
+		var ids []uint
+		if json.Unmarshal([]byte(t.AssigneeIDs), &ids) == nil {
+			return ids
+		}
+	}
+	if t.AssigneeID != 0 {
+		return []uint{t.AssigneeID}
+	}
+	return nil
+}
+
+// canAssigneeOperate 执行者能否对该任务操作：负责人本人可；assignee_id=0（部门公共）任何人可
+func canAssigneeOperate(t models.Task, uid uint) bool {
+	ids := taskAssigneeIDs(t)
+	if len(ids) == 0 {
+		return true // 未指派/部门公共
+	}
+	for _, id := range ids {
+		if id == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeWeekDays 归一「按周执行」星期："周一,周三" / "1,3,5" → "1,3,5"（1=周一…7=周日）；空返回空
+func normalizeWeekDays(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	rep := strings.NewReplacer(
+		"星期日", "7", "星期天", "7", "周天", "7", "周日", "7",
+		"星期六", "6", "周六", "6", "星期五", "5", "周五", "5",
+		"星期四", "4", "周四", "4", "星期三", "3", "周三", "3",
+		"星期二", "2", "周二", "2", "星期一", "1", "周一", "1",
+	)
+	s = rep.Replace(s)
+	seen := map[int]bool{}
+	var out []int
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == '/' || r == ' '
+	}) {
+		n, err := strconv.Atoi(strings.TrimSpace(f))
+		if err == nil && n >= 1 && n <= 7 && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	ss := make([]string, 0, len(out))
+	for _, n := range out {
+		ss = append(ss, strconv.Itoa(n))
+	}
+	return strings.Join(ss, ",")
+}
+
+// weekDaysSet 解析 "1,3,5" → map 星期集合
+func weekDaysSet(s string) map[int]bool {
+	m := map[int]bool{}
+	for _, p := range strings.Split(s, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n >= 1 && n <= 7 {
+			m[n] = true
+		}
+	}
+	return m
+}
+
+// isWeekDayMatch 今天（1=周一…7=周日）是否命中按周执行配置；配置为空视为每天执行
+func isWeekDayMatch(days string) bool {
+	set := weekDaysSet(days)
+	if len(set) == 0 {
+		return true
+	}
+	// time.Weekday(): Sunday=0 … Saturday=6 → 转 1=周一 … 7=周日
+	w := (int(time.Now().Weekday()) + 6) % 7
+	wd := w + 1
+	return set[wd]
+}
+
+// weekDaysLabel 把 "1,3,5" 转可读文案 "周一/周三/周五"
+func weekDaysLabel(s string) string {
+	if s == "" {
+		return ""
+	}
+	names := map[int]string{1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
+	var out []string
+	for _, n := range strings.Split(s, ",") {
+		if d, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			if label, ok := names[d]; ok {
+				out = append(out, label)
+			}
+		}
+	}
+	return strings.Join(out, "/")
 }
 
 func ListTasks(c *gin.Context) {
@@ -194,15 +399,17 @@ func TaskCounts(c *gin.Context) {
 }
 
 type taskReq struct {
-	Title    string `json:"title"`
-	Type     string `json:"type"`
-	Shift    string `json:"shift"`
-	Time     string `json:"time"`
-	Deadline string `json:"deadline"`
-	Assignee string `json:"assignee"`
-	Priority string `json:"priority"`
-	Note     string `json:"note"`
-	DeptID   uint   `json:"dept_id"`
+	Title     string   `json:"title"`
+	Type      string   `json:"type"`
+	Shift     string   `json:"shift"`
+	Time      string   `json:"time"`
+	Deadline  string   `json:"deadline"`
+	Assignee  string   `json:"assignee"`  // 兼容旧版单人字段（也可填多个姓名，用顿号/分号分隔）
+	Assignees []string `json:"assignees"` // 单人/多人负责人姓名数组（优先于 assignee）
+	WeekDays  string   `json:"week_days"` // 按周执行：勾选的星期，如 "1,3,5"（1=周一…7=周日）
+	Priority  string   `json:"priority"`
+	Note      string   `json:"note"`
+	DeptID    uint     `json:"dept_id"`
 }
 
 // CreateTask 新建任务
@@ -225,24 +432,24 @@ func CreateTask(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权在该部门下操作"})
 		return
 	}
-	assigneeID := resolveAssigneeID(req.Assignee, deptID, cl.Role == models.RoleSuperAdmin)
 	typ := req.Type
 	if typ == "" {
 		typ = models.TaskTypeDaily
 	}
 	t := models.Task{
-		Title:      req.Title,
-		Type:       typ,
-		Shift:      req.Shift,
-		Time:       req.Time,
-		Deadline:   normalizeTaskDeadline(typ, req.Deadline),
-		Assignee:   req.Assignee,
-		AssigneeID: assigneeID,
-		Priority:   req.Priority,
-		Note:       req.Note,
-		DeptID:     deptID,
-		Status:     models.TaskStatusTodo,
+		Title:    req.Title,
+		Type:     typ,
+		Shift:    req.Shift,
+		Time:     req.Time,
+		Deadline: normalizeTaskDeadline(typ, req.Deadline),
+		WeekDays: normalizeWeekDays(req.WeekDays),
+		Priority: req.Priority,
+		Note:     req.Note,
+		DeptID:   deptID,
+		Status:   models.TaskStatusTodo,
 	}
+	// 负责人：支持单人/多人（优先 assignees 数组）
+	applyAssignees(&t, assigneeNamesFrom(req.Assignee, req.Assignees), deptID, cl.Role == models.RoleSuperAdmin)
 	if t.Shift == "" {
 		t.Shift = "全员"
 	}
@@ -294,8 +501,9 @@ func UpdateTask(c *gin.Context) {
 	t.Shift = req.Shift
 	t.Time = req.Time
 	t.Deadline = normalizeTaskDeadline(t.Type, req.Deadline)
-	t.Assignee = req.Assignee
-	t.AssigneeID = resolveAssigneeID(req.Assignee, deptID, cl.Role == models.RoleSuperAdmin)
+	t.WeekDays = normalizeWeekDays(req.WeekDays)
+	// 负责人：支持单人/多人（优先 assignees 数组）
+	applyAssignees(&t, assigneeNamesFrom(req.Assignee, req.Assignees), deptID, cl.Role == models.RoleSuperAdmin)
 	t.Priority = req.Priority
 	t.Note = req.Note
 	t.DeptID = deptID
@@ -389,7 +597,7 @@ func DeleteTask(c *gin.Context) {
 		return
 	}
 	// 执行者仅可删除指派给本人的任务（assignee_id=0 视为部门公共）
-	if cl.Role == models.RoleExecutor && t.AssigneeID != 0 && t.AssigneeID != cl.UserID {
+	if cl.Role == models.RoleExecutor && !canAssigneeOperate(t, cl.UserID) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权删除非本人负责的任务"})
 		return
 	}
@@ -426,7 +634,7 @@ func BatchDeleteTasks(c *gin.Context) {
 			errs = append(errs, fmt.Sprintf("「%s」无权删除（其他部门）", t.Title))
 			continue
 		}
-		if cl.Role == models.RoleExecutor && t.AssigneeID != 0 && t.AssigneeID != cl.UserID {
+		if cl.Role == models.RoleExecutor && !canAssigneeOperate(t, cl.UserID) {
 			failed++
 			errs = append(errs, fmt.Sprintf("「%s」无权删除（非本人负责）", t.Title))
 			continue

@@ -22,11 +22,10 @@ import (
 // 企业微信群机器人通知：根据今日班表生成任务提醒，并 @ 当班人员（按手机号）
 
 // todayOnDuty 今日各班次当班人员：shift -> [姓名]（scope>0 仅统计该部门班表）
+// 「当班」口径（v0.8.0 起与需求对齐）：今日有排班且非休息的人员，
+// 覆盖 早班/中班/晚班/夜班/早晚 等全部班次；休息班次不计入当班、不参与推送 @。
 func todayOnDuty(scope []uint) map[string][]string {
 	today := time.Now().Format("2006-01-02")
-	// 「今日当班」只算真正上班的人：休息班次不计入当班、不参与推送 @。
-	// 口径与 Dashboard 一致（v0.12.7 仅修了 Dashboard，通知侧漏修，
-	// 导致休息的人被列进当班列表并收到 @，v0.14.2 补齐）
 	q := db.DB.Where("date = ?", today).Where("shift <> ?", "休息")
 	if len(scope) > 0 {
 		q = q.Where("dept_id IN ?", scope)
@@ -51,8 +50,30 @@ func todayOnDuty(scope []uint) map[string][]string {
 	return byShift
 }
 
-// taskShiftPeople 返回某任务应@的当班人员（按任务班次匹配今日班表）
-func taskShiftPeople(t models.Task, onDuty map[string][]string) []string {
+// allUserNames 全员=系统内所有人员（含正在休息）。scope 为空=全部人员；否则为该批部门内人员
+func allUserNames(scope []uint) []string {
+	q := db.DB.Model(&models.User{})
+	if len(scope) > 0 {
+		q = q.Where("dept_id IN ?", scope)
+	}
+	var names []string
+	q.Order("id asc").Pluck("name", &names)
+	seen := map[string]bool{}
+	out := names[:0]
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// taskShiftPeople 返回某任务应@的人员：
+//   - Shift=全员 → 所有人员（含休息，口径 v0.8.0）
+//   - Shift=具体班次（早/中/晚/夜/早晚）→ 今日该班次当班人员
+func taskShiftPeople(t models.Task, onDuty map[string][]string, scope []uint) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(s string) {
@@ -64,24 +85,19 @@ func taskShiftPeople(t models.Task, onDuty map[string][]string) []string {
 		}
 	}
 	switch t.Shift {
-	case "早班":
-		add("早班")
-	case "晚班":
-		add("晚班")
+	case "全员":
+		// 全员=所有人员（含正在休息），由系统人员表取，不再只看今日班表
+		for _, p := range allUserNames(scope) {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
 	case "早晚":
 		add("早班")
 		add("晚班")
-	case "全员":
-		for _, ps := range onDuty {
-			for _, p := range ps {
-				if !seen[p] {
-					seen[p] = true
-					out = append(out, p)
-				}
-			}
-		}
 	default:
-		add(t.Shift) // 自定义班次（如中班）：按同名匹配班表
+		add(t.Shift) // 早班/中班/晚班/夜班 或自定义班次：按同名匹配今日班表
 	}
 	return out
 }
@@ -197,8 +213,18 @@ func buildReminderContent(scope []uint) string {
 	b.WriteString(fmt.Sprintf("📋 今日任务提醒 · %d月%d日 %s\n", today.Month(), today.Day(), weekName))
 	b.WriteString(hr + "\n")
 
-	// 按班次分组输出：早班 / 晚班 / 早晚 / 全员
-	order := []string{"早班", "晚班", "早晚", "全员"}
+	// 按班次分组输出：早/中/晚/夜/早晚/全员，再追加模板外的自定义班次（确保不漏任何班次的任务）
+	order := []string{"早班", "中班", "晚班", "夜班", "早晚", "全员"}
+	added := map[string]bool{}
+	for _, s := range order {
+		added[s] = true
+	}
+	for _, t := range todayTasks {
+		if t.Shift != "" && !added[t.Shift] {
+			added[t.Shift] = true
+			order = append(order, t.Shift)
+		}
+	}
 	total, overdueCnt := 0, 0
 	// 跨班次去重：同一个人值多个班次时，只在首次出现的班次列全名，
 	// 后续班次标「同上」，避免提醒里同一个名字被反复刷屏
@@ -213,7 +239,7 @@ func buildReminderContent(scope []uint) string {
 		if len(items) == 0 {
 			continue
 		}
-		names := displayPeopleEx(taskShiftPeople(items[0], onDuty), true)
+		names := displayPeopleEx(taskShiftPeople(items[0], onDuty, scope), true)
 		if len(names) == 0 {
 			b.WriteString(fmt.Sprintf("\n👤 %s 当班：%s\n", shift, "（班表未排班）"))
 		} else {
@@ -276,7 +302,7 @@ func sendWecomRobot(url, content string, mobiles []string) error {
 	payload := map[string]interface{}{
 		"msgtype": "text",
 		"text": map[string]interface{}{
-			"content":             content,
+			"content":               content,
 			"mentioned_mobile_list": mobiles,
 		},
 	}
@@ -485,7 +511,7 @@ func NotifyTodayHandler(c *gin.Context) {
 		if t.Status == models.TaskStatusDone || !isDueToday(t) {
 			continue
 		}
-		for _, p := range taskShiftPeople(t, onDuty) {
+		for _, p := range taskShiftPeople(t, onDuty, scope) {
 			if !seen[p] {
 				seen[p] = true
 				allPeople = append(allPeople, p)
@@ -585,7 +611,7 @@ func reminderMobiles(scope []uint) []string {
 		if t.Status == models.TaskStatusDone || !isDueToday(t) {
 			continue
 		}
-		for _, p := range taskShiftPeople(t, onDuty) {
+		for _, p := range taskShiftPeople(t, onDuty, scope) {
 			if !seen[p] {
 				seen[p] = true
 				allPeople = append(allPeople, p)
@@ -613,7 +639,8 @@ func pushDueTasks(now time.Time) {
 		due := false
 		switch t.Type {
 		case models.TaskTypeDaily:
-			due = t.Time != "" && t.Time == hm
+			// 每日任务：到点且命中「按周执行」勾选的星期才推送（未勾选=每天都推）
+			due = t.Time != "" && t.Time == hm && isWeekDayMatch(t.WeekDays)
 		case models.TaskTypeOnce:
 			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
 				due = dl.Format("2006-01-02 15:04") == today+" "+hm
@@ -627,9 +654,9 @@ func pushDueTasks(now time.Time) {
 		if !due {
 			continue
 		}
-		// 艾特对象：当班人员 + 任务负责人
-		people := taskShiftPeople(t, onDuty)
-		if a := strings.TrimSpace(t.Assignee); a != "" {
+		// 艾特对象：当班人员 + 任务负责人（单人/多人逐一去重加入）
+		people := taskShiftPeople(t, onDuty, nil)
+		for _, a := range taskAssigneeNames(t) {
 			exists := false
 			for _, p := range people {
 				if p == a {
