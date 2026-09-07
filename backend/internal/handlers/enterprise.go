@@ -119,7 +119,8 @@ func DeleteTemplate(c *gin.Context) {
 }
 
 // DownloadTemplate GET /api/templates/:id/download 管理员可下载自定义模板
-// v0.8.0 起统一中文文件名（RFC 5987），内容保持 CSV 兼容（含 BOM，避免 Excel 打开中文乱码）。
+// v0.8.4 起：自定义模板内容虽以 CSV 文本存储，下载统一转为 Excel(.xlsx)，
+// 与固定模板（班表/任务/人员）保持一致，避免用户拿到 csv 后 Excel 打开乱码。
 func DownloadTemplate(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	scope := deptScopeIDs(c)
@@ -136,11 +137,31 @@ func DownloadTemplate(c *gin.Context) {
 	if t.Type == "schedule" {
 		kind = "班表"
 	}
-	// 文件名：模板_任务_张三_20260907.csv（带时间戳避免重名）
-	fname := fmt.Sprintf("模板_%s_%s_%s.csv", kind, t.Name, time.Now().Format("20060102"))
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", contentDispositionRFC5987(fname))
-	c.Data(200, "text/csv; charset=utf-8", csvBOM([]byte(t.Content)))
+	// 文件名：模板_任务_张三_20260907.xlsx（带时间戳避免重名）
+	fname := fmt.Sprintf("模板_%s_%s_%s.xlsx", kind, t.Name, time.Now().Format("20060102"))
+
+	f := excelize.NewFile()
+	sheet := "模板"
+	f.SetSheetName("Sheet1", sheet)
+
+	// 解析 CSV 文本（去除可能的 UTF-8 BOM）写回 Excel 单元格
+	content := strings.TrimPrefix(t.Content, "\ufeff")
+	rows, perr := csv.NewReader(strings.NewReader(content)).ReadAll()
+	if perr != nil || len(rows) == 0 {
+		f.SetCellValue(sheet, "A1", "（模板内容为空）")
+	} else {
+		for i, row := range rows {
+			for j, v := range row {
+				col, _ := excelize.CoordinatesToCellName(1+j, 1+i)
+				f.SetCellValue(sheet, col, v)
+			}
+		}
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", fname))
+	c.Status(200)
+	_ = f.Write(c.Writer)
 }
 
 // csvBOM 为 CSV 添加 UTF-8 BOM，避免 Excel 中文乱码
