@@ -196,3 +196,75 @@ type Claims struct {
 	Version  uint   `json:"ver"` // 令牌版本，需与 user.token_version 一致
 	Client   ClientType `json:"client"` // 客户端类型：web/pwa/extension
 }
+
+// ============ 工作台：知识库 / 工作日志 / 交接接力 ============
+
+// WorkspaceScope 可见范围
+type WorkspaceScope string
+
+const (
+	ScopePrivate    WorkspaceScope = "private"    // 仅创建者本人可见
+	ScopeDepartment WorkspaceScope = "department" // 同部门用户共享可见
+)
+
+// WorkItem 工作台通用条目（知识库 / 工作日志 / 交接单共用基础字段）
+// 三种类型在各自专属表中（见下），此处仅做通用状态约定。
+const (
+	WorkTypeKnowledge = "knowledge" // 迷你知识库
+	WorkTypeLog       = "log"       // 工作日志
+	WorkTypeHandover  = "handover"  // 交接接力
+)
+
+// HandoverStatus 交接单状态
+const (
+	HandoverPending   = "pending"   // 已发出，等待接收人处理
+	HandoverInProgress = "in_progress" // 接收人已接手处理中
+	HandoverDone      = "done"      // 已完成
+)
+
+// KnowledgeEntry 迷你知识库条目：方法/流程/制度等长期内容
+type KnowledgeEntry struct {
+	ID        uint           `json:"id" gorm:"primaryKey"`
+	Title     string         `json:"title" gorm:"size:255;not null"`
+	Category  string         `json:"category" gorm:"size:64"`            // 分类标签（可自由填）
+	Content   string         `json:"content" gorm:"type:text"`           // 正文（多行）
+	Scope     WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
+	OwnerID   uint           `json:"owner_id" gorm:"index"`              // 创建者
+	OwnerName string         `json:"owner_name" gorm:"size:64"`          // 创建者姓名（展示用）
+	DeptID    uint           `json:"dept_id" gorm:"index"`               // 所属部门（隔离范围）
+	UpdatedAt time.Time      `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// WorkLog 工作日志：某日记录当天做了什么 / 还没做完的（一天可多篇）
+type WorkLog struct {
+	ID        uint           `json:"id" gorm:"primaryKey"`
+	LogDate   string         `json:"log_date" gorm:"size:10;index"` // YYYY-MM-DD
+	Title     string         `json:"title" gorm:"size:255"`         // 本篇主题（如"早班开档""活动跟进"）
+	Done      string         `json:"done" gorm:"type:text"`         // 今天做了什么
+	Pending   string         `json:"pending" gorm:"type:text"`      // 还没做完的 / 待办遗留
+	Scope     WorkspaceScope `json:"scope" gorm:"size:16;default:private"`
+	OwnerID   uint           `json:"owner_id" gorm:"index"`
+	OwnerName string         `json:"owner_name" gorm:"size:64"`
+	DeptID    uint           `json:"dept_id" gorm:"index"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// WorkHandover 交接接力：把"做到哪 + 还没做完"转给接收人继续
+type WorkHandover struct {
+	ID           uint           `json:"id" gorm:"primaryKey"`
+	Title        string         `json:"title" gorm:"size:255;not null"`
+	FromProgress string         `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
+	Todo         string         `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
+	Scope        WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
+	SenderID     uint           `json:"sender_id" gorm:"index"`         // 发出人
+	SenderName   string         `json:"sender_name" gorm:"size:64"`
+	AssigneeID   uint           `json:"assignee_id" gorm:"index"`       // 接收人（系统注册人员）
+	AssigneeName string         `json:"assignee_name" gorm:"size:64"`
+	DeptID       uint           `json:"dept_id" gorm:"index"`           // 发出人所属部门
+	Status       string         `json:"status" gorm:"size:16;default:pending"`
+	Note         string         `json:"note" gorm:"type:text"`          // 接收人完成时的备注
+	CompletedAt  *time.Time     `json:"completed_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+}

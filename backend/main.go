@@ -123,6 +123,23 @@ func main() {
 			auth.GET("/tasks/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportTasksCSV)
 			auth.GET("/logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportLogsCSV)
 
+			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
+			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
+			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
+			auth.POST("/workspace/knowledge", handlers.CreateKnowledge)
+			auth.PUT("/workspace/knowledge/:id", handlers.UpdateKnowledge)
+			auth.DELETE("/workspace/knowledge/:id", handlers.DeleteKnowledge)
+
+			auth.GET("/workspace/logs", handlers.ListWorkLogs)
+			auth.POST("/workspace/logs", handlers.CreateWorkLog)
+			auth.PUT("/workspace/logs/:id", handlers.UpdateWorkLog)
+			auth.DELETE("/workspace/logs/:id", handlers.DeleteWorkLog)
+
+			auth.GET("/workspace/handovers", handlers.ListHandovers)
+			auth.POST("/workspace/handovers", handlers.CreateHandover)
+			auth.POST("/workspace/handovers/:id/status", handlers.UpdateHandoverStatus)
+			auth.DELETE("/workspace/handovers/:id", handlers.DeleteHandover)
+
 			// 模板管理（管理员可查看下载，超管可修改）
 			auth.GET("/templates", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListTemplates)
 			auth.GET("/templates/task-sample", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadTaskSample)

@@ -31,6 +31,9 @@ func Init() error {
 		&models.Log{},
 		&models.Template{},
 		&models.Notification{},
+		&models.KnowledgeEntry{},
+		&models.WorkLog{},
+		&models.WorkHandover{},
 	)
 }
 
