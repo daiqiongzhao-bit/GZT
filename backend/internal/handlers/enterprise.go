@@ -6,15 +6,21 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"mime/multipart"
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
@@ -169,6 +175,13 @@ func csvBOM(b []byte) []byte {
 
 // ===================== CSV 导入 =====================
 
+// bytesFile 把内存字节包装成 multipart.File，便于复用既有的导入函数
+type bytesFile struct{ *bytes.Reader }
+
+func (bytesFile) Close() error { return nil }
+
+func newBytesFile(b []byte) multipart.File { return bytesFile{bytes.NewReader(b)} }
+
 // ImportTasksCSV POST /api/tasks/import 接收 multipart CSV，批量建任务
 func ImportTasksCSV(c *gin.Context) {
 	file, err := c.FormFile("file")
@@ -184,17 +197,81 @@ func ImportTasksCSV(c *gin.Context) {
 	defer f.Close()
 	deptID := parseDeptID(c)
 	cl := currentClaims(c)
-	if isXLSX(file.Filename) {
-		created, failed, errs, colMap := importTasksFromXLSX(c, f, cl, deptID, file.Filename)
-		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "columns": colMap})
+
+	// 先把文件读全：便于按"文件真实格式"判定，而不只看扩展名
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "文件读取失败"})
 		return
 	}
-	created, failed, errs := importTasksFromCSV(c, f, cl, deptID)
-	c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs})
+	kind := sniffFileKind(buf, file.Filename)
+
+	switch kind {
+	case "xls":
+		// Excel 97-2003 老格式：二进制容器，无法按文本解析，否则中文必然乱码
+		c.JSON(400, gin.H{"error": "不支持 .xls（Excel 97-2003）格式。请用 WPS/Excel 打开后「另存为」.xlsx 或 .csv 再上传"})
+		return
+	case "xlsx":
+		created, failed, errs, colMap := importTasksFromXLSX(c, newBytesFile(buf), cl, deptID, file.Filename)
+		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "columns": colMap})
+		return
+	case "csv":
+		text, decErr := decodeTextBytes(buf)
+		if decErr != nil {
+			c.JSON(400, gin.H{"error": "CSV 编码无法识别，请用 WPS/Excel 另存为 UTF-8 或 GBK 编码的 CSV 后再上传"})
+			return
+		}
+		created, failed, errs := importTasksFromCSVText(c, text, cl, deptID)
+		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs})
+		return
+	default:
+		c.JSON(400, gin.H{"error": "无法识别的文件格式，请上传 .xlsx 或 .csv"})
+	}
 }
 
-func importTasksFromCSV(c *gin.Context, f multipart.File, cl *models.Claims, deptID uint) (int, int, []string) {
-	reader := csv.NewReader(f)
+// sniffFileKind 按文件内容（魔数）+ 扩展名判定真实格式，返回 xlsx / xls / csv
+// 很多用户把 xlsx 改名为 .csv 上传、或 WPS 导出的 csv 实际仍是 xlsx，只看扩展名会乱码
+func sniffFileKind(buf []byte, filename string) string {
+	if len(buf) >= 4 {
+		// ZIP 容器（xlsx/xlsm 本质是 zip）
+		if buf[0] == 'P' && buf[1] == 'K' && buf[2] == 3 && buf[3] == 4 {
+			return "xlsx"
+		}
+		// OLE2 复合文档（Excel 97-2003 .xls）
+		if buf[0] == 0xD0 && buf[1] == 0xCF && buf[2] == 0x11 && buf[3] == 0xE0 {
+			return "xls"
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".xlsx" || ext == ".xlsm" {
+		return "xlsx"
+	}
+	if ext == ".xls" {
+		return "xls"
+	}
+	return "csv"
+}
+
+// decodeTextBytes 自动识别文本编码：UTF-8 BOM / UTF-8 无 BOM / GB18030（兼容 GBK）
+// Excel、WPS 在中文 Windows 下导出的 CSV 默认是 GBK，直接按 UTF-8 读必然乱码
+func decodeTextBytes(buf []byte) (string, error) {
+	// 去掉 UTF-8 BOM
+	if len(buf) >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF {
+		return string(buf[3:]), nil
+	}
+	if utf8.Valid(buf) {
+		return string(buf), nil
+	}
+	// 兜底按 GB18030 解码（Excel 中文 CSV 的默认编码）
+	out, err := io.ReadAll(transform.NewReader(bytes.NewReader(buf), simplifiedchinese.GB18030.NewDecoder()))
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func importTasksFromCSVText(c *gin.Context, text string, cl *models.Claims, deptID uint) (int, int, []string) {
+	reader := csv.NewReader(strings.NewReader(text))
 	reader.FieldsPerRecord = -1
 	reader.LazyQuotes = true
 	rows, err := reader.ReadAll()
@@ -352,17 +429,32 @@ func ImportSchedulesCSV(c *gin.Context) {
 	defer f.Close()
 	deptID := parseDeptID(c)
 	cl := currentClaims(c)
-	if isXLSX(file.Filename) {
-		created, failed, errs, unknown, ym := importSchedulesFromXLSX(c, f, cl, deptID, file.Filename)
-		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "unknown_names": unknown, "month": ym})
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "文件读取失败"})
 		return
 	}
-	created, failed, errs, unknown := importSchedulesFromCSV(c, f, cl, deptID)
-	c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "unknown_names": unknown})
+	switch sniffFileKind(buf, file.Filename) {
+	case "xls":
+		c.JSON(400, gin.H{"error": "不支持 .xls（Excel 97-2003）格式。请用 WPS/Excel 打开后「另存为」.xlsx 或 .csv 再上传"})
+		return
+	case "xlsx":
+		created, failed, errs, unknown, ym := importSchedulesFromXLSX(c, newBytesFile(buf), cl, deptID, file.Filename)
+		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "unknown_names": unknown, "month": ym})
+		return
+	default:
+		text, decErr := decodeTextBytes(buf)
+		if decErr != nil {
+			c.JSON(400, gin.H{"error": "CSV 编码无法识别，请用 WPS/Excel 另存为 UTF-8 或 GBK 编码的 CSV 后再上传"})
+			return
+		}
+		created, failed, errs, unknown := importSchedulesFromCSVText(c, text, cl, deptID)
+		c.JSON(200, gin.H{"created": created, "failed": failed, "errors": errs, "unknown_names": unknown})
+	}
 }
 
-func importSchedulesFromCSV(c *gin.Context, f multipart.File, cl *models.Claims, deptID uint) (int, int, []string, []string) {
-	reader := csv.NewReader(f)
+func importSchedulesFromCSVText(c *gin.Context, text string, cl *models.Claims, deptID uint) (int, int, []string, []string) {
+	reader := csv.NewReader(strings.NewReader(text))
 	reader.FieldsPerRecord = -1
 	reader.LazyQuotes = true
 	rows, err := reader.ReadAll()
