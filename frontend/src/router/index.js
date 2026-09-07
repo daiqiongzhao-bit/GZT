@@ -6,7 +6,7 @@ const routes = [
   { path: '/', name: 'dashboard', component: () => import('@/views/Dashboard.vue'), meta: { title: '概览' } },
   { path: '/schedule', name: 'schedule', component: () => import('@/views/Schedule.vue'), meta: { title: '班表' } },
   { path: '/tasks', name: 'tasks', component: () => import('@/views/Tasks.vue'), meta: { title: '任务' } },
-  { path: '/workspace', name: 'workspace', component: () => import('@/views/Workspace.vue'), meta: { title: '工作台' } },
+  { path: '/workspace', name: 'workspace', component: () => import('@/views/Workspace.vue'), meta: { title: '知识库' } },
   { path: '/backup', name: 'backup', component: () => import('@/views/Backup.vue'), meta: { title: '备份还原' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置' } },
   { path: '/:pathMatch(.*)*', redirect: '/' }

@@ -127,7 +127,7 @@ func main() {
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
 			auth.GET("/workspace/knowledge/export", handlers.ExportKnowledge)
-			auth.GET("/workspace/export/bundle", handlers.ExportWorkspaceBundle)
+			auth.GET("/workspace/export/bundle", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportWorkspaceBundle)
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
 			auth.GET("/workspace/knowledge/:id/history", handlers.ListKnowledgeHistory)
 			auth.POST("/workspace/knowledge/:id/attachments", handlers.UploadKnowledgeAttachment)

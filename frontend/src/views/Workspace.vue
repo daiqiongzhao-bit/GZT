@@ -1,7 +1,7 @@
 <template>
   <div class="workspace">
     <div class="ws-head">
-      <h2 class="page-title">工作台</h2>
+      <h2 class="page-title">知识库</h2>
       <div class="ws-tool">
         <div class="tabs">
           <button class="tab" :class="{ active: tab === 'knowledge' }" @click="switchTab('knowledge')">
@@ -12,7 +12,7 @@
             交接接力<template v-if="inboxUnread>0&&tab!=='handover'">·<i class="handover-badge">{{ inboxUnread }}</i></template>
           </button>
         </div>
-        <button class="btn ghost export-bundle" @click="exportBundle" title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移到正式环境">
+        <button v-if="auth.isSuper" class="btn ghost export-bundle" @click="exportBundle" title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移到正式环境（仅超级管理员）">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;vertical-align:-2px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
           打包下载 zip
         </button>

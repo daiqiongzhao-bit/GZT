@@ -209,7 +209,7 @@ const slogan = computed(() => brand.slogan || '三端同步 · 安全可控 · �
 const companyInitial = computed(() => (company.value || '工')[0])
 
 const userInitial = computed(() => (auth.user?.name || '?')[0])
-const pageTitle = computed(() => route.meta.title || '工作台')
+const pageTitle = computed(() => route.meta.title || '知识库')
 // 上传了企业 Logo 时用图片，否则用内置图标；?v=文件名 保证换图后浏览器立即刷新
 const logoUrl = computed(() => '/api/settings/logo?v=' + encodeURIComponent(brand.logo || ''))
 const brandLogo = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8.5 14.5l2.2 2.2 4.3-4.4" stroke-width="2.4"/></svg>'

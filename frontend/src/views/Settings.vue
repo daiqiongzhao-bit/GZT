@@ -410,7 +410,12 @@
             <button class="btn ghost" :class="{ active: backupScope === 'task' }" @click="backupScope = 'task'">任务</button>
             <button class="btn ghost" :class="{ active: backupScope === 'user' }" @click="backupScope = 'user'">人员</button>
             <button class="btn primary" :disabled="backupCreating" @click="createBackup">{{ backupCreating ? '备份中…' : '创建备份' }}</button>
+            <label class="btn ghost imp" style="cursor:pointer;">
+              ⬆ 导入备份还原
+              <input type="file" accept=".db" :disabled="backupImporting" @change="importBackup" hidden />
+            </label>
           </div>
+          <p class="hint" style="color:var(--text-dim); font-size:12px; margin:8px 0 0; line-height:1.6;">「导入备份还原」用于把从本系统「下载」的 .db 备份文件（或另一台服务器导出的备份）恢复进来，会覆盖当前全部数据，请谨慎操作。</p>
         </div>
         <div>
           <label class="fld">自动备份频率</label>
@@ -896,6 +901,7 @@ function exportLogs() {
 const backups = ref([])
 const backupLoading = ref(false)
 const backupCreating = ref(false)
+const backupImporting = ref(false)
 const backupScope = ref('all') // v0.2.0：手动备份分类（all/schedule/task/user）
 const backupCfg = reactive({ frequency: 'none', retention: 10, remote_dir: '' })
 const scopeNameMap = { all: '全部', schedule: '班表', task: '任务', user: '人员' }
@@ -904,6 +910,16 @@ const backupCfgSaving = ref(false)
 async function loadBackups() { backupLoading.value = true; try { const r = await api.get('/backups'); backups.value = Array.isArray(r) ? r : [] } catch { backups.value = [] } finally { backupLoading.value = false } }
 async function loadBackupCfg() { try { Object.assign(backupCfg, await api.get('/backup-config')) } catch {} }
 async function createBackup() { backupCreating.value = true; try { await api.post('/backups' + (backupScope.value && backupScope.value !== 'all' ? '?scope=' + backupScope.value : '')); await loadBackups() } catch (e) { alert(e.response?.data?.error || '备份失败') } finally { backupCreating.value = false } }
+async function importBackup(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = ''
+  if (!file) return
+  if (!confirm(`导入并还原备份「${file.name}」？将覆盖当前所有数据，且不可撤销。`)) return
+  backupImporting.value = true
+  try { await api.upload('/backups/import', file); alert('导入还原成功，系统已切换至该备份'); await loadBackups() }
+  catch (err) { alert(err.response?.data?.error || '导入失败') }
+  finally { backupImporting.value = false }
+}
 async function setBackupFreq(f) { backupCfg.frequency = f; await saveBackupCfg() }
 async function saveBackupCfg() { backupCfgSaving.value = true; try { await api.post('/backup-config', { frequency: backupCfg.frequency, retention: Number(backupCfg.retention), remote_dir: backupCfg.remote_dir }); alert('已保存') } catch (e) { alert(e.response?.data?.error || '保存失败') } finally { backupCfgSaving.value = false } }
 function downloadBackup(b) { downloadAuth('backups/' + b.id + '/download') }
