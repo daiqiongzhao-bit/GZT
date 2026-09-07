@@ -55,7 +55,7 @@ func getUserTemplateXLSX() *excelize.File {
 func DownloadUserTemplateXLSX(c *gin.Context) {
 	f := getUserTemplateXLSX()
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", `attachment; filename="user-template.xlsx"`)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", "人员导入模板.xlsx"))
 	_ = f.Write(c.Writer)
 }
 

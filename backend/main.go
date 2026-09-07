@@ -149,8 +149,6 @@ func main() {
 
 			// 模板管理（管理员可查看下载，超管可修改）
 			auth.GET("/templates", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListTemplates)
-			auth.GET("/templates/task-sample", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadTaskSample)
-			auth.GET("/templates/schedule-sample", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadScheduleSample)
 			auth.GET("/templates/schedule-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadScheduleTemplateXLSX)
 			auth.GET("/templates/task-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadTaskTemplateXLSX)
 			auth.GET("/templates/user-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadUserTemplateXLSX)

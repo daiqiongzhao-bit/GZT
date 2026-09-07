@@ -380,7 +380,7 @@ async function uploadCSV(e) {
   finally { importing.value = false; e.target.value = '' }
 }
 
-// 导出任务 CSV（鉴权下载）
+// 导出任务 Excel（鉴权下载；按 Content-Disposition 取中文文件名）
 const exporting = ref(false)
 async function exportTasks() {
   exporting.value = true
@@ -389,9 +389,13 @@ async function exportTasks() {
     const r = await fetch('/api/tasks/export', { headers: { Authorization: 'Bearer ' + token } })
     if (!r.ok) { alert('导出失败'); return }
     const blob = await r.blob()
+    const cd = r.headers.get('content-disposition') || ''
+    const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/)
+    const today = new Date().toISOString().slice(0, 10)
+    const fn = (m && (m[1] || m[2])) ? decodeURIComponent(m[1] || m[2]) : ('任务列表_' + today.replace(/-/g, '') + '.xlsx')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = 'tasks_export.csv'
+    a.download = fn
     a.click()
     URL.revokeObjectURL(a.href)
   } catch { alert('导出失败') }

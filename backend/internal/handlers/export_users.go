@@ -66,7 +66,7 @@ func ExportUsersXLSX(c *gin.Context) {
 			f.SetCellValue(sheet, col, v)
 		}
 	}
-	fname := "users_export_" + time.Now().Format("20060102_1504") + ".xlsx"
+	fname := "人员名单_" + time.Now().Format("20060102_1504") + ".xlsx"
 	writeXLSX(c, f, fname)
 }
 

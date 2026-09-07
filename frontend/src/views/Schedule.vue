@@ -179,29 +179,69 @@
               <td class="sum-cell hours">{{ row.tot.hours }}</td>
             </tr>
             <tr class="foot-row">
-              <td class="sticky-col" colspan="3">每日当班<span class="foot-sub">早·中·晚·夜/总</span></td>
-              <td v-for="d in matrixDays" :key="d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
-                <template v-if="matrixDaily[d]">
-                  <div class="fd-stack">
-                    <span class="fd-i" :class="'mc ' + shiftColor('早班')" title="早班">{{ matrixDaily[d].early }}</span>
-                    <span class="fd-i" :class="'mc ' + shiftColor('中班')" title="中班">{{ matrixDaily[d].mid }}</span>
-                    <span class="fd-i" :class="'mc ' + shiftColor('晚班')" title="晚班">{{ matrixDaily[d].evening }}</span>
-                    <span class="fd-i" :class="'mc ' + shiftColor('夜班')" title="夜班">{{ matrixDaily[d].night }}</span>
-                  </div>
-                  <span class="fd-total">{{ matrixDaily[d].total }}</span>
-                </template>
+              <td class="sticky-col" colspan="3">早班当班</td>
+              <td v-for="d in matrixDays" :key="'e'+d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="matrixDaily[d]" class="fd-num" :class="'mc ' + shiftColor('早班')">{{ matrixDaily[d].early }}</span>
+              </td>
+              <td class="sum-cell">{{ matrixTot.early }}</td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell hours"></td>
+            </tr>
+            <tr class="foot-row">
+              <td class="sticky-col" colspan="3">中班当班</td>
+              <td v-for="d in matrixDays" :key="'m'+d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="matrixDaily[d]" class="fd-num" :class="'mc ' + shiftColor('中班')">{{ matrixDaily[d].mid }}</span>
+              </td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell">{{ matrixTot.mid }}</td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell hours"></td>
+            </tr>
+            <tr class="foot-row">
+              <td class="sticky-col" colspan="3">晚班当班</td>
+              <td v-for="d in matrixDays" :key="'v'+d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="matrixDaily[d]" class="fd-num" :class="'mc ' + shiftColor('晚班')">{{ matrixDaily[d].evening }}</span>
+              </td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell">{{ matrixTot.evening }}</td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell hours"></td>
+            </tr>
+            <tr class="foot-row">
+              <td class="sticky-col" colspan="3">夜班当班</td>
+              <td v-for="d in matrixDays" :key="'n'+d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="matrixDaily[d]" class="fd-num" :class="'mc ' + shiftColor('夜班')">{{ matrixDaily[d].night }}</span>
+              </td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell">{{ matrixTot.night }}</td>
+              <td class="sum-cell"></td>
+              <td class="sum-cell hours"></td>
+            </tr>
+            <tr class="foot-row foot-row-total">
+              <td class="sticky-col" colspan="3">当班总</td>
+              <td v-for="d in matrixDays" :key="'t'+d" class="day-cell foot-cell" :class="{ wknd: matrixIsWeekend(d) }">
+                <span v-if="matrixDaily[d]" class="fd-num fd-total">{{ matrixDaily[d].total }}</span>
               </td>
               <td class="sum-cell">{{ matrixTot.early }}</td>
               <td class="sum-cell">{{ matrixTot.mid }}</td>
               <td class="sum-cell">{{ matrixTot.evening }}</td>
               <td class="sum-cell">{{ matrixTot.night }}</td>
               <td class="sum-cell">{{ matrixTot.rest }}</td>
-              <td class="sum-cell">{{ matrixTot.hours }}</td>
+              <td class="sum-cell hours">{{ matrixTot.hours }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="matrix-note">注：格子显示班次简称，空白表示该日无排班；休息按「当月未排班天数」估算，工时按各班次时段时长累计。</p>
+      <p class="matrix-note">注：格子显示班次简称，空白表示该日无排班；休息按「当月未排班天数」估算，工时按「每班次 8 小时制」累计（早/中/晚/夜各 8h，休息 0h）。正常满勤约 22 天 ≈ 174~176 工时(h)。</p>
     </section>
 
     <!-- 内联新增表单 -->
@@ -569,7 +609,7 @@ async function uploadScheduleCSV(e) {
   finally { sImporting.value = false; e.target.value = '' }
 }
 
-// 导出班表 CSV（鉴权下载）
+// 导出班表 Excel（鉴权下载；按 Content-Disposition 取中文文件名）
 const sExporting = ref(false)
 async function exportSchedules() {
   sExporting.value = true
@@ -578,9 +618,13 @@ async function exportSchedules() {
     const r = await fetch('/api/schedules/export', { headers: { Authorization: 'Bearer ' + token } })
     if (!r.ok) { alert('导出失败'); return }
     const blob = await r.blob()
+    const cd = r.headers.get('content-disposition') || ''
+    const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/)
+    const ym = new Date().toISOString().slice(0, 7).replace(/-/g, '')
+    const fn = (m && (m[1] || m[2])) ? decodeURIComponent(m[1] || m[2]) : ('班表_' + ym + '.xlsx')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = 'schedules_export.csv'
+    a.download = fn
     a.click()
     URL.revokeObjectURL(a.href)
   } catch { alert('导出失败') }
@@ -661,18 +705,10 @@ function hexToSoftStyle(hex) {
 }
 function shiftColor(s) { return matrixShiftClass(s) }
 
-// 某班次小时数：优先取该部门班次配置的起止时间计算；无配置则按常见时长兜底
+// 工时(h)：按「每个班次 8 小时制」统一计算（早/中/晚/夜各 8h，休息 0h）
 function shiftHours(name) {
   if (!name || name === '休息') return 0
-  const did = matrixDeptId.value
-  const sc = shiftConfigs.value.find((x) => x.dept_id === did && x.name === name) || shiftConfigs.value.find((x) => x.name === name)
-  if (sc && sc.start_time && sc.end_time) {
-    const toM = (t) => { const [h, m] = (t || '0:0').split(':'); return (+h || 0) * 60 + (+m || 0) }
-    let s = toM(sc.start_time), e = toM(sc.end_time)
-    if (e <= s) e += 24 * 60
-    return Math.round(((e - s) / 60) * 10) / 10
-  }
-  return { '早班': 9, '中班': 8.5, '晚班': 8.5, '夜班': 8 }[name] || 8
+  return 8
 }
 
 // 矩阵行：每人 { name, emp_no, cells: {day: shift}, tot: {...} }

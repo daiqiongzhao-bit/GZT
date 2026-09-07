@@ -133,6 +133,11 @@
     <section v-if="tab === 'user'" class="panel">
       <h3 class="section-title">人员管理 <span v-if="!auth.canManage" class="section-sub">仅管理员可操作</span></h3>
       <div v-if="auth.canManage" class="user-toolbar">
+        <button class="btn ghost" @click="showAddUser = !showAddUser">
+          <svg v-if="!showAddUser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M12 5v14M5 12h14"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M5 12h14"/></svg>
+          {{ showAddUser ? '收起新增' : '新增人员' }}
+        </button>
         <button class="btn ghost" @click="downloadAuth('templates/user-template')">⬇ 人员导入模板</button>
         <label class="btn ghost imp-label">
           {{ userImporting ? '导入中…' : '⬆ 批量导入人员' }}
@@ -160,12 +165,7 @@
           <button class="btn danger sm" @click="runBatch('delete')">删除</button>
         </span>
       </div>
-      <div v-if="auth.canManage" class="add-user-fold">
-        <button class="btn ghost" @click="showAddUser = !showAddUser">
-          <svg v-if="!showAddUser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M12 5v14M5 12h14"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M5 12h14"/></svg>
-          {{ showAddUser ? '收起新增' : '新增人员' }}
-        </button>
+      <div v-if="auth.canManage">
         <div v-show="showAddUser" class="add-form" style="margin-top:12px;">
         <div class="fg2">
           <div><label class="fld">姓名 *</label><input v-model="u.name" class="glass-input" /></div>
@@ -259,13 +259,11 @@
 
     <!-- 模板管理（管理员可查看下载，超管可修改） -->
     <section v-if="tab === 'tmpl' && auth.canManage" class="panel">
-      <h3 class="section-title">固定模板 <span class="section-sub">下载后按格式填好，在班表/任务页上传即可导入（Excel 或 CSV 都支持）</span></h3>
+      <h3 class="section-title">固定模板 <span class="section-sub">下载后按格式填好，在班表/任务页上传即可导入（统一 Excel .xlsx 格式）</span></h3>
       <div class="form-actions" style="justify-content:flex-start; gap:10px; flex-wrap:wrap;">
         <button class="btn primary" @click="downloadAuth('templates/schedule-template')">⬇ 班表模板（Excel 矩阵）</button>
         <button class="btn primary" @click="downloadAuth('templates/task-template')">⬇ 任务模板（每日+月度）</button>
         <button class="btn primary" @click="downloadAuth('templates/user-template')">⬇ 人员导入模板</button>
-        <button class="btn ghost" @click="downloadAuth('templates/schedule-sample')">⬇ 班表 CSV 样例</button>
-        <button class="btn ghost" @click="downloadAuth('templates/task-sample')">⬇ 任务 CSV 样例</button>
         <button class="btn ghost" @click="exportTasks">⬇ 导出当前任务</button>
       </div>
       <p class="hint" style="font-size:12.5px;color:var(--text-dim);margin-top:10px;line-height:1.7;">

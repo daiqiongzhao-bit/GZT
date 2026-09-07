@@ -31,36 +31,8 @@ import (
 )
 
 // ===================== 模板管理 =====================
-
-// taskSampleCSV 任务导入样例 CSV（含表头）。第 8 列为「按周执行」星期（可选）：
-// 类型为「每日」时可填写，格式 1=周一…7=周日，多天用逗号分隔（如 1,3,5），留空=每天执行。
-const taskSampleCSV = `标题,班次,类型,时间,优先级,备注,负责人,星期(按周执行,可选)
-开门检查,早班,每日,09:00,高,每日开门前安全巡检,,"1,3,5"
-晚班盘点,晚班,每日,21:00,中,,,
-月底对账,早晚,每月,2026-08-31T17:00,高,当月账务核对,,
-临时巡检,全员,单次,2026-08-30T15:00,低,,`
-
-// scheduleSampleCSV 班表导入样例 CSV（含表头）
-// 班次列只能填真实班次枚举：早班/中班/晚班/夜班/休息（可简写 早/中/晚/夜/休），
-// 不能填「全员」——班表是「谁在哪个班」，全员不是班次；人员列填具体人员姓名，多人用 ; 或 、 分隔。
-const scheduleSampleCSV = `日期,班次,人员
-2026-08-28,早班,林晓;陈默
-2026-08-28,晚班,王芳
-2026-08-29,早班,林晓`
-
-// DownloadTaskSample GET /api/templates/task-sample 下载任务导入模板样例
-func DownloadTaskSample(c *gin.Context) {
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\"task_template.csv\"")
-	c.Data(200, "text/csv; charset=utf-8", csvBOM([]byte(taskSampleCSV)))
-}
-
-// DownloadScheduleSample GET /api/templates/schedule-sample 下载班表导入模板样例
-func DownloadScheduleSample(c *gin.Context) {
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\"schedule_template.csv\"")
-	c.Data(200, "text/csv; charset=utf-8", csvBOM([]byte(scheduleSampleCSV)))
-}
+// 任务/班表的「导入模板」已统一为 xlsx（见 template.go DownloadTaskTemplateXLSX /
+// DownloadScheduleTemplateXLSX），v0.8.0 起不再提供 CSV 样例下载。
 
 // ListTemplates GET /api/templates 管理员可查看（任务/班表两类）
 func ListTemplates(c *gin.Context) {
@@ -147,6 +119,7 @@ func DeleteTemplate(c *gin.Context) {
 }
 
 // DownloadTemplate GET /api/templates/:id/download 管理员可下载自定义模板
+// v0.8.0 起统一中文文件名（RFC 5987），内容保持 CSV 兼容（含 BOM，避免 Excel 打开中文乱码）。
 func DownloadTemplate(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	scope := deptScopeIDs(c)
@@ -159,12 +132,14 @@ func DownloadTemplate(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "模板不存在"})
 		return
 	}
-	fn := "task_template.csv"
+	kind := "任务"
 	if t.Type == "schedule" {
-		fn = "schedule_template.csv"
+		kind = "班表"
 	}
+	// 文件名：模板_任务_张三_20260907.csv（带时间戳避免重名）
+	fname := fmt.Sprintf("模板_%s_%s_%s.csv", kind, t.Name, time.Now().Format("20060102"))
 	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=\""+fn+"\"")
+	c.Header("Content-Disposition", contentDispositionRFC5987(fname))
 	c.Data(200, "text/csv; charset=utf-8", csvBOM([]byte(t.Content)))
 }
 
@@ -572,7 +547,7 @@ func ExportTasksXLSX(c *gin.Context) {
 			f.SetCellValue(sheet, col, v)
 		}
 	}
-	writeXLSX(c, f, "tasks_export.xlsx")
+	writeXLSX(c, f, "任务列表_"+time.Now().Format("20060102_1504")+".xlsx")
 }
 
 // ExportLogsXLSX GET /api/logs/export 导出操作日志为 Excel(.xlsx)（支持与列表一致的筛选）
@@ -610,7 +585,7 @@ func ExportLogsXLSX(c *gin.Context) {
 			f.SetCellValue(sheet, col, v)
 		}
 	}
-	writeXLSX(c, f, "logs_export.xlsx")
+	writeXLSX(c, f, "操作日志_"+time.Now().Format("20060102_1504")+".xlsx")
 }
 
 // ExportSchedulesXLSX GET /api/schedules/export 导出当前可见部门班表为 Excel(.xlsx)
@@ -642,7 +617,7 @@ func ExportSchedulesXLSX(c *gin.Context) {
 			f.SetCellValue(sheet, col, v)
 		}
 	}
-	writeXLSX(c, f, "schedules_export.xlsx")
+	writeXLSX(c, f, "班表_"+time.Now().Format("200601")+".xlsx")
 }
 
 // contentDispositionRFC5987 生成中文文件名安全的 Content-Disposition（RFC 5987）
