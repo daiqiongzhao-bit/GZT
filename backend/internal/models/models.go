@@ -236,6 +236,19 @@ type KnowledgeEntry struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+// KnowledgeAttachment 知识条目附件：文件存服务器磁盘（与数据库同盘目录），仅存元数据
+type KnowledgeAttachment struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	EntryID   uint      `json:"entry_id" gorm:"index;not null"` // 所属知识条目
+	FileName  string    `json:"file_name" gorm:"size:255"`      // 原始文件名（下载展示用）
+	StoredName string   `json:"stored_name" gorm:"size:128"`    // 磁盘存储文件名（唯一）
+	Mime      string    `json:"mime" gorm:"size:64"`            // Content-Type
+	Size      int64     `json:"size"`                            // 字节
+	OwnerID   uint      `json:"owner_id" gorm:"index"`           // 上传者
+	OwnerName string    `json:"owner_name" gorm:"size:64"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // WorkLog 工作日志：某日记录当天做了什么 / 还没做完的（一天可多篇）
 type WorkLog struct {
 	ID        uint           `json:"id" gorm:"primaryKey"`

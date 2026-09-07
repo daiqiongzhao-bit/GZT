@@ -126,6 +126,12 @@ func main() {
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
+			auth.GET("/workspace/knowledge/export", handlers.ExportKnowledge)
+			auth.GET("/workspace/export/bundle", handlers.ExportWorkspaceBundle)
+			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
+			auth.POST("/workspace/knowledge/:id/attachments", handlers.UploadKnowledgeAttachment)
+			auth.GET("/workspace/knowledge_attachments/:aid/download", handlers.DownloadKnowledgeAttachment)
+			auth.DELETE("/workspace/knowledge_attachments/:aid", handlers.DeleteKnowledgeAttachment)
 			auth.POST("/workspace/knowledge", handlers.CreateKnowledge)
 			auth.PUT("/workspace/knowledge/:id", handlers.UpdateKnowledge)
 			auth.DELETE("/workspace/knowledge/:id", handlers.DeleteKnowledge)

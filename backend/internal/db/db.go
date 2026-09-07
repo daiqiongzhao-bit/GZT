@@ -32,6 +32,7 @@ func Init() error {
 		&models.Template{},
 		&models.Notification{},
 		&models.KnowledgeEntry{},
+		&models.KnowledgeAttachment{},
 		&models.WorkLog{},
 		&models.WorkHandover{},
 	)

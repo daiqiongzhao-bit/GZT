@@ -1,10 +1,18 @@
 package handlers
 
 import (
+	"archive/zip"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
@@ -449,4 +457,371 @@ func DeleteHandover(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ==================== 知识库：附件（图片/文档） ====================
+
+// kAttachmentDir 返回知识附件存储目录（与数据库同盘，便于随数据目录一起备份/迁移）
+func kAttachmentDir() string {
+	dir := filepath.Dir(config.C.DBPath)
+	if dir == "" || dir == "." {
+		dir = "data"
+	}
+	if dir != "/" {
+		dir = strings.TrimRight(dir, "/")
+	}
+	return filepath.Join(dir, "workspace_attachments")
+}
+
+// kCanRead 判断当前用户能否读取某条知识（创建者本人或部门共享同部门或超管）
+func kCanRead(cl *models.Claims, e *models.KnowledgeEntry) bool {
+	if cl == nil {
+		return false
+	}
+	if cl.Role == models.RoleSuperAdmin {
+		return true
+	}
+	if e.OwnerID == cl.UserID {
+		return true
+	}
+	return e.Scope == models.ScopeDepartment && e.DeptID == cl.DeptID
+}
+
+// loadVisibleKnowledge 加载一条对当前用户可见的知识（不存在或不可见→返回 false 并已响应）
+func loadVisibleKnowledge(c *gin.Context) (*models.KnowledgeEntry, bool) {
+	var e models.KnowledgeEntry
+	if err := db.DB.First(&e, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "知识条目不存在"})
+		return nil, false
+	}
+	cl := middleware.GetClaims(c)
+	if !kCanRead(cl, &e) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该条目"})
+		return nil, false
+	}
+	return &e, true
+}
+
+const maxAttachSize = 100 << 20 // 单附件上限 100MB（正式环境存储充足）
+
+// ListKnowledgeAttachments GET /workspace/knowledge/:id/attachments 附件列表
+func ListKnowledgeAttachments(c *gin.Context) {
+	if _, ok := loadVisibleKnowledge(c); !ok {
+		return
+	}
+	var list []models.KnowledgeAttachment
+	db.DB.Where("entry_id = ?", c.Param("id")).Order("id asc").Find(&list)
+	c.JSON(http.StatusOK, list)
+}
+
+// UploadKnowledgeAttachment POST /workspace/knowledge/:id/attachments 上传附件
+// 表单字段名 file。仅条目创建者或超管可传。
+func UploadKnowledgeAttachment(c *gin.Context) {
+	e, ok := loadVisibleKnowledge(c)
+	if !ok {
+		return
+	}
+	cl := middleware.GetClaims(c)
+	if e.OwnerID != cl.UserID && cl.Role != models.RoleSuperAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者可上传附件"})
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要上传的文件"})
+		return
+	}
+	if file.Size > maxAttachSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "单个附件不能超过 100MB"})
+		return
+	}
+	// 支持任意文件类型：图片预览，其余一律下载。MIME 按扩展名识别，识别不到回退二进制。
+	origName := filepath.Base(file.Filename)
+	ext := strings.ToLower(filepath.Ext(origName))
+	mimeT := mime.TypeByExtension(ext)
+	if mimeT == "" {
+		mimeT = "application/octet-stream"
+	}
+
+	dir := kAttachmentDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "目录创建失败: " + err.Error()})
+		return
+	}
+	stored := fmt.Sprintf("k%d_%d%s", e.ID, time.Now().UnixNano(), ext)
+	dst := filepath.Join(dir, stored)
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
+		return
+	}
+	att := models.KnowledgeAttachment{
+		EntryID: e.ID, FileName: origName, StoredName: stored,
+		Mime: mimeT, Size: file.Size, OwnerID: cl.UserID, OwnerName: cl.Username,
+	}
+	if err := db.DB.Create(&att).Error; err != nil {
+		_ = os.Remove(dst)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = db.DB.Model(&models.KnowledgeEntry{}).Where("id = ?", e.ID).Update("updated_at", time.Now())
+	addLog(c, cl.UserID, cl.Username, "知识["+e.Title+"]上传附件: "+origName)
+	c.JSON(http.StatusOK, att)
+}
+
+// DownloadKnowledgeAttachment GET /workspace/knowledge/attachments/:aid/download
+// 附件下载/预览。可见者均可读；图片以 inline 预览，其余以附件下载。
+func DownloadKnowledgeAttachment(c *gin.Context) {
+	var att models.KnowledgeAttachment
+	if err := db.DB.First(&att, c.Param("aid")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
+		return
+	}
+	var e models.KnowledgeEntry
+	if err := db.DB.First(&e, att.EntryID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "所属条目不存在"})
+		return
+	}
+	cl := middleware.GetClaims(c)
+	if !kCanRead(cl, &e) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该附件"})
+		return
+	}
+	p := filepath.Join(kAttachmentDir(), filepath.Base(att.StoredName))
+	if _, err := os.Stat(p); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "附件文件不存在"})
+		return
+	}
+	// 图片内嵌预览，其余触发下载（attachment 强制浏览器下载）
+	isImage := strings.HasPrefix(att.Mime, "image/")
+	disp := "attachment"
+	if isImage {
+		disp = "inline"
+	}
+	// RFC 5987 编码文件名，中文可正常显示
+	enc := url.QueryEscape(att.FileName)
+	c.Header("Content-Type", att.Mime)
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, "attachment", enc))
+	c.File(p)
+}
+
+// DeleteKnowledgeAttachment DELETE /workspace/knowledge/attachments/:aid
+// 仅条目创建者或上传者或超管可删
+func DeleteKnowledgeAttachment(c *gin.Context) {
+	var att models.KnowledgeAttachment
+	if err := db.DB.First(&att, c.Param("aid")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
+		return
+	}
+	var e models.KnowledgeEntry
+	_ = db.DB.First(&e, att.EntryID)
+	cl := middleware.GetClaims(c)
+	if cl.Role != models.RoleSuperAdmin && !(e.ID != 0 && e.OwnerID == cl.UserID) && att.OwnerID != cl.UserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者或上传者可删除"})
+		return
+	}
+	p := filepath.Join(kAttachmentDir(), filepath.Base(att.StoredName))
+	if err := os.Remove(p); err != nil {
+		// 文件可能已被手动清理，不阻断 DB 记录删除
+	}
+	db.DB.Delete(&att)
+	addLog(c, cl.UserID, cl.Username, "删除知识附件: "+att.FileName)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ==================== 知识库：导出（当前可见条目） ====================
+
+// ExportKnowledge GET /workspace/knowledge/export
+// 将当前用户可见的知识条目导出为带 BOM 的文本文件（.txt），按分类分组。
+func ExportKnowledge(c *gin.Context) {
+	q := db.DB.Model(&models.KnowledgeEntry{})
+	q = scopeVisibleQ(c, q)
+	// 尊重列表筛选
+	if kw := strings.TrimSpace(c.Query("kw")); kw != "" {
+		like := "%" + kw + "%"
+		q = q.Where("title LIKE ? OR content LIKE ? OR category LIKE ?", like, like, like)
+	}
+	if cat := strings.TrimSpace(c.Query("category")); cat != "" {
+		q = q.Where("category = ?", cat)
+	}
+	var list []models.KnowledgeEntry
+	if err := q.Order("category asc, updated_at desc").Find(&list).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var b strings.Builder
+	b.WriteString("知识库导出 共 " + fmt.Sprintf("%d", len(list)) + " 条\n")
+	b.WriteString("导出时间: " + time.Now().Format("2006-01-02 15:04") + "\n")
+	b.WriteString(strings.Repeat("=", 40) + "\n\n")
+	var lastCat string
+	for _, k := range list {
+		cat := k.Category
+		if cat == "" {
+			cat = "未分类"
+		}
+		if cat != lastCat {
+			if lastCat != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString("【分类：" + cat + "】\n")
+			lastCat = cat
+		}
+		b.WriteString("▪ " + k.Title + "\n")
+		if k.Content != "" {
+			b.WriteString(k.Content + "\n")
+		}
+		b.WriteString("  （" + scopeLabelShort(k.Scope) + " · 更新于 " + k.UpdatedAt.Format("2006-01-02") + "）\n\n")
+	}
+	fname := fmt.Sprintf("knowledge_export_%s.txt", time.Now().Format("20060102_1504"))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fname, url.QueryEscape(fname)))
+	// 写 UTF-8 BOM，便于记事本/Excel 正确识别中文
+	body := append([]byte{0xEF, 0xBB, 0xBF}, []byte(b.String())...)
+	c.Data(200, "text/plain; charset=utf-8", body)
+}
+
+func scopeLabelShort(s models.WorkspaceScope) string {
+	if s == models.ScopePrivate {
+		return "仅自己"
+	}
+	return "部门共享"
+}
+
+// ==================== 工作台：全库打包导出（zip，含附件，供跨环境迁移/备份） ====================
+
+// ExportWorkspaceBundle GET /workspace/export/bundle
+// 将当前用户可见的知识库条目 + 工作日志 + 交接（文本）汇总为一份 README.txt，
+// 并把可见知识条目涉及的全部附件文件一并打包成 zip 下载。附件目录随数据目录一起走。
+func ExportWorkspaceBundle(c *gin.Context) {
+	cl := middleware.GetClaims(c)
+	// 知识（含附件）
+	var entries []models.KnowledgeEntry
+	q := db.DB.Model(&models.KnowledgeEntry{})
+	q = scopeVisibleQ(c, q)
+	q.Order("category asc, updated_at desc").Find(&entries)
+
+	// 收集可见知识条目涉及的附件 ID（附件只随所属条目可见性走）
+	visibleEntryIDs := make([]uint, 0, len(entries))
+	visibleIDs := map[uint]bool{}
+	for _, e := range entries {
+		if !visibleIDs[e.ID] {
+			visibleIDs[e.ID] = true
+			visibleEntryIDs = append(visibleEntryIDs, e.ID)
+		}
+	}
+	var atts []models.KnowledgeAttachment
+	if len(visibleEntryIDs) > 0 {
+		db.DB.Where("entry_id IN ?", visibleEntryIDs).Order("id asc").Find(&atts)
+	}
+	attByEntry := map[uint][]models.KnowledgeAttachment{}
+	for _, a := range atts {
+		attByEntry[a.EntryID] = append(attByEntry[a.EntryID], a)
+	}
+
+	// 日志（个人；共享同部门）——须按可见性过滤，避免导出他部门/他人私密日志
+	var logs []models.WorkLog
+	logQ := scopeVisibleQ(c, db.DB.Model(&models.WorkLog{}))
+	logQ.Order("log_date desc, id desc").Find(&logs)
+	// 交接（本人相关；超管全量）
+	var handovers []models.WorkHandover
+	hq := db.DB.Model(&models.WorkHandover{})
+	hq = handoverVisibleQ(c, hq)
+	hq.Order("id desc").Find(&handovers)
+
+	var b strings.Builder
+	b.WriteString("GZT 工作台数据导出\n")
+	b.WriteString("导出时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
+	b.WriteString("导出人: " + cl.Username + "\n")
+	b.WriteString(strings.Repeat("=", 40) + "\n\n")
+
+	b.WriteString("◆ 迷你知识库（" + fmt.Sprintf("%d", len(entries)) + " 条）\n")
+	var lastCat string
+	for _, e := range entries {
+		cat := e.Category
+		if cat == "" {
+			cat = "未分类"
+		}
+		if cat != lastCat {
+			b.WriteString("\n【" + cat + "】\n")
+			lastCat = cat
+		}
+		b.WriteString("▪ " + e.Title + "  [" + scopeLabelShort(e.Scope) + "] 更新" + e.UpdatedAt.Format("2006-01-02") + "\n")
+		if e.Content != "" {
+			b.WriteString(e.Content + "\n")
+		}
+		if as, ok := attByEntry[e.ID]; ok && len(as) > 0 {
+			b.WriteString("  附件: ")
+			for _, a := range as {
+				b.WriteString(a.FileName + "  ")
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(strings.Repeat("=", 40) + "\n◆ 工作日志（" + fmt.Sprintf("%d", len(logs)) + " 篇）\n")
+	for _, l := range logs {
+		b.WriteString("▪ " + l.LogDate + " " + l.Title + "  [" + scopeLabelShort(l.Scope) + "]\n")
+		if l.Done != "" {
+			b.WriteString("  ✅ " + l.Done + "\n")
+		}
+		if l.Pending != "" {
+			b.WriteString("  ⏳ " + l.Pending + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(strings.Repeat("=", 40) + "\n◆ 交接接力（" + fmt.Sprintf("%d", len(handovers)) + " 条）\n")
+	statusLabel := map[string]string{"pending": "待接手", "in_progress": "处理中", "done": "已完成"}
+	for _, h := range handovers {
+		b.WriteString("▪ " + h.Title + "  " + h.SenderName + " → " + h.AssigneeName + "  [" + statusLabel[h.Status] + "]\n")
+		if h.FromProgress != "" {
+			b.WriteString("  进展: " + h.FromProgress + "\n")
+		}
+		if h.Todo != "" {
+			b.WriteString("  待做: " + h.Todo + "\n")
+		}
+		if h.Note != "" {
+			b.WriteString("  备注: " + h.Note + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// 打包 zip：README.txt + attachments/{entryID}_{filename}
+	// 直接流向响应流（chunked），避免大附件时整包进内存。
+	fname := fmt.Sprintf("workspace_bundle_%s.zip", time.Now().Format("20060102_1504"))
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fname, url.QueryEscape(fname)))
+	c.Status(http.StatusOK)
+	c.Writer.Flush()
+
+	zw := zip.NewWriter(c.Writer)
+	readme := append([]byte{0xEF, 0xBB, 0xBF}, []byte(b.String())...)
+	rw, _ := zw.Create("README.txt")
+	_, _ = rw.Write(readme)
+
+	attDir := kAttachmentDir()
+	for _, a := range atts {
+		src := filepath.Join(attDir, filepath.Base(a.StoredName))
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		fw, err := zw.Create("attachments/" + fmt.Sprintf("%d_%s", a.EntryID, a.FileName))
+		if err != nil {
+			continue
+		}
+		if err := copyFileToZip(fw, src); err != nil {
+			continue
+		}
+	}
+	zw.Close()
+}
+
+func copyFileToZip(w io.Writer, src string) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
 }

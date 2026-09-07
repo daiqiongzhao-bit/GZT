@@ -2,13 +2,19 @@
   <div class="workspace">
     <div class="ws-head">
       <h2 class="page-title">工作台</h2>
-      <div class="tabs">
-        <button class="tab" :class="{ active: tab === 'knowledge' }" @click="switchTab('knowledge')">
-          迷你知识库<template v-if="tab==='knowledge'&&auth.user"> · 沉淀方法/流程</template>
-        </button>
-        <button class="tab" :class="{ active: tab === 'logs' }" @click="switchTab('logs')">工作日志</button>
-        <button class="tab" :class="{ active: tab === 'handover' }" @click="switchTab('handover')">
-          交接接力<template v-if="inboxUnread>0&&tab!=='handover'">·<i class="handover-badge">{{ inboxUnread }}</i></template>
+      <div class="ws-tool">
+        <div class="tabs">
+          <button class="tab" :class="{ active: tab === 'knowledge' }" @click="switchTab('knowledge')">
+            迷你知识库<template v-if="tab==='knowledge'&&auth.user"> · 沉淀方法/流程</template>
+          </button>
+          <button class="tab" :class="{ active: tab === 'logs' }" @click="switchTab('logs')">工作日志</button>
+          <button class="tab" :class="{ active: tab === 'handover' }" @click="switchTab('handover')">
+            交接接力<template v-if="inboxUnread>0&&tab!=='handover'">·<i class="handover-badge">{{ inboxUnread }}</i></template>
+          </button>
+        </div>
+        <button class="btn ghost export-bundle" @click="exportBundle" title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移到正式环境">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;vertical-align:-2px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          打包下载 zip
         </button>
       </div>
     </div>
@@ -19,6 +25,7 @@
         <div class="panel-head">
           <h3 class="section-title">知识条目 <span class="section-sub">共 {{ knowledge.length }} 条</span></h3>
           <div class="head-actions">
+            <button v-if="!editingK" class="btn ghost" @click="exportK" title="把当前筛选可见的知识条目导出为文本">导出知识</button>
             <button v-if="!editingK" class="btn primary" @click="openNewK">+ 新建</button>
             <button v-else class="btn ghost" @click="cancelEditK">返回列表</button>
           </div>
@@ -102,7 +109,34 @@
           <div class="modal-meta dim">
             {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }}
           </div>
-          <div class="modal-body">{{ viewK.content || '（暂无内容）' }}</div>
+          <div class="modal-scroll">
+            <div class="modal-body">{{ viewK.content || '（暂无内容）' }}</div>
+
+            <!-- 附件区 -->
+            <div v-if="viewK" class="modal-attach">
+              <div class="att-head">
+                <span class="att-title">附件（{{ kAtts.length }}）</span>
+                <div v-if="canEditK(viewK)" class="att-upload">
+                  <span v-if="uploading" class="dim up-txt">上传中…</span>
+                  <label class="btn sm">+ 上传文件
+                    <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
+                  </label>
+                </div>
+              </div>
+              <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览），单文件 ≤ 100MB</p>
+              <div v-if="kAtts.length" class="att-list">
+                <div v-for="a in kAtts" :key="a.id" class="att-item">
+                  <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                  <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                  <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                  <button v-if="canDelAtt(a)" class="del danger" @click="removeAtt(a)">删除</button>
+                </div>
+              </div>
+              <div v-else class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
+            </div>
+          </div>
+
           <div class="modal-foot">
             <button v-if="viewK.owner_id === auth.user?.id" class="btn ghost" @click="editFromView">编辑</button>
             <button class="btn primary" @click="viewK = null">关闭</button>
@@ -369,12 +403,131 @@ async function saveK() {
   } catch (e) { toast(e.response?.data?.error || '保存失败', 'error') }
   finally { savingK.value = false }
 }
-function openDetailK(k) { viewK.value = k }
+function openDetailK(k) {
+  viewK.value = k
+  loadKAtts(k.id)
+}
 function editFromView() {
   if (!viewK.value) return
   const k = viewK.value
   viewK.value = null
   openEditK(k)
+}
+
+// ---- 知识库附件 ----
+const kAtts = ref([])
+const uploading = ref(false)
+const baseUrl = (import.meta.env?.BASE_URL || '') + 'api'
+
+async function loadKAtts(id) {
+  try { kAtts.value = await api.get('/workspace/knowledge/' + id + '/attachments') }
+  catch (e) { toast(e.response?.data?.error || '附件加载失败', 'error') }
+}
+function canEditK(k) { return k && (auth.user?.id === k.owner_id || auth.isSuper) }
+function canDelAtt(a) {
+  if (!viewK.value) return false
+  // 仅条目创建者 / 上传者 / 超管可删
+  return auth.isSuper || viewK.value.owner_id === auth.user?.id || a.owner_id === auth.user?.id
+}
+// 图片缩略/预览 objectURL 缓存
+const thumbCache = new Map()
+function thumbUrl(a) {
+  if (thumbCache.has(a.id)) return thumbCache.get(a.id)
+  const tok = localStorage.getItem('sw_token')
+  fetch(baseUrl + '/workspace/knowledge_attachments/' + a.id + '/download', { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
+    .then((r) => r.ok ? r.blob() : Promise.reject())
+    .then((b) => { const u = URL.createObjectURL(b); thumbCache.set(a.id, u); /* 触发视图刷新 */ if (viewK.value) viewK.value = { ...viewK.value } })
+    .catch(() => {})
+  return ''
+}
+function fetchAtt(a, isPreview) {
+  const tok = localStorage.getItem('sw_token')
+  return fetch(baseUrl + '/workspace/knowledge_attachments/' + a.id + '/download', {
+    headers: tok ? { Authorization: 'Bearer ' + tok } : {}
+  }).then((r) => { if (!r.ok) throw new Error('下载失败'); return r.blob() })
+}
+async function downloadAtt(a) {
+  try {
+    const blob = await fetchAtt(a, false)
+    const u = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = u; link.download = a.file_name; document.body.appendChild(link); link.click()
+    link.remove(); URL.revokeObjectURL(u)
+  } catch (e) { toast(e.message || '下载失败', 'error') }
+}
+async function previewAtt(a) {
+  try {
+    const blob = await fetchAtt(a, true)
+    const u = URL.createObjectURL(blob)
+    const win = window.open(); if (win) { win.document.write('<iframe src="' + u + '" style="width:100%;height:100%;border:0"></iframe>'); win.document.title = a.file_name }
+  } catch (e) { toast(e.message || '预览失败', 'error') }
+}
+async function uploadAtts(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (!files.length || !viewK.value) return
+  uploading.value = true
+  try {
+    for (const f of files) {
+      await api.upload('/workspace/knowledge/' + viewK.value.id + '/attachments', f)
+    }
+    toast('已上传 ' + files.length + ' 个附件')
+    loadKAtts(viewK.value.id)
+  } catch (err) { toast(err.response?.data?.error || '上传失败', 'error') }
+  finally { uploading.value = false }
+}
+async function removeAtt(a) {
+  if (!confirm('删除附件「' + a.file_name + '」？')) return
+  try { await api.del('/workspace/knowledge_attachments/' + a.id); toast('已删除'); loadKAtts(viewK.value.id) }
+  catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+function fmtSize(n) {
+  if (!n && n !== 0) return ''
+  const u = ['B', 'KB', 'MB', 'GB']
+  let i = 0, v = n
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i]
+}
+function fileIcon(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  const imgs = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']
+  if (imgs.includes(ext)) return '🖼'
+  if (['pdf'].includes(ext)) return '📄'
+  if (['doc', 'docx'].includes(ext)) return '📝'
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return '📊'
+  if (['ppt', 'pptx'].includes(ext)) return '📽'
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return '🗜'
+  if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) return '🎬'
+  return '📎'
+}
+
+// ---- 导出 ----
+function exportK() {
+  const params = new URLSearchParams()
+  if (kQuery.value.trim()) params.set('kw', kQuery.value.trim())
+  if (kCategory.value) params.set('category', kCategory.value)
+  const q = params.toString()
+  const tok = localStorage.getItem('sw_token')
+  fetch(baseUrl + '/workspace/knowledge/export' + (q ? '?' + q : ''), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
+    .then((r) => { if (!r.ok) throw new Error(); return r.blob() })
+    .then((blob) => { const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = '知识库导出.txt'; a.click(); a.remove(); URL.revokeObjectURL(u) })
+    .catch(() => toast('导出失败', 'error'))
+}
+function exportBundle() {
+  const tok = localStorage.getItem('sw_token')
+  const a = document.createElement('a')
+  a.href = baseUrl + '/workspace/export/bundle'
+  a.download = '' // 交给服务端 Content-Disposition
+  if (tok) {
+    // 需要鉴权 header，走 fetch blob
+    fetch(baseUrl + '/workspace/export/bundle', { headers: { Authorization: 'Bearer ' + tok } })
+      .then((r) => { if (!r.ok) throw new Error(); const cd = r.headers.get('Content-Disposition') || ''; const m = /filename\*=UTF-8''([^;]+)/.exec(cd); const fn = m ? decodeURIComponent(m[1]) : ('工作台数据_' + Date.now() + '.zip'); return r.blob().then((b) => ({ b, fn })) })
+      .then(({ b, fn }) => { const u = URL.createObjectURL(b); const x = document.createElement('a'); x.href = u; x.download = fn; x.click(); x.remove(); URL.revokeObjectURL(u); toast('打包已生成') })
+      .catch(() => toast('导出失败', 'error'))
+  } else {
+    a.href = '/login'
+    a.click()
+  }
 }
 async function removeK(k) {
   if (!confirm(`删除知识条目「${k.title}」？此操作不可恢复。`)) return
@@ -500,6 +653,9 @@ watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loa
 <style scoped>
 .page-title { font-size: 20px; font-weight: 700; margin: 0; }
 .ws-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.ws-tool { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.export-bundle { white-space: nowrap; font-size: 12.5px; padding: 8px 14px; color: var(--accent); border-color: rgba(79,70,229,0.3); }
+.export-bundle:hover { background: var(--accent-soft); }
 .panel { padding: 18px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glass-border); margin-bottom: 18px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .head-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -604,6 +760,37 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .modal-close:hover { color: var(--text); }
 .modal-title { font-size: 16px; font-weight: 700; margin: 10px 16px 4px; }
 .modal-meta { font-size: 12px; margin: 0 16px 12px; }
-.modal-body { padding: 0 16px; font-size: 13.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; overflow-y: auto; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 16px; border-top: 1px solid var(--hairline); margin-top: 12px; }
+.modal-scroll { flex: 1; overflow-y: auto; padding: 0 16px; }
+.modal-body { font-size: 13.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hairline); margin-top: 12px; flex-shrink: 0; }
+
+/* 附件区 */
+.modal-attach { margin-top: 14px; border-top: 1px solid var(--hairline); padding-top: 12px; }
+.att-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.att-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.att-upload { display: inline-flex; align-items: center; gap: 8px; }
+.att-upload .btn { margin: 0; display: inline-flex; align-items: center; gap: 5px; }
+.up-txt { font-size: 12px; }
+.att-hint { font-size: 11.5px; margin: 6px 0 10px; }
+.att-list { display: flex; flex-direction: column; gap: 7px; max-height: 240px; overflow-y: auto; padding-right: 2px; }
+.att-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--glass-border); border-radius: 10px; padding: 7px 10px; background: var(--overlay); }
+.att-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 7px; cursor: pointer; flex-shrink: 0; background: var(--overlay-2); }
+.att-ico { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; background: var(--overlay-2); border-radius: 7px; cursor: pointer; }
+.att-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-name:hover { color: var(--accent); text-decoration: underline; }
+.att-size { font-size: 11px; flex-shrink: 0; }
+.att-item .del { flex-shrink: 0; }
+.att-empty { padding: 18px 0; }
+
+@media (max-width: 640px) {
+  .modal { width: 100%; max-height: 90vh; }
+  .modal-scroll { padding: 0 14px; }
+  .modal-title { margin-left: 14px; }
+  .modal-meta { margin-left: 14px; margin-right: 14px; }
+  .modal-head { padding-left: 14px; }
+  .modal-foot { padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+  .att-item { flex-wrap: wrap; }
+  .att-name { min-width: 120px; }
+  .att-list { max-height: 200px; }
+}
 </style>
