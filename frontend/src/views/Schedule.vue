@@ -3,9 +3,9 @@
     <div class="head-row">
       <h3 class="section-title" style="margin:0">班表展示 <span class="section-sub">{{ deptName }}</span></h3>
       <div class="head-actions">
-        <select v-if="auth.isSuper" v-model="importDeptId" class="glass-input dept-filter" :class="{ 'req-miss': !importDeptId }" style="max-width:170px;padding:8px 10px;" title="导入到哪个部门（必选）">
-          <option :value="0">— 请选择部门 —</option>
-          <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
+        <select v-if="auth.canManage" v-model="importDeptId" class="glass-input dept-filter" :class="{ 'req-miss': !importDeptId }" :disabled="!auth.isSuper" style="max-width:170px;padding:8px 10px;" :title="auth.isSuper ? '导入到哪个部门（必选）' : '将导入到你管理的部门：' + (auth.user?.dept?.name || '本部门')">
+          <option v-if="auth.isSuper" :value="0">— 请选择部门 —</option>
+          <option v-for="d in importDeptOptions" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
         </select>
         <button v-if="auth.canManage" class="btn ghost" :disabled="sImporting" @click="$refs.schedFile.click()">{{ sImporting ? '导入中…' : '⬆ 导入班表' }}</button>
         <button v-if="auth.canManage" class="btn ghost" :disabled="sExporting" @click="exportSchedules">{{ sExporting ? '导出中…' : '⬇ 导出' }}</button>
@@ -540,13 +540,18 @@ async function remove(s) {
   try { await api.del(`/schedules/${s.id}`); await load() } catch (e) { alert(e.response?.data?.error || '删除失败') }
 }
 
-// 班表导入：必须显式选择目标部门（不设默认值，避免沿用账号所属部门而导错）
+// 班表导入：超管必须显式选择目标部门；部门管理员默认导入到自己管理的部门（与新增排班一致）
 const importDeptId = ref(0)
+const importDeptOptions = computed(() => {
+  if (auth.isSuper) return deptOptions(departments.value)
+  const mine = (departments.value || []).find((d) => d.id === auth.user?.dept_id)
+  return mine ? [mine] : []
+})
 const sImporting = ref(false)
 async function uploadScheduleCSV(e) {
   const file = e.target.files && e.target.files[0]
   if (!file) return
-  const target = importDeptId.value
+  const target = importDeptId.value || (!auth.isSuper ? auth.user?.dept_id : 0)
   if (!target) { alert('请先在「导入到部门」里选择目标部门，再上传文件。'); e.target.value = ''; return }
   const dept = departments.value.find((x) => x.id === target)
   if (!confirm(`将把「${file.name}」导入到部门「${dept ? dept.name : target}」，确认？`)) { e.target.value = ''; return }
@@ -724,7 +729,10 @@ const matrixTot = computed(() => {
   return { early, mid, evening, night, rest, hours: Math.round(hours * 10) / 10 }
 })
 
-onMounted(load)
+onMounted(() => {
+  if (!auth.isSuper && auth.user?.dept_id) importDeptId.value = auth.user.dept_id
+  load()
+})
 </script>
 
 <style scoped>
