@@ -28,7 +28,7 @@ func Init() {
 		JWTSecret:  []byte(getEnv("JWT_SECRET", "shift-workbench-secret-change-me")),
 		AESKey:     []byte(padKey(getEnv("AES_KEY", "shift-workbench-aes-key-2024"))),
 		DBPath:     getEnv("DB_PATH", "shift_workbench.db"),
-		AppVersion: "v0.5.0",
+		AppVersion: "v0.6.0",
 		BackupDir:  getEnv("BACKUP_DIR", "backups"),
 	}
 }
