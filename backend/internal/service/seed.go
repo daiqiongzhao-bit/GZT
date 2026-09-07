@@ -1,9 +1,6 @@
 package service
 
 import (
-	"encoding/json"
-	"time"
-
 	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
@@ -11,7 +8,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Seed 首次启动时初始化演示数据
+// Seed 首次启动时初始化基础数据（仅当用户表为空、即全新空库时执行一次）。
+// 只创建管理端必需的默认部门与超管账号；**不再种任何演示人员/演示班表**，
+// 避免部署到正式环境后还要手动清理林晓/陈默等演示范例。已导入过数据的库不受影响。
 func Seed() {
 	var userCount int64
 	db.DB.Model(&models.User{}).Count(&userCount)
@@ -22,10 +21,8 @@ func Seed() {
 	// 默认部门：信息部（admin 默认归属）、客服部、运维部
 	deptIT := models.Department{Name: "信息部"}
 	db.DB.Create(&deptIT)
-	dept := models.Department{Name: "客服部"}
-	db.DB.Create(&dept)
-	deptOps := models.Department{Name: "运维部"}
-	db.DB.Create(&deptOps)
+	db.DB.Create(&models.Department{Name: "客服部"})
+	db.DB.Create(&models.Department{Name: "运维部"})
 
 	// 默认超级管理员（admin / admin123），便于首次登录；must_change_pwd=true 强制首次登录即修改为强密码
 	hash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
@@ -38,32 +35,6 @@ func Seed() {
 		MustChangePwd: true,
 	}
 	db.DB.Create(&super)
-
-	// 演示人员：创建为真实用户，使其出现在「人员管理」并可被删除/管理
-	// （旧版仅以排班姓名字符串存在，导致只能在「今日当班」看到、却无法在人员管理删除）
-	for _, nm := range []string{"林晓", "陈默"} {
-		ph, _ := bcrypt.GenerateFromPassword([]byte("Cdf@123456"), bcrypt.DefaultCost)
-		db.DB.Create(&models.User{
-			Username:     "demo_" + nm,
-			PasswordHash: string(ph),
-			Name:         nm,
-			EmpNo:        "demo_" + nm,
-			Role:         models.RoleExecutor,
-			DeptID:       dept.ID,
-		})
-	}
-
-	// 演示班表
-	today := time.Now()
-	fmtDate := func(d time.Time) string { return d.Format("2006-01-02") }
-	people1, _ := json.Marshal([]string{"林晓", "陈默"})
-	people2, _ := json.Marshal([]string{"陈默"})
-	people3, _ := json.Marshal([]string{"林晓"})
-	people4, _ := json.Marshal([]string{"陈默"})
-	db.DB.Create(&models.Schedule{Date: fmtDate(today), Shift: "早班", People: string(people1), DeptID: dept.ID})
-	db.DB.Create(&models.Schedule{Date: fmtDate(today.AddDate(0, 0, 1)), Shift: "晚班", People: string(people2), DeptID: dept.ID})
-	db.DB.Create(&models.Schedule{Date: fmtDate(today.AddDate(0, 0, 2)), Shift: "早班", People: string(people3), DeptID: dept.ID})
-	db.DB.Create(&models.Schedule{Date: fmtDate(today.AddDate(0, 0, -1)), Shift: "夜班", People: string(people4), DeptID: dept.ID})
 
 	// 企业设置
 	db.DB.Create(&models.Setting{
