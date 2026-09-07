@@ -90,11 +90,25 @@
           <div class="shift-cfg">
             <div class="shift-cfg-list">
               <span v-for="sc in shiftsOf(d.id)" :key="sc.id" class="shift-chip">
-                <i class="sc-dot" :style="{ background: shiftColorCss(sc.color_key) }" title="点击切换矩阵配色" @click="cycleShiftColor(sc)"></i>
+                <i class="sc-dot" :style="{ background: shiftColorCss(sc.color_key) }" title="点击更换颜色" @click.stop="openColorPicker(sc)"></i>
                 {{ sc.name }} {{ sc.start_time }}-{{ sc.end_time }}
                 <button class="mini" @click="delShift(sc)">×</button>
               </span>
               <span v-if="!shiftsOf(d.id).length" class="shift-none">尚未配置班次，添加一个</span>
+            </div>
+            <div v-if="colorPicker && colorPicker.sc && colorPicker.sc.dept_id === d.id" class="shift-picker" @click.stop>
+              <span class="shift-picker-title">选择颜色</span>
+              <div class="shift-picker-row">
+                <i class="sc-dot" :class="{ on: (colorPicker.sc.color_key || '') === '' }" style="background:#cbd5e1" title="系统默认（无自定义色）" @click="pickColor('')"></i>
+                <i v-for="pc in shiftPalette" :key="pc.key" class="sc-dot" :class="{ on: colorPicker.sc.color_key === pc.key }" :style="{ background: pc.css }" :title="pc.name" @click="pickColor(pc.key)"></i>
+              </div>
+              <div class="shift-picker-row">
+                <label class="fld" style="font-size:11px;">自定义</label>
+                <input type="color" :value="customHex(colorPicker.sc.color_key)" @input="onCustomColor($event.target.value)" class="sc-color" title="选自定义颜色" />
+                <input v-model="customHexText" type="text" maxlength="7" placeholder="#3b82f6" class="glass-input sm sc-hex" @keyup.enter="pickColor(customHexText)" />
+                <button class="btn ghost sm" @click="pickColor(customHexText)">应用</button>
+                <button class="btn ghost sm" @click="colorPicker = null">关闭</button>
+              </div>
             </div>
             <div class="shift-add">
               <input v-model="scForm.name" class="glass-input sm" placeholder="班次名，如 中班" />
@@ -102,7 +116,9 @@
               <span class="shift-sep">至</span>
               <input v-model="scForm.end_time" type="time" class="glass-input sm" />
               <div class="shift-palette" title="整月矩阵里的格子颜色">
+                <i class="sc-dot" :class="{ on: !scForm.color_key }" style="background:#cbd5e1" title="系统默认色" @click="scForm.color_key = ''"></i>
                 <i v-for="pc in shiftPalette" :key="pc.key" class="sc-dot" :class="{ on: scForm.color_key === pc.key }" :style="{ background: pc.css }" :title="pc.name" @click="scForm.color_key = pc.key"></i>
+                <input type="color" :value="customHex(scForm.color_key)" @input="scForm.color_key = $event.target.value" class="sc-color" title="选自定义颜色" />
                 <span class="shift-palette-tip">格子色</span>
               </div>
               <button class="btn ghost sm" @click="addShift(d)">添加班次</button>
@@ -569,24 +585,53 @@ async function loadShiftConfigs() { shiftConfigs.value = await api.get('/shift-c
 const scForm = reactive({ name: '', start_time: '09:00', end_time: '18:00', color_key: '' })
 function shiftsOf(deptId) { return shiftConfigs.value.filter((sc) => sc.dept_id === deptId) }
 // 整月矩阵班次配色色板（key 与 Schedule 矩阵色类对应；空=用系统默认色）
+// 自定义颜色：color_key 以 '#' 开头视为 hex 直渲；否则按预定义 key 走 CSS 类
 const SHIFT_COLOR_MAP = { blue: '#4f46e5', green: '#059669', orange: '#d97706', purple: '#8b5cf6' }
 const shiftPalette = [
   { key: 'blue',   name: '蓝（默认早班色）', css: '#4f46e5' },
   { key: 'green',  name: '绿', css: '#059669' },
-  { key: 'orange', name: '橙（晚班/夜班默认色）', css: '#d97706' },
+  { key: 'orange', name: '橙（晚班默认色）', css: '#d97706' },
   { key: 'purple', name: '紫（夜班默认色）', css: '#8b5cf6' }
 ]
-function shiftColorCss(key) { return SHIFT_COLOR_MAP[key] || '#cbd5e1' }
-// 点击已建班次的色点：在 4 色板里循环切换并保存
-async function cycleShiftColor(sc) {
-  const keys = ['', ...shiftPalette.map(p => p.key)] // 从默认开始循环
-  const i = keys.indexOf(sc.color_key || '')
-  const next = keys[(i + 1) % keys.length]
+// 解析 color_key：hex 直渲 / 预定义 key 取 css / 空 → 默认灰
+function shiftColorCss(key) {
+  if (!key) return '#cbd5e1'
+  if (key.startsWith('#')) return key
+  return SHIFT_COLOR_MAP[key] || '#cbd5e1'
+}
+// 提取合法的 hex（用于 <input type="color"> 默认值）
+function customHex(key) {
+  if (key && /^#[0-9a-fA-F]{6}$/.test(key)) return key
+  return '#4f46e5'
+}
+// 已建班次色点：弹出颜色选择器（4 预设 + 默认色 + 自定义 hex）
+const colorPicker = ref(null) // { sc }
+const customHexText = ref('#4f46e5')
+function openColorPicker(sc) {
+  customHexText.value = /^#[0-9a-fA-F]{6}$/.test(sc.color_key || '') ? sc.color_key : '#4f46e5'
+  colorPicker.value = { sc }
+}
+function onCustomColor(hex) {
+  if (!colorPicker.value) return
+  customHexText.value = hex
+  pickColor(hex)
+}
+async function pickColor(key) {
+  if (!colorPicker.value) return
+  const sc = colorPicker.value.sc
   try {
-    await api.post('/shift-configs', { id: sc.id, dept_id: sc.dept_id, name: sc.name, start_time: sc.start_time, end_time: sc.end_time, color_key: next })
-    sc.color_key = next
+    await api.post('/shift-configs', { id: sc.id, dept_id: sc.dept_id, name: sc.name, start_time: sc.start_time, end_time: sc.end_time, color_key: key || '' })
+    sc.color_key = key || ''
     await loadShiftConfigs()
+    if (key) colorPicker.value.sc = shiftConfigs.value.find((x) => x.id === sc.id) || sc
   } catch (e) { alert(e.response?.data?.error || '改色失败') }
+}
+// 点击空白关闭选择器
+function closeColorPicker(e) {
+  if (!colorPicker.value) return
+  // 命中 popover 内部不关
+  if (e.target.closest('.shift-picker') || e.target.closest('.shift-chip') || e.target.closest('.sc-dot')) return
+  colorPicker.value = null
 }
 async function addShift(d) {
   const name = scForm.name.trim()
@@ -972,8 +1017,11 @@ async function importUsers(e) {
 }
 
 onMounted(async () => {
-  // 点击页面空白处收起人员操作菜单
-  document.addEventListener('click', () => { opsOpen.value = 0 })
+  // 点击页面空白处收起人员操作菜单 / 关闭班次颜色选择器
+  document.addEventListener('click', (e) => {
+    opsOpen.value = 0
+    closeColorPicker(e)
+  })
   await loadBrand()
   if (auth.canManage) {
     await Promise.all([loadDepts(), loadUsers(), loadHooks(), loadLogs()])
@@ -1123,6 +1171,23 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .sc-dot.on { border-color: #111827; }
 .shift-palette { display: inline-flex; align-items: center; gap: 5px; }
 .shift-palette-tip { font-size: 11px; color: var(--text-faint); margin-left: 2px; }
+/* 自定义颜色选择器（点击已建班次色点弹出） */
+.sc-color { width: 28px; height: 28px; padding: 0; border: 1px solid var(--glass-border); border-radius: 8px; background: transparent; cursor: pointer; flex: none; }
+.sc-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.sc-color::-webkit-color-swatch { border: none; border-radius: 6px; }
+.shift-picker {
+  width: 100%;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px;
+  margin: 4px 0 2px;
+  background: var(--overlay);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+}
+.shift-picker-title { font-size: 11.5px; color: var(--text-faint); }
+.shift-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shift-picker-row .fld { margin: 0; }
+.sc-hex { width: 96px; font-family: ui-monospace, SFMono-Regular, monospace; }
 .shift-none { font-size: 12px; color: var(--text-faint); }
 .shift-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shift-add .glass-input.sm { max-width: 120px; padding: 7px 10px; font-size: 13px; }

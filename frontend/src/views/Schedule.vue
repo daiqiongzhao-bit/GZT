@@ -169,7 +169,7 @@
               <td class="sticky-col name">{{ row.name }}</td>
               <td class="sticky-col emp">{{ row.emp_no }}</td>
               <td v-for="d in matrixDays" :key="d" class="day-cell" :class="{ wknd: matrixIsWeekend(d) }">
-                <span v-if="row.cells[d]" class="mc" :class="shiftColor(row.cells[d])">{{ matrixCode(row.cells[d]) }}</span>
+                <span v-if="row.cells[d]" class="mc" :class="shiftColor(row.cells[d])" :style="matrixCustomStyle(row.cells[d]) || null">{{ matrixCode(row.cells[d]) }}</span>
               </td>
               <td class="sum-cell">{{ row.tot.early }}</td>
               <td class="sum-cell">{{ row.tot.mid }}</td>
@@ -631,13 +631,33 @@ const matrixDaysInMonth = computed(() => new Date(viewYear.value, viewMonth.valu
 const matrixDays = computed(() => { const n = matrixDaysInMonth.value; return Array.from({ length: n }, (_, i) => i + 1) })
 const matrixIsWeekend = (d) => { const wd = new Date(viewYear.value, viewMonth.value, d).getDay(); return wd === 0 || wd === 6 }
 function matrixCode(s) { return shiftShort(s) }
-// 整月矩阵班次配色：优先用该部门班次配置的 color_key（Settings-部门管理可改），否则用系统默认色
+// 整月矩阵班次配色：hex 自定义色直渲 / 预定义 key 走 CSS 类 / 无配置 → 系统默认色
 const MATRIX_COLOR_MAP = { blue: 'accent', green: 'ok', orange: 'warn', purple: 'accent-3' }
 function matrixShiftClass(name) {
   const did = matrixDeptId.value
   const sc = shiftConfigs.value.find((x) => x.dept_id === did && x.name === name)
-  if (sc && sc.color_key) return MATRIX_COLOR_MAP[sc.color_key] || shiftClass(name)
-  return shiftClass(name) // 默认：早=蓝、中=绿、晚=橙、夜=紫
+  const key = sc && sc.color_key ? sc.color_key : ''
+  if (key.startsWith('#')) return 'mc-custom' // 走内联 style
+  return MATRIX_COLOR_MAP[key] || shiftClass(name) // 默认：早=蓝、中=绿、晚=橙、夜=紫
+}
+// 自定义 hex 颜色 → { background, color, borderColor }（柔化背景 + 边框 + 深色文字）
+function matrixCustomStyle(name) {
+  const did = matrixDeptId.value
+  const sc = shiftConfigs.value.find((x) => x.dept_id === did && x.name === name)
+  const key = sc && sc.color_key ? sc.color_key : ''
+  if (!key.startsWith('#')) return null
+  return hexToSoftStyle(key)
+}
+function hexToSoftStyle(hex) {
+  const h = hex.replace('#', '').toLowerCase()
+  if (!/^[0-9a-f]{6}$/.test(h)) return null
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
+  // 背景：原色 alpha 14%；边框：alpha 32%；文字：原色
+  return {
+    background: `rgba(${r},${g},${b},0.14)`,
+    border: '1px solid ' + `rgba(${r},${g},${b},0.32)`,
+    color: `rgb(${r},${g},${b})`
+  }
 }
 function shiftColor(s) { return matrixShiftClass(s) }
 
