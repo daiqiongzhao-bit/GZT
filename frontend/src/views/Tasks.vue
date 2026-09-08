@@ -168,7 +168,7 @@
         <button class="btn ghost form-close" @click="showImport = false">收起</button>
       </div>
       <textarea v-model="importText" class="glass-input import-ta" rows="9"
-        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 晚班 / 早晚（默认全员）&#10;类型：每日 / 每月 / 单次（默认每日）&#10;时间/截止：每日填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每日 | 09:00&#10;晚班盘点 | 晚班 | 每日 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
+        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 晚班 / 早晚（默认全员）&#10;类型：每周 / 每月 / 单次（默认每周）&#10;时间/截止：每周填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每周 | 09:00&#10;晚班盘点 | 晚班 | 每周 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
       <div class="import-tip">将识别 {{ importCount }} 条有效任务</div>
       <div class="import-file">
         <span class="fld">导入到部门 <em class="req">必选</em></span>
@@ -401,7 +401,7 @@ async function exportTasks() {
   } catch { alert('导出失败') }
   finally { exporting.value = false }
 }
-const typeMap = { '每日': 'daily', '每天': 'daily', '每月': 'monthly', '单次': 'once', '临时': 'once', 'daily': 'daily', 'monthly': 'monthly', 'once': 'once' }
+const typeMap = { '每周': 'daily', '每日': 'daily', '每天': 'daily', '每月': 'monthly', '单次': 'once', '临时': 'once', 'daily': 'daily', 'monthly': 'monthly', 'once': 'once' }
 const shiftMap = { '早班': '早班', '晚班': '晚班', '早晚': '早晚', '早晚班': '早晚', '全员': '全员', '所有人': '全员' }
 // 解析导入文本 -> 任务对象列表（标题 | 班次 | 类型 | 时间）
 const parsedTasks = computed(() => {
