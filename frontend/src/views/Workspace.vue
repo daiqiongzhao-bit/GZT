@@ -50,6 +50,30 @@
             <label class="fld">内容</label>
             <textarea v-model="kForm.content" class="glass-input ta" rows="6" placeholder="把方法、步骤、注意事项写下来，方便以后/同事查阅"></textarea>
           </div>
+          <!-- 附件区：编辑现有条目直接显示，新建时提示先保存 -->
+          <div class="edit-attach">
+            <div class="att-head">
+              <span class="att-title">附件（{{ kAtts.length }}）</span>
+              <div v-if="kForm.id" class="att-upload">
+                <span v-if="uploading" class="dim up-txt">上传中…</span>
+                <label class="btn sm">+ 上传文件
+                  <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
+                </label>
+              </div>
+            </div>
+            <p v-if="kForm.id" class="att-hint dim">支持任意文件类型（图片可预览），单文件 ≤ 100MB</p>
+            <p v-else class="att-hint dim">先保存条目，再上传图片 / 文档等附件</p>
+            <div v-if="kForm.id && kAtts.length" class="att-list">
+              <div v-for="a in kAtts" :key="a.id" class="att-item">
+                <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                <button class="del danger" @click="removeAtt(a)">删除</button>
+              </div>
+            </div>
+            <div v-else-if="kForm.id" class="empty att-empty">还没有附件</div>
+          </div>
           <div class="fg2 bot">
             <div class="scope-switch">
               <label class="fld">可见范围</label>
@@ -267,13 +291,22 @@
           </div>
           <div class="fg2">
             <div>
-              <label class="fld">接收人 *</label>
-              <select v-model="hForm.assignee_id" class="glass-input" required>
-                <option value="" disabled>请选择系统人员</option>
-                <option v-for="u in users" :key="u.id" :value="u.id" :disabled="u.id === auth.user?.id">
-                  {{ u.name }}<template v-if="u.dept">（{{ u.dept.name }}）</template>
-                </option>
-              </select>
+              <label class="fld">接收人 * <span class="dim" style="font-weight:normal">（可多选）</span></label>
+              <div class="multi-pick">
+                <div v-if="hForm.assignee_ids.length" class="chips">
+                  <span v-for="uid in hForm.assignee_ids" :key="uid" class="chip pick-chip">
+                    {{ userNameOf(uid) }}<button type="button" class="x" @click="toggleAssignee(uid)" aria-label="移除">×</button>
+                  </span>
+                </div>
+                <button type="button" class="btn ghost sm" @click="showPicker = !showPicker">{{ showPicker ? '收起选择' : '+ 添加接收人' }}</button>
+                <div v-if="showPicker" class="picker-list">
+                  <label v-for="u in pickableUsers" :key="u.id" class="picker-row">
+                    <input type="checkbox" :checked="hForm.assignee_ids.includes(u.id)" @change="toggleAssignee(u.id)" />
+                    <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
+                  </label>
+                  <div v-if="!pickableUsers.length" class="dim picker-empty">没有可选的接收人</div>
+                </div>
+              </div>
             </div>
           </div>
           <div>
@@ -305,7 +338,8 @@
                 </span>
               </div>
               <div class="h-meta dim">
-                {{ hScope === 'inbox' ? '来自' : '发给' }} <b>{{ hScope === 'inbox' ? h.sender_name : h.assignee_name }}</b>
+                {{ hScope === 'inbox' ? '来自' : '发给' }} <b>{{ hScope === 'inbox' ? h.sender_name : assigneeNamesText(h) }}</b>
+                <template v-if="hScope === 'outbox' && parseAssigneeNames(h).length > 1">（{{ parseAssigneeNames(h).length }} 人）</template>
                 · {{ fmtTime(h.created_at) }}
                 <template v-if="h.status === 'done'"> · 完成于 {{ fmtTime(h.completed_at) }}</template>
               </div>
@@ -321,8 +355,8 @@
               <div v-if="h.status === 'done' && h.note" class="h-note done-note">
                 <span class="sec-label">完成说明</span>{{ h.note }}
               </div>
-              <!-- 操作区：接收人可推进 -->
-              <div v-if="h.assignee_id === auth.user?.id && h.status !== 'done'" class="h-actions">
+              <!-- 操作区：任一接收人可推进 -->
+              <div v-if="isAssigneeOf(h) && h.status !== 'done'" class="h-actions">
                 <template v-if="h.status === 'pending'">
                   <button class="btn sm ok" @click="setHStatus(h, 'in_progress')">👌 接手处理</button>
                 </template>
@@ -331,7 +365,7 @@
                 </template>
               </div>
               <div v-if="h.status === 'in_progress'" class="h-actor-edit">
-                <button v-if="h.assignee_id === auth.user?.id" class="btn sm" @click="promptNote(h)">✍️ 更新进度备注</button>
+                <button v-if="isAssigneeOf(h)" class="btn sm" @click="promptNote(h)">✍️ 更新进度备注</button>
               </div>
             </div>
           </div>
@@ -405,20 +439,35 @@ async function loadCats() {
 }
 function openNewK() {
   Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department' })
+  kAtts.value = []
   editingK.value = true
 }
 function openEditK(k) {
   Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope })
   editingK.value = true
+  loadKAtts(k.id)
 }
-function cancelEditK() { editingK.value = false }
+function cancelEditK() { editingK.value = false; kAtts.value = [] }
 async function saveK() {
   savingK.value = true
   try {
-    if (kForm.id) { await api.put('/workspace/knowledge/' + kForm.id, kForm); toast('已保存') }
-    else { await api.post('/workspace/knowledge', kForm); toast('已创建') }
-    editingK.value = false
+    let savedId = kForm.id
+    if (kForm.id) {
+      await api.put('/workspace/knowledge/' + kForm.id, kForm)
+      toast('已保存')
+    } else {
+      const created = await api.post('/workspace/knowledge', kForm)
+      savedId = created && created.id ? created.id : null
+      toast('已创建，正在打开详情…')
+    }
+    // 刷新一次列表（同时拿到新条目对象供详情弹窗用）
     await Promise.all([loadK(), loadCats()])
+    // 新建：自动跳转到详情弹窗，让用户立刻可上传附件
+    if (savedId && !kForm.id) {
+      const fresh = (knowledge.value || []).find((x) => x.id === savedId)
+      editingK.value = false
+      if (fresh) openDetailK(fresh)
+    }
   } catch (e) { toast(e.response?.data?.error || '保存失败', 'error') }
   finally { savingK.value = false }
 }
@@ -501,20 +550,24 @@ async function previewAtt(a) {
 async function uploadAtts(e) {
   const files = Array.from(e.target.files || [])
   e.target.value = ''
-  if (!files.length || !viewK.value) return
+  // 既支持在详情弹窗里上传，也支持在编辑表单里上传
+  const kid = viewK.value ? viewK.value.id : (kForm.id || 0)
+  if (!files.length || !kid) return
   uploading.value = true
   try {
     for (const f of files) {
-      await api.upload('/workspace/knowledge/' + viewK.value.id + '/attachments', f)
+      await api.upload('/workspace/knowledge/' + kid + '/attachments', f)
     }
     toast('已上传 ' + files.length + ' 个附件')
-    loadKAtts(viewK.value.id)
+    loadKAtts(kid)
   } catch (err) { toast(err.response?.data?.error || '上传失败', 'error') }
   finally { uploading.value = false }
 }
 async function removeAtt(a) {
   if (!confirm('删除附件「' + a.file_name + '」？')) return
-  try { await api.del('/workspace/knowledge_attachments/' + a.id); toast('已删除'); loadKAtts(viewK.value.id) }
+  // 既支持在详情弹窗里删除，也支持在编辑表单里删除
+  const kid = viewK.value ? viewK.value.id : (kForm.id || 0)
+  try { await api.del('/workspace/knowledge_attachments/' + a.id); toast('已删除'); if (kid) loadKAtts(kid) }
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
 }
 function fmtSize(n) {
@@ -619,11 +672,49 @@ const handovers = ref([])
 const hScope = ref('inbox')
 const editingH = ref(false)
 const savingH = ref(false)
-const hForm = reactive({ title: '', assignee_id: '', from_progress: '', todo: '' })
+const showPicker = ref(false)
+const hForm = reactive({ title: '', assignee_ids: [], from_progress: '', todo: '' })
 const inboxUnread = computed(() => handovers.value.filter((h) => h.status === 'pending').length)
 
 const statusLabel = (s) => ({ pending: '待接手', in_progress: '处理中', done: '已完成' }[s] || s)
 const statusChip = (s) => ({ pending: 'warn', in_progress: 'accent', done: 'ok' }[s] || '')
+
+// 解析 AssigneeNames 数组（容错：JSON 失败时回退到 AssigneeName 单值）
+function parseAssigneeNames(h) {
+  if (h.assignee_names) {
+    try { const a = JSON.parse(h.assignee_names); if (Array.isArray(a) && a.length) return a } catch {}
+  }
+  if (h.assignee_name) return [h.assignee_name]
+  return []
+}
+// 列表/详情展示用
+function assigneeNamesText(h) { return parseAssigneeNames(h).join('、') }
+// 操作区权限：当前用户是否在该交接的接收人列表中（兼容旧数据 assignee_id）
+function isAssigneeOf(h) {
+  const me = auth.user?.id
+  if (!me) return false
+  if (h.assignee_id === me) return true
+  if (h.assignee_ids) {
+    try {
+      const arr = JSON.parse(h.assignee_ids)
+      if (Array.isArray(arr) && arr.includes(me)) return true
+    } catch {}
+  }
+  return false
+}
+// 把 ID 列表 / 名字列表 / 旧单字段 兼容解析
+function userNameOf(uid) {
+  const u = users.value.find((x) => x.id === uid)
+  return u ? u.name : ('#' + uid)
+}
+// 接收人可选列表：剔除自己、冻结的
+const pickableUsers = computed(() => users.value.filter((u) => !u.frozen && u.id !== auth.user?.id))
+function toggleAssignee(uid) {
+  const arr = hForm.assignee_ids
+  const i = arr.indexOf(uid)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(uid)
+}
 
 async function loadUsers() {
   try {
@@ -637,17 +728,20 @@ async function loadHandovers() {
 }
 function setHScope(s) { hScope.value = s; loadHandovers() }
 function openNewH() {
-  Object.assign(hForm, { title: '', assignee_id: '', from_progress: '', todo: '' })
+  Object.assign(hForm, { title: '', assignee_ids: [], from_progress: '', todo: '' })
+  showPicker.value = false
   editingH.value = true
   loadUsers()
 }
-function cancelEditH() { editingH.value = false }
+function cancelEditH() { editingH.value = false; showPicker.value = false }
 async function saveH() {
+  if (hForm.assignee_ids.length === 0) { toast('请至少选择一名接收人', 'error'); return }
   savingH.value = true
   try {
-    await api.post('/workspace/handovers', hForm)
-    toast('交接已发出，接收人会收到通知')
+    await api.post('/workspace/handovers', { title: hForm.title, from_progress: hForm.from_progress, todo: hForm.todo, assignee_ids: hForm.assignee_ids })
+    toast(hForm.assignee_ids.length > 1 ? `已发出，${hForm.assignee_ids.length} 位接收人会收到通知` : '交接已发出，接收人会收到通知')
     editingH.value = false
+    showPicker.value = false
     loadHandovers()
   } catch (e) { toast(e.response?.data?.error || '发出失败', 'error') }
   finally { savingH.value = false }
@@ -801,6 +895,22 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .modal-scroll { flex: 1; overflow-y: auto; padding: 0 16px; }
 .modal-body { font-size: 13.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hairline); margin-top: 12px; flex-shrink: 0; }
+
+/* 接收人多选 */
+.multi-pick { display: flex; flex-direction: column; gap: 8px; }
+.multi-pick .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.multi-pick .pick-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); padding: 4px 6px 4px 10px; border-radius: 999px; font-size: 12.5px; }
+.multi-pick .pick-chip .x { background: transparent; border: 0; color: inherit; font-size: 14px; line-height: 1; cursor: pointer; padding: 0 4px; opacity: .6; }
+.multi-pick .pick-chip .x:hover { opacity: 1; }
+.multi-pick .picker-list { max-height: 220px; overflow: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 6px 8px; background: var(--bg-soft, rgba(255,255,255,.6)); }
+.multi-pick .picker-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
+.multi-pick .picker-row:hover { background: var(--hover, rgba(0,0,0,.04)); }
+.multi-pick .picker-name { font-size: 13px; }
+.multi-pick .picker-empty { padding: 8px 4px; font-size: 12.5px; }
+
+/* 编辑表单内嵌附件区 */
+.edit-attach { border: 1px dashed var(--hairline); border-radius: 10px; padding: 10px 12px; background: var(--bg-soft, rgba(255,255,255,.45)); }
+.edit-attach .att-hint { margin: 4px 0 8px; font-size: 12px; }
 
 /* 附件区 */
 .modal-attach { margin-top: 14px; border-top: 1px solid var(--hairline); padding-top: 12px; }

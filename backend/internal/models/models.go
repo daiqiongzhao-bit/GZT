@@ -297,19 +297,22 @@ type WorkLog struct {
 }
 
 // WorkHandover 交接接力：把"做到哪 + 还没做完"转给接收人继续
+// 支持多人接收：AssigneeIDs 存全部接收人 ID（JSON 数组），AssigneeID 保留为第一个接收人（兼容旧数据/旧版接口）
 type WorkHandover struct {
-	ID           uint           `json:"id" gorm:"primaryKey"`
-	Title        string         `json:"title" gorm:"size:255;not null"`
-	FromProgress string         `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
-	Todo         string         `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
-	Scope        WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
-	SenderID     uint           `json:"sender_id" gorm:"index"` // 发出人
-	SenderName   string         `json:"sender_name" gorm:"size:64"`
-	AssigneeID   uint           `json:"assignee_id" gorm:"index"` // 接收人（系统注册人员）
-	AssigneeName string         `json:"assignee_name" gorm:"size:64"`
-	DeptID       uint           `json:"dept_id" gorm:"index"` // 发出人所属部门
-	Status       string         `json:"status" gorm:"size:16;default:pending"`
-	Note         string         `json:"note" gorm:"type:text"` // 接收人完成时的备注
-	CompletedAt  *time.Time     `json:"completed_at"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID            uint       `json:"id" gorm:"primaryKey"`
+	Title         string     `json:"title" gorm:"size:255;not null"`
+	FromProgress  string     `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
+	Todo          string     `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
+	Scope         WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
+	SenderID      uint       `json:"sender_id" gorm:"index"`        // 发出人
+	SenderName    string     `json:"sender_name" gorm:"size:64"`
+	AssigneeID    uint       `json:"assignee_id" gorm:"index"`      // 主接收人（第一个，兼容）
+	AssigneeName  string     `json:"assignee_name" gorm:"size:64"`   // 主接收人姓名
+	AssigneeIDs   string     `json:"assignee_ids" gorm:"type:text"`  // 全部接收人 ID（JSON 数组）
+	AssigneeNames string     `json:"assignee_names" gorm:"type:text"`// 全部接收人姓名（JSON 数组，给前端直接展示）
+	DeptID        uint       `json:"dept_id" gorm:"index"`          // 发出人所属部门
+	Status        string     `json:"status" gorm:"size:16;default:pending"`
+	Note          string     `json:"note" gorm:"type:text"`         // 接收人完成时的备注
+	CompletedAt   *time.Time `json:"completed_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }

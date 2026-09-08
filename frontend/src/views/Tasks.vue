@@ -436,12 +436,9 @@ const recordTaskTitle = ref('')
 // 班次文案/样式
 function shiftText(s) { return { '全员': '全员', '早班': '早班', '晚班': '晚班', '早晚': '早晚' }[s] || s }
 function shiftClass(s) { return { '全员': '', '早班': 'accent', '晚班': 'warn', '早晚': 'accent-3' }[s] || 'accent-3' }
-// 班次显示 + 时间段（匹配任务所属部门的班次配置）
+// 班次显示：只显示班次名（不附带时间段，列表更整洁；时间查看可看任务详情）
 function shiftLabel(t) {
-  const base = shiftText(t.shift)
-  if (t.shift === '全员' || t.shift === '早晚') return base
-  const sc = shiftConfigs.value.find((x) => x.dept_id === t.dept_id && x.name === t.shift)
-  return sc ? `${base} ${sc.start_time}-${sc.end_time}` : base
+  return shiftText(t.shift)
 }
 // 按周执行可读文案：week_days="1,3,5" → "周一、周三、周五"
 function weekLabelOf(wd) {

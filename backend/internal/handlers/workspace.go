@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -373,6 +375,7 @@ func DeleteWorkLog(c *gin.Context) {
 // ============================ 交接接力 ============================
 
 // handoverVisibleQ：本人相关（发送者或接收者）。非超管也仅能看与自己相关的交接。
+// 接收者包含主接收人 + AssigneeIDs JSON 数组中包含当前用户（多接收人兼容）
 func handoverVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 	cl := middleware.GetClaims(c)
 	if cl == nil {
@@ -381,7 +384,13 @@ func handoverVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 	if cl.Role == models.RoleSuperAdmin {
 		return q // 超管可看全部交接，便于统筹
 	}
-	return q.Where("sender_id = ? OR assignee_id = ?", cl.UserID, cl.UserID)
+	uidStr := fmt.Sprintf("%d", cl.UserID)
+	return q.Where("sender_id = ? OR assignee_id = ? OR assignee_ids LIKE ? OR assignee_ids LIKE ? OR assignee_ids LIKE ?",
+		cl.UserID, cl.UserID,
+		"%"+uidStr+",%",
+		"["+uidStr+",%",
+		"%"+uidStr+"]%",
+	)
 }
 
 // ListHandovers 交接列表。?role=inbox(我收到的) / outbox(我发出的) / 默认全部相关
@@ -391,7 +400,13 @@ func ListHandovers(c *gin.Context) {
 	q = handoverVisibleQ(c, q)
 	switch c.Query("role") {
 	case "inbox":
-		q = q.Where("assignee_id = ?", cl.UserID)
+		// 多接收人兼容：主接收人 OR JSON 数组里有当前用户 ID（SQLite 用 LIKE 匹配 "id":<UID> 形式）
+		uidStr := fmt.Sprintf("%d", cl.UserID)
+		q = q.Where("assignee_id = ? OR assignee_ids LIKE ? OR assignee_ids LIKE ? OR assignee_ids LIKE ?",
+			cl.UserID,
+			"%"+uidStr+",%",  // 数组中间：...,X,...
+			"["+uidStr+",%",  // 数组开头：[X, ...
+			"%"+uidStr+"]%")  // 数组结尾：... ,X]
 	case "outbox":
 		q = q.Where("sender_id = ?", cl.UserID)
 	}
@@ -403,17 +418,65 @@ func ListHandovers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 给前端回填 AssigneeNames（如果数据库里只填了 ID，没填姓名）
+	hydrateHandoverNames(&list)
 	c.JSON(http.StatusOK, list)
 }
 
-// CreateHandover 新建交接单（接收人为系统注册人员）
+// hydrateHandoverNames 列表回填：AssigneeNames 为空时，根据 AssigneeIDs 查表补全
+func hydrateHandoverNames(list *[]models.WorkHandover) {
+	idSet := map[uint]bool{}
+	for i := range *list {
+		hv := &(*list)[i]
+		if hv.AssigneeNames == "" && hv.AssigneeIDs != "" {
+			for _, id := range handoverAssigneeIDs(*hv) {
+				idSet[id] = true
+			}
+		}
+	}
+	if len(idSet) == 0 {
+		return
+	}
+	ids := make([]uint, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	var us []models.User
+	if err := db.DB.Select("id, name").Where("id IN ?", ids).Find(&us).Error; err != nil {
+		return
+	}
+	nameByID := make(map[uint]string, len(us))
+	for _, u := range us {
+		nameByID[u.ID] = u.Name
+	}
+	for i := range *list {
+		hv := &(*list)[i]
+		if hv.AssigneeNames != "" {
+			continue
+		}
+		allIDs := handoverAssigneeIDs(*hv)
+		names := make([]string, 0, len(allIDs))
+		for _, id := range allIDs {
+			if n, ok := nameByID[id]; ok {
+				names = append(names, n)
+			}
+		}
+		if len(names) > 0 {
+			nb, _ := json.Marshal(names)
+			hv.AssigneeNames = string(nb)
+		}
+	}
+}
+
+// CreateHandover 新建交接单（接收人可为多人；同时给所有接收人发通知）
 func CreateHandover(c *gin.Context) {
 	cl := middleware.GetClaims(c)
 	var req struct {
 		Title        string `json:"title"`
 		FromProgress string `json:"from_progress"` // 我做到哪了
 		Todo         string `json:"todo"`          // 需要接收人继续做的
-		AssigneeID   uint   `json:"assignee_id"`   // 接收人(系统人员ID)
+		AssigneeID   uint   `json:"assignee_id"`   // 单接收人（兼容旧版/单选）
+		AssigneeIDs  []uint `json:"assignee_ids"`  // 多接收人：系统人员 ID 数组
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -424,42 +487,80 @@ func CreateHandover(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "交接标题不能为空"})
 		return
 	}
-	if req.AssigneeID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择接收人"})
+	// 合并单/多接收人，去重
+	ids := append([]uint{}, req.AssigneeIDs...)
+	if req.AssigneeID != 0 {
+		ids = append(ids, req.AssigneeID)
+	}
+	seen := map[uint]bool{}
+	cleaned := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		cleaned = append(cleaned, id)
+	}
+	if len(cleaned) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择至少一个接收人"})
 		return
 	}
-	if req.AssigneeID == cl.UserID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "不能交接给自己"})
+	for _, id := range cleaned {
+		if id == cl.UserID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "不能交接给自己"})
+			return
+		}
+	}
+	// 校验所有接收人都是系统注册人员，收集姓名
+	var us []models.User
+	if err := db.DB.Where("id IN ?", cleaned).Find(&us).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 校验接收人是系统注册人员，并取其姓名
-	var u models.User
-	if err := db.DB.First(&u, req.AssigneeID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "接收人不存在"})
+	if len(us) != len(cleaned) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "部分接收人不存在，请刷新后重试"})
 		return
 	}
+	// 按请求顺序排序
+	nameByID := make(map[uint]string, len(us))
+	idOrder := make(map[uint]int, len(cleaned))
+	for i, id := range cleaned {
+		idOrder[id] = i
+	}
+	sort.SliceStable(us, func(i, j int) bool { return idOrder[us[i].ID] < idOrder[us[j].ID] })
+	orderedNames := make([]string, 0, len(us))
+	for _, u := range us {
+		orderedNames = append(orderedNames, u.Name)
+		nameByID[u.ID] = u.Name
+	}
+	idsJSON, _ := json.Marshal(cleaned)
+	namesJSON, _ := json.Marshal(orderedNames)
 	hv := models.WorkHandover{
-		Title:        req.Title,
-		FromProgress: req.FromProgress,
-		Todo:         req.Todo,
-		SenderID:     cl.UserID,
-		SenderName:   cl.Username,
-		AssigneeID:   u.ID,
-		AssigneeName: u.Name,
-		DeptID:       cl.DeptID,
-		Status:       models.HandoverPending,
+		Title:         req.Title,
+		FromProgress:  req.FromProgress,
+		Todo:          req.Todo,
+		SenderID:      cl.UserID,
+		SenderName:    cl.Username,
+		AssigneeID:    cleaned[0],       // 主接收人（兼容）
+		AssigneeName:  nameByID[cleaned[0]],
+		AssigneeIDs:   string(idsJSON),  // 全员 ID（JSON 数组）
+		AssigneeNames: string(namesJSON),// 全员姓名（JSON 数组）
+		DeptID:        cl.DeptID,
+		Status:        models.HandoverPending,
 	}
 	if err := db.DB.Create(&hv).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 写站内通知给接收人，确保"下个人能看到"
-	db.DB.Create(&models.Notification{
-		UserID: u.ID, Kind: "user", Title: "你收到一份新的工作交接",
-		Content: "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。",
-		ActorID: cl.UserID, ActorName: cl.Username,
-	})
-	addLog(c, cl.UserID, cl.Username, "创建交接→"+u.Name+": "+hv.Title)
+	// 给每个接收人写一条站内通知
+	for _, u := range us {
+		db.DB.Create(&models.Notification{
+			UserID: u.ID, Kind: "user", Title: "你收到一份新的工作交接",
+			Content: "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。",
+			ActorID: cl.UserID, ActorName: cl.Username,
+		})
+	}
+	addLog(c, cl.UserID, cl.Username, "创建交接→"+strings.Join(orderedNames, "、")+": "+hv.Title)
 	c.JSON(http.StatusOK, hv)
 }
 
@@ -471,8 +572,8 @@ func UpdateHandoverStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "交接不存在"})
 		return
 	}
-	// 仅发送人与接收人可操作；超管兜底
-	if hv.AssigneeID != cl.UserID && hv.SenderID != cl.UserID && cl.Role != models.RoleSuperAdmin {
+	// 仅发送人与任一接收人可操作；超管兜底（兼容旧数据：AssigneeID 非 0 即视为单接收人）
+	if !handoverIsAssignee(hv, cl.UserID) && hv.SenderID != cl.UserID && cl.Role != models.RoleSuperAdmin {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅发送人或接收人可更新"})
 		return
 	}
@@ -521,6 +622,42 @@ func DeleteHandover(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// handoverAssigneeIDs 返回交接的所有接收人 ID 列表（去重；含主接收人）
+func handoverAssigneeIDs(hv models.WorkHandover) []uint {
+	ids := make([]uint, 0, 4)
+	if hv.AssigneeID != 0 {
+		ids = append(ids, hv.AssigneeID)
+	}
+	if hv.AssigneeIDs == "" {
+		return ids
+	}
+	var arr []uint
+	if err := json.Unmarshal([]byte(hv.AssigneeIDs), &arr); err != nil {
+		return ids
+	}
+	seen := map[uint]bool{}
+	for _, id := range ids {
+		seen[id] = true
+	}
+	for _, id := range arr {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// handoverIsAssignee 判断用户是否是该交接的接收人之一
+func handoverIsAssignee(hv models.WorkHandover, userID uint) bool {
+	for _, id := range handoverAssigneeIDs(hv) {
+		if id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // ==================== 知识库：附件（图片/文档） ====================
