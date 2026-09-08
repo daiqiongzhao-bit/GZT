@@ -5,12 +5,17 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/handlers"
+	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
 	"shiftworkbench/internal/service"
@@ -23,9 +28,25 @@ var webFS embed.FS
 
 func main() {
 	config.Init()
-	if err := db.Init(); err != nil {
-		panic("数据库初始化失败: " + err.Error())
+
+	// 运行日志：默认写在数据库同目录的 runtime.log（即使数据库损坏也可排查）；
+	// 可用环境变量 LOG_FILE 覆盖。该文件随数据卷持久化（NAS 上为 /volume1/docker/gzt/data）。
+	logFile := os.Getenv("LOG_FILE")
+	if logFile == "" {
+		logFile = filepath.Join(filepath.Dir(config.C.DBPath), "runtime.log")
 	}
+	logger.Init(logFile)
+
+	if err := db.Init(); err != nil {
+		logger.Fatal("server", "数据库初始化失败: %v", err)
+	}
+	// 将系统日志同时落业务库（供界面「运行日志」查看）；DB 异常不影响主流程。
+	logger.RegisterDBSink(func(lvl logger.Level, source, message, detail string) {
+		if db.DB == nil {
+			return
+		}
+		_ = db.DB.Create(&models.SystemLog{Level: string(lvl), Source: source, Message: message, Detail: detail}).Error
+	})
 	service.Seed()
 	// 应用系统配置的时区（默认 Asia/Shanghai，可在设置中修改）
 	var st models.Setting
@@ -43,12 +64,20 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS())
+	r.Use(middleware.Recovery(), gin.Logger(), middleware.ErrorLogger(), middleware.CORS())
+
+	// 健康检查（供 Docker healthcheck / 群晖 Container Manager 探测，无需登录）
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok", "version": config.C.AppVersion})
+	})
 
 	api := r.Group("/api")
 	{
 		// 公开
 		api.POST("/auth/login", handlers.Login)
+		api.GET("/health", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "ok", "version": config.C.AppVersion})
+		})
 		api.GET("/settings", handlers.GetSetting)   // 企业信息公开可读（登录页展示）
 		api.GET("/settings/logo", handlers.GetLogo) // 企业 Logo 公开可读（登录页展示）
 		api.GET("/version", func(c *gin.Context) {
@@ -123,6 +152,10 @@ func main() {
 			auth.GET("/tasks/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportTasksXLSX)
 			auth.GET("/logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportLogsXLSX)
 
+			// 系统运行日志（崩溃/异常排查）：列表仅管理员可读；导出限超管/部门管理员
+			auth.GET("/system-logs", handlers.ListSystemLogs)
+			auth.GET("/system-logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportSystemLogsXLSX)
+
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
@@ -174,6 +207,7 @@ func main() {
 			auth.DELETE("/settings/logo", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteLogo)
 			auth.POST("/settings/log-retention", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateLogRetention)
 			auth.POST("/settings/timezone", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateTimezone)
+			auth.POST("/settings/daily-summary", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateDailySummary)
 
 			// 系统备份与还原（仅超管）
 			auth.GET("/backups", middleware.RequireRole(models.RoleSuperAdmin), handlers.ListBackupsHandler)
@@ -220,6 +254,18 @@ func main() {
 			io.Copy(c.Writer, idx)
 		})
 	}
+
+	logger.Info("server", "服务启动完成 version=%s 监听端口=:%s 运行日志=%s",
+		config.C.AppVersion, config.C.Port, logFile)
+
+	// 优雅退出：捕获终止信号并记录日志，便于排查「为何服务被停」
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		logger.Warn("server", "收到退出信号，服务即将停止")
+		os.Exit(0)
+	}()
 
 	r.Run(":" + config.C.Port)
 }
