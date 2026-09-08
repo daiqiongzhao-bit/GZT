@@ -39,7 +39,7 @@
       </button>
     </section>
 
-    <!-- 周期重置说明：每日任务每天 00:00 重置、每月任务每月 1 日重置。
+    <!-- 周期重置说明：每周任务每天 00:00 重置、每月任务每月 1 日重置。
          不加说明的话，用户看到昨天做过的任务又变回待办，会以为数据丢了 -->
     <p class="reset-tip">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
@@ -47,7 +47,7 @@
         <path d="M21 12a9 9 0 1 1-3.5-7.1" />
         <path d="M21 3v5h-5" />
       </svg>
-      每日任务每天 00:00 自动重置为待办，每月任务每月 1 日自动重置并把截止日推进到当月；
+      周期任务每天 00:00 自动重置为待办，每月任务每月 1 日自动重置并把截止日推进到当月；
       历史完成记录仍在「完成记录」中保留，不会丢失
     </p>
 
@@ -110,7 +110,7 @@
         <div>
           <label class="fld">类型</label>
           <select v-model="form.type" class="glass-input">
-            <option value="daily">每日</option>
+            <option value="daily">每周</option>
             <option value="monthly">每月</option>
             <option value="once">单次</option>
           </select>
@@ -122,7 +122,7 @@
         </div>
       </div>
       <div v-if="form.type === 'daily'" class="fg1">
-        <label class="fld">按周执行 <em class="faint">（勾选星期才做，不勾选=每天执行）</em></label>
+        <label class="fld">按周执行 <em class="faint">（勾选星期才做，不勾选=每天都执行）</em></label>
         <div class="wd-pick">
           <label v-for="d in [1, 2, 3, 4, 5, 6, 7]" :key="d" class="wd-chip" :class="{ on: form.weekdays.includes(d) }">
             <input type="checkbox" :value="d" v-model="form.weekdays" />
@@ -511,7 +511,7 @@ const emptyText = computed(() => {
   return '暂无任务'
 })
 
-function typeText(t) { return { daily: '每日', monthly: '每月', once: '单次' }[t] || t }
+function typeText(t) { return { daily: '每周', monthly: '每月', once: '单次' }[t] || t }
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高', medium: '中', low: '低' }[p] || '中' }

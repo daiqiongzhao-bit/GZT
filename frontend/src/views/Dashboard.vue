@@ -319,7 +319,7 @@ const panelCards = computed(() => pref.value.panels.filter((id) => PANELS[id]).m
 function peopleOf(s) {
   try { return JSON.parse(s.people || '[]') } catch { return [] }
 }
-function typeText(t) { return { daily: '每日', monthly: '每月', once: '单次' }[t] || t }
+function typeText(t) { return { daily: '每周', monthly: '每月', once: '单次' }[t] || t }
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高优', medium: '中优', low: '低优' }[p] || '中优' }
