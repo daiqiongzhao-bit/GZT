@@ -210,9 +210,33 @@ func GetLogo(c *gin.Context) {
 	}
 }
 
-// UpdateTimezone POST /api/settings/timezone 设置系统时区（仅超管），立即生效
-func UpdateTimezone(c *gin.Context) {
+// UpdateDailySummary POST /api/settings/daily-summary 开关「每日任务汇总推送」（仅超管）
+// 关闭后，每天 09:00 的自动汇总推送不再发送，但不影响其他到点任务提醒。
+func UpdateDailySummary(c *gin.Context) {
 	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	var s models.Setting
+	db.DB.FirstOrCreate(&s, models.Setting{ID: 1})
+	s.DailySummaryEnabled = req.Enabled
+	if err := db.DB.Save(&s).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	state := "关闭"
+	if req.Enabled {
+		state = "开启"
+	}
+	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "每日任务汇总推送"+state)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": req.Enabled})
+}
+
+// UpdateTimezone POST /api/settings/timezone 设置系统时区（仅超管），立即生效
+func UpdateTimezone(c *gin.Context) {	var req struct {
 		Timezone string `json:"timezone"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Timezone) == "" {
@@ -234,6 +258,51 @@ func UpdateTimezone(c *gin.Context) {
 	time.Local = loc // 立即生效：逾期/今日/本月判定与到点推送均按新时区计算
 	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "设置时区: "+req.Timezone)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "timezone": req.Timezone, "now": time.Now().Format("2006-01-02 15:04:05")})
+}
+
+// overdueGraceMinutes 读取并缓存逾期宽限期。默认 30 分钟（≤0 表示即时）。
+// 通过 invalidateGraceCache 在写入后置为 -2 强制下次重查。
+var graceMinutesCache = -2
+
+func overdueGraceMinutes() int {
+	if graceMinutesCache >= -1 {
+		return graceMinutesCache
+	}
+	var st models.Setting
+	db.DB.FirstOrCreate(&st, models.Setting{ID: 1})
+	if st.OverdueGraceMinutes < 0 {
+		st.OverdueGraceMinutes = 0
+	}
+	graceMinutesCache = st.OverdueGraceMinutes
+	return graceMinutesCache
+}
+
+// invalidateGraceCache 在写入 Setting 后调用，强制下次重新读取。
+func invalidateGraceCache() { graceMinutesCache = -2 }
+
+// UpdateOverdueGrace POST /api/settings/overdue-grace 设置逾期宽限期（分钟）。仅超管。
+func UpdateOverdueGrace(c *gin.Context) {
+	var req struct {
+		Minutes int `json:"minutes"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	if req.Minutes < 0 || req.Minutes > 24*60 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "宽限期需在 0~1440 分钟之间（0=到点即逾期）"})
+		return
+	}
+	var s models.Setting
+	db.DB.FirstOrCreate(&s, models.Setting{ID: 1})
+	s.OverdueGraceMinutes = req.Minutes
+	if err := db.DB.Save(&s).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	invalidateGraceCache()
+	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, fmt.Sprintf("调整逾期宽限期: %d 分钟", req.Minutes))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "minutes": req.Minutes})
 }
 
 // ListLogs 系统日志（支持筛选：user_name / action 关键词 / 时间范围 / limit / offset 分页）

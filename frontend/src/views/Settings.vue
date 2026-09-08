@@ -8,6 +8,7 @@
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'tmpl' }" @click="tab = 'tmpl'">模板</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'hook' }" @click="tab = 'hook'">通知</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'log' }" @click="tab = 'log'">操作审计</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="tab = 'syslog'">运行日志</button>
       <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="tab = 'backup'">备份</button>
     </div>
 
@@ -62,6 +63,15 @@
             <option v-for="tz in timezones" :key="tz.id" :value="tz.id">{{ tz.label }}</option>
           </select>
           <p class="hint" style="color:var(--text-dim); font-size:12px; margin:6px 0 0; line-height:1.6;">影响任务逾期判定、今日/本月统计与到点推送时间。当前服务器时间：<b>{{ serverNow || '—' }}</b></p>
+        </div>
+        <div>
+          <label class="fld">逾期宽限期（分钟）</label>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input v-model.number="overdueGrace" type="number" min="0" max="1440" class="glass-input" style="max-width:130px;" />
+            <button class="btn primary" :disabled="graceSaving" @click="saveOverdueGrace">{{ graceSaving ? '保存中…' : '保存宽限期' }}</button>
+            <span class="section-sub">默认 30；任务的「开始时间」+ 宽限期之后才记为逾期（0 = 到点即逾期）</span>
+          </div>
+          <p class="hint" style="color:var(--text-dim); font-size:12px; margin:6px 0 0; line-height:1.6;">每日/月度定时任务以各自开始时间为基准，超过该时间再加此宽限才算逾期；到点推送也会相应延后。修改后即时生效，无需重启。</p>
         </div>
       </div>
       <div class="form-actions" style="justify-content:flex-start; gap:10px;">
@@ -201,7 +211,7 @@
           <div class="row-main">
             <span class="avatar sm" :class="{ 'frozen-av': p.frozen }">{{ (p.name || '?')[0] }}</span>
             <div>
-              <div class="rn">{{ p.name }} <span class="chip" style="margin-left:6px">{{ roleMap[p.role] || p.role }}</span><span v-if="p.frozen" class="chip warn" style="margin-left:4px">已冻结</span><span v-if="p.in_group" class="chip" style="margin-left:4px;color:#16a34a;border-color:#16a34a66">群内</span><span v-if="onlineMap[p.id]" class="chip online" style="margin-left:4px">● {{ fmtOnline(onlineMap[p.id]) }}</span></div>
+              <div class="rn">{{ p.name }} <span class="chip" style="margin-left:6px">{{ roleMap[p.role] || p.role }}</span><span v-if="p.frozen" class="chip warn" style="margin-left:4px">已冻结</span><span v-if="p.on_leave" class="chip warn" style="margin-left:4px;color:#d97706;border-color:#d9770666">休假</span><span v-if="p.in_group" class="chip" style="margin-left:4px;color:#16a34a;border-color:#16a34a66">群内</span><span v-if="onlineMap[p.id]" class="chip online" style="margin-left:4px">● {{ fmtOnline(onlineMap[p.id]) }}</span></div>
               <div class="ru">@{{ p.username }}<span v-if="p.emp_no"> · 工号 {{ p.emp_no }}</span> · {{ p.dept?.name || '—' }}<span v-if="p.mobile" class="mob"> · 电话 {{ p.mobile }}</span></div>
             </div>
           </div>
@@ -211,6 +221,7 @@
               <div v-if="opsOpen === p.id" class="ops-drop">
                 <button class="op" @click="runOp(p, 'edit')">编辑资料</button>
                 <button class="op" @click="runOp(p, 'freeze')">{{ p.frozen ? '解冻账号' : '冻结账号' }}</button>
+                <button class="op" @click="runOp(p, 'leave')">{{ p.on_leave ? '结束休假（返岗）' : '设为休假' }}</button>
                 <button class="op" @click="runOp(p, 'pwd')">重置密码</button>
                 <button v-if="auth.isSuper" class="op" @click="runOp(p, 'unlock')">解锁登录</button>
                 <button v-if="auth.isSuper" class="op" :disabled="!onlineMap[p.id]" @click="runOp(p, 'logout')">强制下线<span v-if="!onlineMap[p.id]" class="op-hint">离线</span></button>
@@ -235,6 +246,9 @@
             <div class="field"><label class="fld">手机号</label><input v-model="editForm.mobile" class="glass-input" placeholder="企业微信@提醒用（可选）" /></div>
             <div class="field"><label class="fld">已入群</label>
               <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" v-model="editForm.in_group" style="width:16px;height:16px" /> 已加入企业微信通知群（推送会@TA，名单中不重复列出）</label>
+            </div>
+            <div class="field"><label class="fld">休假/停职</label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" v-model="editForm.on_leave" style="width:16px;height:16px" /> 处于休假/停职（不计入「全员」当班与推送名单）</label>
             </div>
             <div class="field"><label class="fld">角色</label>
               <select v-model="editForm.role" class="glass-input" :disabled="!auth.isSuper">
@@ -313,6 +327,14 @@
     <!-- 通知：多渠道 + 邮件 -->
     <section v-if="tab === 'hook' && auth.canManage" class="panel">
       <h3 class="section-title">渠道通知 <span class="section-sub">地址与密钥均加密存储</span></h3>
+      <div class="daily-summary-toggle">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" v-model="dailySummary" @change="saveDailySummary" :disabled="!auth.isSuper || dsSaving" style="width:16px;height:16px" />
+          每日任务汇总推送（每天 09:00 自动推送给所有通知渠道；关闭后不再自动发送，不影响其他到点提醒）
+        </label>
+        <span class="section-sub" v-if="!auth.isSuper" style="margin-left:8px">仅超管可开关</span>
+        <span v-if="dsSaving" class="section-sub" style="margin-left:8px">保存中…</span>
+      </div>
       <div v-if="auth.canManage" class="add-form">
         <div class="fg2">
           <div><label class="fld">名称</label><input v-model="h.name" class="glass-input" placeholder="如：企业微信机器人" /></div>
@@ -408,6 +430,48 @@
         <button class="btn ghost" :disabled="logPage === 0" @click="logPage > 0 && (logPage--, loadLogs())">上一页</button>
         <span class="pager-info">第 {{ logPage + 1 }} 页</span>
         <button class="btn ghost" :disabled="logs.length < logFilter.limit" @click="logPage++; loadLogs()">下一页</button>
+      </div>
+    </section>
+
+    <!-- 系统运行日志（仅管理员） -->
+    <section v-if="tab === 'syslog' && auth.canManage" class="panel">
+      <h3 class="section-title">系统运行日志 <span class="section-sub">服务端运行期事件 / panic / 5xx / 调度失败，用于排查崩溃</span>
+        <button class="btn ghost sm" style="margin-left:auto" @click="exportSysLogs">⬇ 导出 Excel</button>
+      </h3>
+      <div class="log-filter">
+        <select v-model="sysFilter.level" class="glass-input" @change="sysPage = 0; loadSysLogs()">
+          <option value="">全部级别</option>
+          <option value="INFO">INFO</option>
+          <option value="WARN">WARN</option>
+          <option value="ERROR">ERROR</option>
+          <option value="FATAL">FATAL</option>
+        </select>
+        <input v-model="sysFilter.source" class="glass-input" placeholder="按来源筛选(如 server/notify/backup)" @keyup.enter="sysPage = 0; loadSysLogs()" />
+        <input v-model="sysFilter.q" class="glass-input" placeholder="按信息/详情关键词筛选" @keyup.enter="sysPage = 0; loadSysLogs()" />
+        <input v-model="sysFilter.from" type="date" class="glass-input" @change="sysPage = 0; loadSysLogs()" />
+        <span class="shift-sep">至</span>
+        <input v-model="sysFilter.to" type="date" class="glass-input" @change="sysPage = 0; loadSysLogs()" />
+        <select v-model.number="sysFilter.limit" class="glass-input" @change="sysPage = 0; loadSysLogs()">
+          <option :value="50">50 条/页</option>
+          <option :value="100">100 条/页</option>
+          <option :value="200">200 条/页</option>
+        </select>
+        <button class="btn ghost" @click="sysPage = 0; loadSysLogs()">筛选</button>
+        <button class="btn ghost" @click="resetSysFilter">重置</button>
+      </div>
+      <div class="log-list">
+        <div v-for="l in sysLogs" :key="l.id" class="log syslog">
+          <span class="log-time">{{ fmt(l.created_at) }}</span>
+          <span class="log-level" :style="sysLevelStyle(l.level)">{{ l.level }}</span>
+          <span class="log-src">{{ l.source }}</span>
+          <span class="log-action" :title="l.detail">{{ l.message }}</span>
+        </div>
+        <div v-if="!sysLogs.length" class="empty">暂无运行日志（系统正常运行时不会自动写入，仅在发生 panic / 5xx / 调度异常时记录）</div>
+      </div>
+      <div class="pager" v-if="sysLogs.length">
+        <button class="btn ghost" :disabled="sysPage === 0" @click="sysPage > 0 && (sysPage--, loadSysLogs())">上一页</button>
+        <span class="pager-info">第 {{ sysPage + 1 }} 页</span>
+        <button class="btn ghost" :disabled="sysLogs.length < sysFilter.limit" @click="sysPage++; loadSysLogs()">下一页</button>
       </div>
     </section>
 
@@ -576,6 +640,22 @@ async function promptResetPwd() {
   await runBatch('reset_password', { password: pwd })
 }
 async function loadHooks() { hooks.value = await api.get('/webhooks') }
+// 每日任务汇总推送开关（仅超管可改）
+const dailySummary = ref(true)
+const dsSaving = ref(false)
+async function loadDailySummary() {
+  try {
+    const s = await api.get('/settings')
+    dailySummary.value = s.daily_summary_enabled !== false
+  } catch { dailySummary.value = true }
+}
+async function saveDailySummary() {
+  dsSaving.value = true
+  try {
+    await api.post('/settings/daily-summary', { enabled: dailySummary.value })
+  } catch (e) { alert(e.response?.data?.error || '保存失败') }
+  finally { dsSaving.value = false }
+}
 async function loadTemplates() { templates.value = await api.get('/templates') }
 async function loadShiftConfigs() { shiftConfigs.value = await api.get('/shift-configs') }
 
@@ -705,6 +785,26 @@ async function saveTimezone() {
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { tzSaving.value = false }
 }
+// 逾期宽限期（仅超管）：任务开始时间 + 宽限后才算逾期
+const overdueGrace = ref(30)
+const graceSaving = ref(false)
+async function loadOverdueGrace() {
+  try {
+    const s = await api.get('/settings')
+    if (typeof s.overdue_grace_minutes === 'number') overdueGrace.value = s.overdue_grace_minutes
+  } catch {}
+}
+async function saveOverdueGrace() {
+  const m = Number(overdueGrace.value)
+  if (!Number.isFinite(m) || m < 0 || m > 1440) { alert('宽限期需在 0~1440 分钟之间（0=到点即逾期）'); return }
+  graceSaving.value = true
+  try {
+    const r = await api.post('/settings/overdue-grace', { minutes: m })
+    overdueGrace.value = r.minutes
+    alert(`逾期宽限期已设为 ${r.minutes} 分钟，即时生效`)
+  } catch (e) { alert(e.response?.data?.error || '保存失败') }
+  finally { graceSaving.value = false }
+}
 async function addDept() {
   if (!newDept.value) return
   try { await api.post('/departments', { name: newDept.value, parent_id: newDeptParent.value }); newDept.value = ''; newDeptParent.value = 0; await loadDepts() } catch (e) { alert(e.response?.data?.error || '添加失败') }
@@ -723,7 +823,7 @@ async function delUser(p) { if (!confirm(`删除人员「${p.name}」？`)) retu
 
 // 编辑 / 冻结 / 重置密码
 const editUser = ref(null)
-const editForm = reactive({ name: '', emp_no: '', mobile: '', role: 'executor', dept_id: 0, in_group: false })
+const editForm = reactive({ name: '', emp_no: '', mobile: '', role: 'executor', dept_id: 0, in_group: false, on_leave: false })
 const editSaving = ref(false)
 function openEdit(p) {
   editUser.value = p
@@ -733,15 +833,21 @@ function openEdit(p) {
   editForm.role = p.role
   editForm.dept_id = p.dept_id
   editForm.in_group = !!p.in_group
+  editForm.on_leave = !!p.on_leave
 }
 async function saveEdit() {
   if (!editForm.name) { alert('姓名不能为空'); return }
   editSaving.value = true
   try {
-    await api.put(`/users/${editUser.value.id}`, { name: editForm.name, emp_no: editForm.emp_no, mobile: editForm.mobile, role: editForm.role, dept_id: editForm.dept_id, in_group: editForm.in_group })
+    await api.put(`/users/${editUser.value.id}`, { name: editForm.name, emp_no: editForm.emp_no, mobile: editForm.mobile, role: editForm.role, dept_id: editForm.dept_id, in_group: editForm.in_group, on_leave: editForm.on_leave })
     editUser.value = null
     await loadUsers()
   } catch (e) { alert(e.response?.data?.error || '保存失败') } finally { editSaving.value = false }
+}
+async function toggleLeave(p) {
+  const action = p.on_leave ? '结束休假（返岗）' : '设为休假'
+  if (!confirm(`确认将「${p.name}」${action}？休假人员不会出现在「全员」当班与推送名单中。`)) return
+  try { await api.put(`/users/${p.id}`, { on_leave: !p.on_leave }); await loadUsers() } catch (e) { alert(e.response?.data?.error || '操作失败') }
 }
 async function toggleFreeze(p) {
   const action = p.frozen ? '解冻' : '冻结'
@@ -900,6 +1006,40 @@ function resetLogFilter() {
   loadLogs()
 }
 
+// 系统运行日志（panic / 5xx / 调度失败），用于崩溃排查
+const sysFilter = reactive({ level: '', source: '', q: '', from: '', to: '', limit: 100 })
+const sysPage = ref(0)
+const sysLogs = ref([])
+async function loadSysLogs() {
+  const params = { limit: sysFilter.limit, offset: sysPage.value * sysFilter.limit }
+  if (sysFilter.level) params.level = sysFilter.level
+  if (sysFilter.source) params.source = sysFilter.source
+  if (sysFilter.q) params.q = sysFilter.q
+  if (sysFilter.from) params.from = sysFilter.from
+  if (sysFilter.to) params.to = sysFilter.to + ' 23:59:59'
+  sysLogs.value = await api.get('/system-logs', params)
+}
+function resetSysFilter() {
+  Object.assign(sysFilter, { level: '', source: '', q: '', from: '', to: '', limit: 100 })
+  sysPage.value = 0
+  loadSysLogs()
+}
+function exportSysLogs() {
+  const params = []
+  if (sysFilter.level) params.push('level=' + encodeURIComponent(sysFilter.level))
+  if (sysFilter.source) params.push('source=' + encodeURIComponent(sysFilter.source))
+  if (sysFilter.q) params.push('q=' + encodeURIComponent(sysFilter.q))
+  if (sysFilter.from) params.push('from=' + encodeURIComponent(sysFilter.from))
+  if (sysFilter.to) params.push('to=' + encodeURIComponent(sysFilter.to + ' 23:59:59'))
+  downloadAuth('system-logs/export' + (params.length ? '?' + params.join('&') : ''))
+}
+function sysLevelStyle(lv) {
+  if (lv === 'ERROR') return { color: '#ef4444', borderColor: '#ef4444' }
+  if (lv === 'FATAL') return { color: '#b91c1c', borderColor: '#b91c1c', fontWeight: '700' }
+  if (lv === 'WARN') return { color: '#f59e0b', borderColor: '#f59e0b' }
+  return { color: '#3b82f6', borderColor: '#3b82f6' }
+}
+
 // 审计日志保留天数（仅超管）
 const logRetention = ref(90)
 const logRetentionSaving = ref(false)
@@ -976,10 +1116,12 @@ function onLogout() { auth.logout(); router.replace('/login') }
 watch(tab, (v) => {
   if (v === 'backup' && auth.isSuper) { loadBackups(); loadBackupCfg() }
   if (v === 'log' && auth.canManage) { logPage.value = 0; loadLogs(); if (auth.isSuper) loadLogRetention() }
+  if (v === 'syslog' && auth.canManage) { sysPage.value = 0; loadSysLogs() }
   if (v === 'tmpl' && auth.canManage) loadTemplates()
-  if (v === 'hook' && auth.canManage) { loadHooks(); if (auth.isSuper) loadSMTP() }
+  if (v === 'hook' && auth.canManage) { loadHooks(); if (auth.isSuper) { loadSMTP(); loadDailySummary() } }
   if (v === 'user' && auth.canManage) { loadUsers(); if (auth.isSuper) loadSessions() }
   if (v === 'dept' && auth.canManage) { loadDepts(); loadShiftConfigs() }
+  if (v === 'brand' && auth.isSuper) loadOverdueGrace()
 })
 
 // ---- 人员「操作」下拉菜单 ----
@@ -989,6 +1131,7 @@ async function runOp(p, act) {
   opsOpen.value = 0
   if (act === 'edit') return openEdit(p)
   if (act === 'freeze') return toggleFreeze(p)
+  if (act === 'leave') return toggleLeave(p)
   if (act === 'pwd') return resetPwd(p)
   if (act === 'unlock') return unlockUser(p)
   if (act === 'logout') return forceLogout(p)
@@ -1028,6 +1171,7 @@ onMounted(async () => {
     if (auth.isSuper) loadSMTP()
     if (auth.isSuper) loadLogRetention()
     if (auth.isSuper) loadSessions()
+    if (auth.isSuper) loadOverdueGrace()
   }
 })
 </script>

@@ -345,7 +345,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
@@ -679,7 +680,9 @@ onMounted(() => {
   loadLogs()
   loadHandovers()
   if (auth.isSuper || auth.canManage) loadUsers() // 提前加载，便于发起交接
+  useAutoRefresh(loadK, true)
 })
+onUnmounted(() => useAutoRefresh(loadK, false))
 
 watch(viewDate, loadLogs)
 watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loadLogs(); if (t === 'knowledge') { loadK(); loadCats() } })

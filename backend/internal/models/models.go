@@ -65,6 +65,7 @@ type User struct {
 	Role          Role        `json:"role" gorm:"size:24;not null;default:executor"`
 	DeptID        uint        `json:"dept_id"`
 	Frozen        bool        `json:"frozen"`                               // 冻结：禁止登录
+	OnLeave       bool        `json:"on_leave" gorm:"default:false"`        // 休假/停职：不计入「全员」当班与推送
 	MustChangePwd bool        `json:"must_change_pwd" gorm:"default:false"` // 必须修改密码：弱密码/管理员重置后登录强制改密
 	InGroup       bool        `json:"in_group" gorm:"default:false"`        // 已加入企业微信通知群：推送@对象，名单中不重复列出
 	TokenVersion  uint        `json:"token_version"`                        // 令牌版本：自增即令所有已签发token失效
@@ -163,6 +164,10 @@ type Setting struct {
 	LogRetentionDays int `json:"log_retention_days" gorm:"default:90"`
 	// 系统时区（影响任务逾期/今日判定/到点推送）
 	Timezone string `json:"timezone" gorm:"size:64;default:Asia/Shanghai"`
+	// 每日任务汇总推送：每天 09:00 自动向所有 Webhook 推送今日任务汇总的开关（默认开）
+	DailySummaryEnabled bool `json:"daily_summary_enabled" gorm:"default:true"`
+	// 逾期宽限期（分钟）：每日/月度定时任务的「开始时间」+ 宽限后才算逾期；0=到点即逾期（默认 30）
+	OverdueGraceMinutes int `json:"overdue_grace_minutes" gorm:"default:30"`
 }
 
 // Log 系统操作日志
@@ -174,6 +179,17 @@ type Log struct {
 	IP        string    `json:"ip" gorm:"size:64"`     // 操作来源 IP（全部操作留痕）
 	UA        string    `json:"ua" gorm:"size:255"`    // 操作来源 User-Agent
 	Client    string    `json:"client" gorm:"size:16"` // 操作来源: web/pwa/extension（v0.0.6）
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SystemLog 系统运行日志：记录服务端运行期事件，重点用于「系统崩溃/异常」排查。
+// 与 Log（用户操作审计）不同，这里记录的是程序自身的信息/告警/错误/堆栈。
+type SystemLog struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Level     string    `json:"level" gorm:"size:16;index"`  // INFO / WARN / ERROR / FATAL
+	Source    string    `json:"source" gorm:"size:32;index"` // server / scheduler / handler / backup / import ...
+	Message   string    `json:"message" gorm:"size:512"`
+	Detail    string    `json:"detail" gorm:"type:text"` // 堆栈 / 原始错误
 	CreatedAt time.Time `json:"created_at"`
 }
 

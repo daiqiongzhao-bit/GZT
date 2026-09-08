@@ -14,6 +14,7 @@ import (
 
 	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/db"
+	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -490,6 +491,11 @@ func SaveBackupConfigHandler(c *gin.Context) {
 // daily：每日 02:30 执行；weekly：每周日 02:30 执行。
 func StartBackupScheduler() {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("backup", "自动备份调度器发生 panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		var nextRun time.Time
@@ -523,11 +529,12 @@ func StartBackupScheduler() {
 			if time.Now().Before(nextRun) {
 				continue
 			}
-			// 到达计划时间：执行自动备份（默认全量）
-			if _, err := CreateBackup("auto", "all"); err != nil {
-				// 仅记录，不中断调度
-				_ = db.DB.Create(&models.Log{Action: "自动备份失败: " + err.Error()}).Error
-			}
+		// 到达计划时间：执行自动备份（默认全量）
+		if _, err := CreateBackup("auto", "all"); err != nil {
+			// 仅记录，不中断调度
+			logger.Error("backup", "自动备份失败: %v", err)
+			_ = db.DB.Create(&models.Log{Action: "自动备份失败: " + err.Error()}).Error
+		}
 			recompute()
 		}
 	}()
@@ -537,6 +544,11 @@ func StartBackupScheduler() {
 // 读取 Setting.LogRetentionDays，启动时先清理一次，之后每 24 小时检查。
 func StartLogRetentionScheduler() {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("backup", "审计日志清理调度器发生 panic: %v", r)
+			}
+		}()
 		cleanup := func() {
 			var s models.Setting
 			db.DB.FirstOrCreate(&s, models.Setting{ID: 1})
@@ -545,7 +557,11 @@ func StartLogRetentionScheduler() {
 			}
 			cutoff := time.Now().AddDate(0, 0, -s.LogRetentionDays)
 			res := db.DB.Where("created_at < ?", cutoff).Delete(&models.Log{})
-			if res.Error == nil && res.RowsAffected > 0 {
+			if res.Error != nil {
+				logger.Error("backup", "审计日志清理失败: %v", res.Error)
+				return
+			}
+			if res.RowsAffected > 0 {
 				_ = db.DB.Create(&models.Log{Action: fmt.Sprintf("自动清理审计日志 %d 条（保留 %d 天）", res.RowsAffected, s.LogRetentionDays)}).Error
 			}
 		}

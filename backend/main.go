@@ -208,6 +208,7 @@ func main() {
 			auth.POST("/settings/log-retention", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateLogRetention)
 			auth.POST("/settings/timezone", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateTimezone)
 			auth.POST("/settings/daily-summary", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateDailySummary)
+			auth.POST("/settings/overdue-grace", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateOverdueGrace)
 
 			// 系统备份与还原（仅超管）
 			auth.GET("/backups", middleware.RequireRole(models.RoleSuperAdmin), handlers.ListBackupsHandler)

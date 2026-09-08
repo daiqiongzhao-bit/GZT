@@ -329,6 +329,7 @@ type userUpdateReq struct {
 	DeptID uint    `json:"dept_id"`
 	Frozen *bool   `json:"frozen"`
 	InGroup *bool  `json:"in_group"`
+	OnLeave *bool  `json:"on_leave"`
 }
 
 // UpdateUser 编辑用户（姓名/角色/部门/冻结状态）
@@ -364,7 +365,7 @@ func UpdateUser(c *gin.Context) {
 		}
 	}
 	oldName, oldEmpNo, oldMobile := u.Name, u.EmpNo, u.Mobile
-	oldRole, oldDept, oldFrozen := u.Role, u.DeptID, u.Frozen
+	oldRole, oldDept, oldFrozen, oldOnLeave := u.Role, u.DeptID, u.Frozen, u.OnLeave
 	if req.Name != "" {
 		u.Name = req.Name
 	}
@@ -406,6 +407,9 @@ func UpdateUser(c *gin.Context) {
 	if req.InGroup != nil {
 		u.InGroup = *req.InGroup
 	}
+	if req.OnLeave != nil {
+		u.OnLeave = *req.OnLeave
+	}
 	// 同部门禁重名 + 手机号 11 位（编辑后按最新姓名/部门/手机号校验）
 	if msg := validateUserProfile(u.Name, u.DeptID, u.Mobile, u.ID); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
@@ -438,6 +442,13 @@ func UpdateUser(c *gin.Context) {
 			changes = append(changes, "冻结状态（已冻结）")
 		} else {
 			changes = append(changes, "冻结状态（已解冻）")
+		}
+	}
+	if req.OnLeave != nil && u.OnLeave != oldOnLeave {
+		if u.OnLeave {
+			changes = append(changes, "休假状态（已休假）")
+		} else {
+			changes = append(changes, "休假状态（已返岗）")
 		}
 	}
 	if len(changes) > 0 {

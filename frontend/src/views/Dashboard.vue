@@ -203,7 +203,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
@@ -336,12 +337,17 @@ async function toggle(t) {
 }
 
 onMounted(async () => {
+  await refreshDash()
+  useAutoRefresh(refreshDash, true)
+})
+async function refreshDash() {
   loadPref()
   const [d, sc, deps] = await Promise.all([api.get('/dashboard'), api.get('/schedules'), api.get('/departments')])
   dash.value = d
   schedules.value = sc
   departments.value = deps
-})
+}
+onUnmounted(() => useAutoRefresh(refreshDash, false))
 </script>
 
 <style scoped>

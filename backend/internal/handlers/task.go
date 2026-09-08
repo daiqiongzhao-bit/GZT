@@ -44,16 +44,17 @@ func isOverdue(t models.Task) bool {
 		return false
 	}
 	now := time.Now()
+	grace := time.Duration(overdueGraceMinutes()) * time.Minute
 	switch t.Type {
 	case models.TaskTypeOnce:
 		if t.Deadline != "" {
-			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil && dl.Before(now) {
+			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil && dl.Add(grace).Before(now) {
 				return true
 			}
 		}
 	case models.TaskTypeDaily:
 		if t.Time != "" {
-			if dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, time.Local); err == nil && dt.Before(now) {
+			if dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, time.Local); err == nil && dt.Add(grace).Before(now) {
 				return true
 			}
 		}
@@ -674,6 +675,7 @@ func ListTaskCompletions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	fillCompletionNames(list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -702,5 +704,20 @@ func ListCompletions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	fillCompletionNames(list)
 	c.JSON(http.StatusOK, list)
+}
+
+// fillCompletionNames 把完成记录的 UserName 补全为「姓名（工号）」，
+// 按 UserID 关联用户表；历史记录（UserID 可能已不存在）保留原 UserName。
+func fillCompletionNames(list []models.TaskCompletion) {
+	for i := range list {
+		if list[i].UserID == 0 {
+			continue
+		}
+		var u models.User
+		if err := db.DB.First(&u, list[i].UserID).Error; err == nil && u.ID != 0 {
+			list[i].UserName = fmt.Sprintf("%s（%s）", u.Name, u.Username)
+		}
+	}
 }

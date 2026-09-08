@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"shiftworkbench/internal/db"
+	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -50,9 +51,14 @@ func todayOnDuty(scope []uint) map[string][]string {
 	return byShift
 }
 
-// allUserNames 全员=系统内所有人员（含正在休息）。scope 为空=全部人员；否则为该批部门内人员
+// allUserNames 「全员」任务的当班名单。排除：超级管理员（系统账号，如「系统管理员」）、
+// 已冻结、以及休假（on_leave）人员——这些人不应出现在「当班/@」名单里。
+// scope 为空=全部人员；否则为该批部门内人员。
 func allUserNames(scope []uint) []string {
-	q := db.DB.Model(&models.User{})
+	q := db.DB.Model(&models.User{}).
+		Where("role <> ?", models.RoleSuperAdmin).
+		Where("frozen = ?", false).
+		Where("on_leave = ?", false)
 	if len(scope) > 0 {
 		q = q.Where("dept_id IN ?", scope)
 	}
@@ -546,6 +552,11 @@ func NotifyTodayHandler(c *gin.Context) {
 // 每天 09:00 额外推送一次「今日任务汇总」（自动，无需手动点按钮）。
 func StartNotifyScheduler() {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("notify", "到点推送调度器发生 panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		var lastMin string
@@ -566,8 +577,13 @@ func StartNotifyScheduler() {
 			if now.Format("15:04") == "09:00" {
 				key := "summary:" + now.Format("2006-01-02")
 				if !pushedSummary[key] {
-					pushedSummary[key] = true
-					pushDailySummary()
+					// 受「每日任务汇总推送」开关控制（默认开启）
+					var ds models.Setting
+					db.DB.FirstOrCreate(&ds, models.Setting{ID: 1})
+					if ds.DailySummaryEnabled {
+						pushedSummary[key] = true
+						pushDailySummary()
+					}
 				}
 			}
 		}
@@ -588,6 +604,7 @@ func pushDailySummary() {
 	sent := 0
 	for _, h := range hooks {
 		if err := sendToHook(h, content, mobiles); err != nil {
+			logger.Error("notify", "每日汇总推送失败: %v", err)
 			_ = db.DB.Create(&models.Log{Action: "每日汇总推送失败: " + err.Error()}).Error
 			continue
 		}

@@ -36,6 +36,7 @@ func Init() error {
 		&models.KnowledgeChangeLog{},
 		&models.WorkLog{},
 		&models.WorkHandover{},
+		&models.SystemLog{},
 	)
 }
 

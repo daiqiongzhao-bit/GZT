@@ -272,7 +272,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
@@ -681,7 +682,8 @@ async function load() {
   users.value = us
   if (auth.isSuper && !form.dept_id && departments.value.length) form.dept_id = departments.value[0].id
 }
-onMounted(load)
+onMounted(() => { load(); useAutoRefresh(load, true) })
+onUnmounted(() => useAutoRefresh(load, false))
 </script>
 
 <style scoped>
