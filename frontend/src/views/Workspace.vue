@@ -48,7 +48,11 @@
           </div>
           <div>
             <label class="fld">内容</label>
-            <textarea v-model="kForm.content" class="glass-input ta" rows="6" placeholder="把方法、步骤、注意事项写下来，方便以后/同事查阅"></textarea>
+            <RichTextEditor
+              v-model="kForm.content"
+              :entry-id="kForm.id || 0"
+              placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接"
+            />
           </div>
           <!-- 附件区：编辑现有条目直接显示，新建时提示先保存 -->
           <div class="edit-attach">
@@ -108,10 +112,10 @@
               <span class="k-owner">{{ k.owner_name === (auth.user && auth.user.username) ? '我' : k.owner_name }}</span>
             </div>
             <div class="k-title" @click="openDetailK(k)">{{ k.title }}</div>
-            <div class="k-preview" @click="openDetailK(k)">{{ (k.content || '').slice(0, 160) || '（暂无内容）' }}</div>
+            <div class="k-preview" @click="openDetailK(k)">{{ kPreviewText(k) }}</div>
             <div class="k-foot">
               <span class="dim">{{ fmtTime(k.updated_at || k.created_at) }}</span>
-              <span v-if="k.owner_id === auth.user?.id" class="ops">
+              <span v-if="k.owner_id === auth.user?.id || auth.isSuper" class="ops">
                 <button class="del" @click="openEditK(k)">编辑</button>
                 <button class="del danger" @click="removeK(k)">删除</button>
               </span>
@@ -134,7 +138,7 @@
             {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }}
           </div>
           <div class="modal-scroll">
-            <div class="modal-body">{{ viewK.content || '（暂无内容）' }}</div>
+            <div class="modal-body rte-content" v-html="viewK.content || '<span class=\'dim\'>（暂无内容）</span>'"></div>
 
             <!-- 附件区 -->
             <div v-if="viewK" class="modal-attach">
@@ -379,11 +383,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
+import RichTextEditor from '@/components/RichTextEditor.vue'
 
 const { proxy } = getCurrentInstance()
 const $msg = proxy?.$msg
@@ -591,6 +596,14 @@ function fileIcon(name) {
 }
 
 // ---- 导出 ----
+function kPreviewText(k) {
+  const raw = (k && k.content) || ''
+  // 富文本：去标签再截断展示
+  const tmp = document.createElement('div')
+  tmp.innerHTML = raw
+  const text = (tmp.innerText || '').trim()
+  return text ? (text.length > 160 ? text.slice(0, 160) + '…' : text) : '（暂无内容）'
+}
 function exportK() {
   const params = new URLSearchParams()
   if (kQuery.value.trim()) params.set('kw', kQuery.value.trim())
@@ -894,6 +907,18 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .modal-meta { font-size: 12px; margin: 0 16px 12px; }
 .modal-scroll { flex: 1; overflow-y: auto; padding: 0 16px; }
 .modal-body { font-size: 13.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+/* 富文本内容渲染样式（详情弹窗里用 v-html 展示） */
+.modal-body.rte-content { white-space: normal; }
+.modal-body.rte-content :deep(h2) { font-size: 17px; font-weight: 700; margin: 14px 0 6px; }
+.modal-body.rte-content :deep(h3) { font-size: 15px; font-weight: 700; margin: 10px 0 4px; }
+.modal-body.rte-content :deep(p) { margin: 6px 0; }
+.modal-body.rte-content :deep(ul), .modal-body.rte-content :deep(ol) { padding-left: 22px; margin: 6px 0; }
+.modal-body.rte-content :deep(blockquote) { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--text-dim); margin: 8px 0; }
+.modal-body.rte-content :deep(a) { color: var(--accent); text-decoration: underline; }
+.modal-body.rte-content :deep(img) { max-width: 100%; height: auto; border-radius: 6px; margin: 6px 0; }
+.modal-body.rte-content :deep(hr) { border: 0; border-top: 1px dashed var(--glass-border); margin: 12px 0; }
+.modal-body.rte-content :deep(pre) { background: var(--overlay-2); padding: 8px 10px; border-radius: 8px; font-size: 12.5px; overflow-x: auto; white-space: pre; }
+.modal-body.rte-content :deep(code) { background: var(--overlay-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hairline); margin-top: 12px; flex-shrink: 0; }
 
 /* 接收人多选 */

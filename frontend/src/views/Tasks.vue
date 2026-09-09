@@ -188,8 +188,8 @@
       </div>
     </section>
 
-    <section class="panel">
-      <div class="table-wrap">
+    <section class="panel task-list-panel">
+      <div ref="tableWrapEl" class="table-wrap" @scroll="updateStickyScroll">
         <table class="task-table">
           <thead>
             <tr>
@@ -236,11 +236,24 @@
               </td>
               <td class="col-prio"><span class="chip" :class="prioClass(t.priority)">{{ prioText(t.priority) }}</span></td>
               <td class="col-act">
-                <button class="rec" @click.stop="openRecord(t)" title="查看完成记录">记录</button>
-                <button v-if="auth.canManage" class="rec" @click.stop="openEdit(t)" title="编辑任务">编辑</button>
-                <button v-if="auth.canManage" class="del" @click.stop="remove(t)" title="删除任务">
-                  <span class="del-x">×</span><span class="del-t">删除</span>
-                </button>
+                <div class="row-ops" @click.stop>
+                  <button class="rec row-ops-btn" @click.stop="toggleRowMenu(t, $event)" :title="'更多操作 · ' + t.title" aria-label="更多操作">⋯</button>
+                  <transition name="pop">
+                      <div v-if="rowMenuId === t.id" class="row-ops-menu" @click.stop>
+                        <button class="menu-item" @click="closeRowMenu(); openRecord(t)">
+                          <span class="mi-ico">📋</span><span>完成记录</span>
+                        </button>
+                        <template v-if="auth.canManage">
+                          <button class="menu-item" @click="closeRowMenu(); openEdit(t)">
+                            <span class="mi-ico">✏️</span><span>编辑任务</span>
+                          </button>
+                          <button class="menu-item danger" @click="closeRowMenu(); remove(t)">
+                            <span class="mi-ico">🗑</span><span>删除任务</span>
+                          </button>
+                        </template>
+                      </div>
+                    </transition>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -248,6 +261,11 @@
       </div>
       <EmptyState v-if="!filtered.length" :title="emptyText" desc="去新建一条任务，或切换到其它标签页查看。" :action-text="auth.canManage ? '新建任务' : ''" :icon="calIcon" @action="showAdd = true" />
     </section>
+
+    <!-- 固定底部的水平滚动条（始终可见，不随垂直滚动消失） -->
+    <div v-show="tableWrapEl && hasHScroll" class="sticky-hscroll" @scroll="onStickyScroll">
+      <div class="sticky-hscroll-inner" :style="{ width: stickyWidth + 'px' }"></div>
+    </div>
 
     <!-- 完成记录弹窗 -->
     <div v-if="recordOpen" class="modal-mask" @click.self="recordOpen = false">
@@ -272,7 +290,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { icons } from '@/icons'
@@ -432,6 +450,18 @@ const recordOpen = ref(false)
 const recordLoading = ref(false)
 const records = ref([])
 const recordTaskTitle = ref('')
+
+// 行内操作菜单（⋯ 按钮弹出的下拉）
+const rowMenuId = ref(null)
+function toggleRowMenu(t) { rowMenuId.value = rowMenuId.value === t.id ? null : t.id }
+function closeRowMenu() { rowMenuId.value = null }
+// 点击页面其它位置关闭菜单
+function onDocClick(e) {
+  if (rowMenuId.value == null) return
+  // 已经在 row-ops 内会被 stopPropagation 拦掉，这里只兜住外部点击
+  if (e.target.closest && e.target.closest('.row-ops')) return
+  rowMenuId.value = null
+}
 
 // 班次文案/样式
 function shiftText(s) { return { '全员': '全员', '早班': '早班', '晚班': '晚班', '早晚': '早晚' }[s] || s }
@@ -678,9 +708,44 @@ async function load() {
   departments.value = deps
   users.value = us
   if (auth.isSuper && !form.dept_id && departments.value.length) form.dept_id = departments.value[0].id
+  // 等表格渲染完再测一次是否溢出，更新固定滚动条
+  await nextTick()
+  updateStickyScroll()
 }
-onMounted(() => { load(); useAutoRefresh(load, true) })
-onUnmounted(() => useAutoRefresh(load, false))
+
+// 固定底部滚动条：表格横向溢出时，把滚动条镜像到底部，避免被遮在视口底部不可见
+const tableWrapEl = ref(null)
+const hasHScroll = ref(false)
+const stickyWidth = ref(0)
+function updateStickyScroll() {
+  const el = tableWrapEl.value
+  if (!el) { hasHScroll.value = false; return }
+  // 表格实际滚动宽度（clientWidth 包含 padding/border，scrollWidth 是内容总宽）
+  const overflow = el.scrollWidth - el.clientWidth
+  if (overflow > 1) {
+    hasHScroll.value = true
+    stickyWidth.value = el.scrollWidth
+  } else {
+    hasHScroll.value = false
+  }
+}
+function onStickyScroll(e) {
+  const el = tableWrapEl.value
+  if (!el) return
+  // 同步原表格的滚动位置
+  el.scrollLeft = e.target.scrollLeft
+}
+onMounted(() => {
+  load()
+  useAutoRefresh(load, true)
+  window.addEventListener('resize', updateStickyScroll)
+  document.addEventListener('click', onDocClick)
+})
+onUnmounted(() => {
+  useAutoRefresh(load, false)
+  window.removeEventListener('resize', updateStickyScroll)
+  document.removeEventListener('click', onDocClick)
+})
 </script>
 
 <style scoped>
@@ -727,6 +792,17 @@ onUnmounted(() => useAutoRefresh(load, false))
 
 /* 毛玻璃表格 */
 .table-wrap { width: 100%; max-width: 100%; overflow-x: auto; }
+/* 固定底部的水平滚动条：始终贴在视口底部（页面底），不随垂直滚动消失 */
+.sticky-hscroll {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  height: 14px;
+  overflow-x: auto; overflow-y: hidden;
+  background: var(--bg-1, rgba(255,255,255,0.85));
+  border-top: 1px solid var(--glass-border);
+  z-index: 30;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.sticky-hscroll-inner { height: 1px; }
 .task-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .task-table thead th {
   text-align: left; padding: 10px 14px; font-size: 11.5px; font-weight: 600;
@@ -747,6 +823,37 @@ onUnmounted(() => useAutoRefresh(load, false))
 
 /* 记录按钮 */
 .col-act { display: flex; gap: 6px; align-items: center; }
+.row-ops { position: relative; display: inline-block; }
+.row-ops-btn {
+  width: 30px; height: 30px; line-height: 1; font-size: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px; border: 1px solid var(--glass-border);
+  background: var(--overlay); color: var(--text-dim);
+  cursor: pointer;
+}
+.row-ops-btn:hover { color: var(--text); border-color: var(--accent); }
+.row-ops-menu {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--glass-strong, rgba(255,255,255,0.96));
+  border: 1px solid var(--glass-border);
+  border-radius: 12px; padding: 6px;
+  box-shadow: 0 8px 24px rgba(15,23,42,0.16);
+  min-width: 150px; z-index: 40;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border: 0; background: transparent;
+  border-radius: 8px; cursor: pointer; font-size: 13px;
+  color: var(--text); text-align: left;
+}
+.menu-item:hover { background: var(--overlay); }
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover { background: rgba(225,29,72,0.08); }
+.mi-ico { font-size: 14px; line-height: 1; opacity: 0.85; }
+/* 行内菜单展开/收折叠动画 */
+.pop-enter-active, .pop-leave-active { transition: opacity .12s ease, transform .12s ease; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: translateY(-4px); }
 .dept-filter { width: auto; min-width: 130px; padding: 8px 10px; font-size: 13px; height: 38px; }
 .col-dept { width: 110px; }
 .dept-tag { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }

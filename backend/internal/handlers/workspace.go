@@ -157,7 +157,8 @@ func CreateKnowledge(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// loadOwnedKnowledge 加载一条且必须是当前用户本人创建（编辑/删除前校验）
+// loadOwnedKnowledge 加载一条且必须是当前用户本人创建（编辑/删除前校验）；
+// 超级管理员可对任何条目进行编辑/删除（用于清理别人的共享知识）
 func loadOwnedKnowledge(c *gin.Context) (*models.KnowledgeEntry, bool) {
 	var entry models.KnowledgeEntry
 	if err := db.DB.First(&entry, c.Param("id")).Error; err != nil {
@@ -165,7 +166,7 @@ func loadOwnedKnowledge(c *gin.Context) (*models.KnowledgeEntry, bool) {
 		return nil, false
 	}
 	cl := middleware.GetClaims(c)
-	if entry.OwnerID != cl.UserID {
+	if entry.OwnerID != cl.UserID && cl.Role != "super_admin" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅创建者可编辑或删除"})
 		return nil, false
 	}
@@ -228,11 +229,24 @@ func UpdateKnowledge(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// DeleteKnowledge 删除知识条目（仅创建者）
+// DeleteKnowledge 删除知识条目（创建者本人 / 超级管理员）
 func DeleteKnowledge(c *gin.Context) {
 	entry, ok := loadOwnedKnowledge(c)
 	if !ok {
 		return
+	}
+	// 先删附件：DB 记录 + 磁盘文件，避免留下孤儿
+	var atts []models.KnowledgeAttachment
+	if err := db.DB.Where("entry_id = ?", entry.ID).Find(&atts).Error; err == nil && len(atts) > 0 {
+		for _, a := range atts {
+			if a.StoredName != "" {
+				_ = os.Remove(filepath.Join(kAttachmentDir(), a.StoredName))
+			}
+		}
+		if err := db.DB.Where("entry_id = ?", entry.ID).Delete(&models.KnowledgeAttachment{}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	if err := db.DB.Delete(entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -240,7 +254,7 @@ func DeleteKnowledge(c *gin.Context) {
 	}
 	cl := middleware.GetClaims(c)
 	addLog(c, cl.UserID, cl.Username, "删除知识库: "+entry.Title)
-	recordKnowledgeLog(entry.ID, cl, "delete", fmt.Sprintf("删除条目：标题「%s」（条目及其可见附件记录一并删除）", entry.Title))
+	recordKnowledgeLog(entry.ID, cl, "delete", fmt.Sprintf("删除条目：标题「%s」（条目及其附件一并删除）", entry.Title))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -725,6 +739,11 @@ func UploadKnowledgeAttachment(c *gin.Context) {
 	cl := middleware.GetClaims(c)
 	if e.OwnerID != cl.UserID && cl.Role != models.RoleSuperAdmin {
 		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者可上传附件"})
+		return
+	}
+	// P0-1：先把多部分解析上限拉到 maxAttachSize，否则 32MB+ 的上传会被标准库直接截断
+	if err := c.Request.ParseMultipartForm(maxAttachSize); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "上传体积超过限制（单文件 ≤ 100MB）"})
 		return
 	}
 	file, err := c.FormFile("file")
