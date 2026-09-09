@@ -195,9 +195,6 @@ func CreateUser(c *gin.Context) {
 	if req.InGroup != nil {
 		user.InGroup = *req.InGroup
 	}
-	if req.InGroup != nil {
-		user.InGroup = *req.InGroup
-	}
 	if user.Role == "" {
 		user.Role = models.RoleExecutor
 	}

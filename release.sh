@@ -19,7 +19,10 @@ CONTAINER="shift-workbench"
 BRANCH="main"
 
 # 线上部署所用的环境变量文件（JWT_SECRET / AES_KEY）。
-# 不加载会导致容器回退到代码内默认密钥：全员被登出 + AES 加密数据解不开。
+# 注意：自 v0.9.3 起，容器在数据卷上首次启动会自动生成强随机密钥并持久化到
+# secrets.env；因此纯"构建+推送镜像"不再要求环境变量文件。
+# 但 **重启线上容器（--deploy）前必须提供** 原运行实例使用的同一份强密钥，
+# 否则会因密钥与数据卷不一致被拒启 / 或换 key 导致全员登出 + 历史密文解不开。
 # 优先级：脚本同目录 .env  >  部署目录 /opt/swb/swb.env
 ENV_FILE=""
 if [ -f "$ROOT/.env" ]; then
@@ -27,20 +30,26 @@ if [ -f "$ROOT/.env" ]; then
 elif [ -f /opt/swb/swb.env ]; then
   ENV_FILE="/opt/swb/swb.env"
 fi
-if [ -z "$ENV_FILE" ]; then
-  echo "✗ 找不到环境变量文件（./.env 或 /opt/swb/swb.env），拒绝发布以免密钥回退为默认值"
-  exit 1
-fi
-if ! grep -qE '^[[:space:]]*(JWT_SECRET|AES_KEY)=.+' "$ENV_FILE"; then
-  echo "✗ $ENV_FILE 中缺少 JWT_SECRET / AES_KEY，拒绝发布"
-  exit 1
-fi
-echo "    环境变量文件: $ENV_FILE"
 
 # ---------- 参数解析 ----------
 BUMP="${1:-}"
 DEPLOY=false
 [ "${2:-}" = "--deploy" ] && DEPLOY=true
+
+# 仅 --deploy（重启线上容器）时强制要求环境变量文件
+if [ "$DEPLOY" = true ]; then
+  if [ -z "$ENV_FILE" ]; then
+    echo "✗ --deploy 需要环境变量文件（./.env 或 /opt/swb/swb.env），以在重启时保持既有密钥不变"
+    exit 1
+  fi
+  if ! grep -qE '^[[:space:]]*(JWT_SECRET|AES_KEY)=.+' "$ENV_FILE"; then
+    echo "✗ $ENV_FILE 中缺少 JWT_SECRET / AES_KEY，拒绝 --deploy（避免换 key 造成全员登出）"
+    exit 1
+  fi
+  echo "    部署环境变量文件: $ENV_FILE"
+elif [ -n "$ENV_FILE" ]; then
+  echo "    检测到环境变量文件（将用于 --deploy 时保持密钥）：$ENV_FILE"
+fi
 
 if [[ ! "$BUMP" =~ ^(patch|minor|major)$ ]]; then
   echo "用法: ./release.sh {patch|minor|major} [--deploy]"
@@ -139,15 +148,18 @@ if [ "$DEPLOY" = true ]; then
   docker compose --env-file "$ENV_FILE" up -d
   sleep 5
   docker ps --filter "name=${CONTAINER}" --format '{{.Names}} | {{.Status}} | {{.Ports}}'
-  # 部署后自检：密钥必须注入成功，否则全员令牌失效、AES 数据解不开
+  # 部署后自检：容器必须能解析出强密钥——要么已注入 env，要么数据卷 secrets.env 已存在。
+  # 二者皆无时才需要告警（理论上 v0.9.3+ 首启会自动生成，这里兜底提醒）。
   INJECTED="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -cE '^JWT_SECRET=.+' || true)"
-  if [ "$INJECTED" -lt 1 ]; then
+  VOLSEC="$(docker exec "$CONTAINER" sh -c 'test -s /data/secrets.env && echo yes' 2>/dev/null || true)"
+  if [ "$INJECTED" -lt 1 ] && [ "$VOLSEC" != "yes" ]; then
     echo
-    echo "✗ 严重：容器未注入 JWT_SECRET，正在用默认密钥运行！"
-    echo "  请手动执行：cd $ROOT && docker compose --env-file $ENV_FILE up -d"
-    exit 1
+    echo "⚠ 容器既未注入 JWT_SECRET，也暂未在数据卷发现 secrets.env（可能首次启动生成中，稍等重试）。"
+    echo "  自 v0.9.3 起首次启动会在 /data/secrets.env 自动生成强密钥，通常无需人工干预。"
+    echo "  请稍后执行：cd $ROOT && docker compose up -d 后，用 curl http://127.0.0.1:8090/api/version 复核。"
+  else
+    echo "    ✓ 密钥解析校验通过（env 注入 或 数据卷 secrets.env 就绪）"
   fi
-  echo "    ✓ 密钥注入校验通过"
 else
   echo "提示：镜像已推送，但线上容器仍在运行旧版本。"
   echo "      需要生效时执行："

@@ -965,7 +965,7 @@ const smtpSaving = ref(false)
 const smtpTesting = ref(false)
 async function loadSMTP() {
   try {
-    const s = await api.get('/settings')
+    const s = await api.get('/settings/full')
     smtp.host = s.smtp_host || ''
     smtp.port = s.smtp_port || 465
     smtp.user = s.smtp_user || ''

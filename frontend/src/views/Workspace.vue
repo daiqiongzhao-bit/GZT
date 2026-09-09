@@ -147,7 +147,7 @@
             {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }}
           </div>
           <div class="modal-scroll">
-            <div class="modal-body rte-content" v-html="viewK.content || '<span class=\'dim\'>（暂无内容）</span>'"></div>
+            <div class="modal-body rte-content" v-html="safeHtml(viewK.content) || '<span class=\'dim\'>（暂无内容）</span>'"></div>
 
             <!-- 附件区 -->
             <div v-if="viewK" class="modal-attach">
@@ -399,6 +399,20 @@ import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
 
+// 渲染前净化（纵深防御，与后端 sanitizeRichContent 同口径）防存储型 XSS
+function safeHtml(html) {
+  if (!html) return ''
+  let s = String(html)
+  for (const t of ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'svg', 'math']) {
+    s = s.replace(new RegExp('<\\s*' + t + '\\b[^>]*>[\\s\\S]*?<\\s*/\\s*' + t + '\\s*>', 'gi'), '')
+    s = s.replace(new RegExp('<\\s*' + t + '\\b[^>]*/?>', 'gi'), '')
+  }
+  s = s.replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  s = s.replace(/(href|src|xlink:href|action|formaction)\s*=\s*(?:"|')?\s*(?:javascript|vbscript|data)\s*:/gi, '')
+  s = s.replace(/\sstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+  return s
+}
+
 const { proxy } = getCurrentInstance()
 const $msg = proxy?.$msg
 const auth = useAuthStore()
@@ -538,18 +552,19 @@ function canDelAtt(a) {
 }
 // 图片缩略/预览 objectURL 缓存
 const thumbCache = new Map()
+function attKey(a) { return (a && (a.stored_name || a.id)) || '' }
 function thumbUrl(a) {
-  if (thumbCache.has(a.id)) return thumbCache.get(a.id)
+  if (thumbCache.has(attKey(a))) return thumbCache.get(attKey(a))
   const tok = localStorage.getItem('sw_token')
-  fetch(baseUrl + '/workspace/knowledge_attachments/' + a.id + '/download', { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
+  fetch(baseUrl + '/workspace/knowledge_attachments/' + attKey(a) + '/download', { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
     .then((r) => r.ok ? r.blob() : Promise.reject())
-    .then((b) => { const u = URL.createObjectURL(b); thumbCache.set(a.id, u); /* 触发视图刷新 */ if (viewK.value) viewK.value = { ...viewK.value } })
+    .then((b) => { const u = URL.createObjectURL(b); thumbCache.set(attKey(a), u); /* 触发视图刷新 */ if (viewK.value) viewK.value = { ...viewK.value } })
     .catch(() => {})
   return ''
 }
 function fetchAtt(a, isPreview) {
   const tok = localStorage.getItem('sw_token')
-  return fetch(baseUrl + '/workspace/knowledge_attachments/' + a.id + '/download', {
+  return fetch(baseUrl + '/workspace/knowledge_attachments/' + attKey(a) + '/download', {
     headers: tok ? { Authorization: 'Bearer ' + tok } : {}
   }).then((r) => { if (!r.ok) throw new Error('下载失败'); return r.blob() })
 }

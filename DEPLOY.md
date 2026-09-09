@@ -31,20 +31,26 @@ git clone https://github.com/daiqiongzhao-bit/GZT.git
 cd GZT
 ```
 
-### 2. 准备 `.env` 配置文件
+### 2. 准备 `.env` 配置文件（可选，推荐）
 
-在项目目录（或镜像运行目录）新建 `.env`：
+> **自 v0.9.3 起密钥可全自动**：容器在数据卷 `/data/secrets.env` **首次启动会自动生成强随机 JWT/AES 密钥并持久化**，
+> 之后每次启动复用。因此**纯 UI / 无 SSH（群晖 / Portainer / NAS）部署可完全跳过本步**，直接到「3. 创建 compose」。
+> 只有当你希望**自己掌控密钥**时才需在项目目录新建 `.env`：
 
 ```bash
 # 服务端口（容器内）
 APP_PORT=8080
-# JWT 签名密钥：务必改成自己的随机长串（至少 16 位）
+# JWT 签名密钥：建议 openssl rand -hex 32 生成
 JWT_SECRET=改成你的随机密钥-至少16位
-# AES 加密密钥：务必改成自己的随机串（建议 32 位）
+# AES 加密密钥：建议 openssl rand -hex 32 生成
 AES_KEY=改成你的另一个随机密钥-32位
 ```
 
-> ⚠️ `JWT_SECRET` 和 `AES_KEY` 必须修改，否则他人可伪造令牌 / 解密数据。
+> ⚠️ 密钥规则（v0.9.3+）：
+> - **可选**：`.env` 留空/不建 → 应用首次启动自动生成并持久化到数据卷，无需任何配置。
+> - 显式注入时**两者必须同时提供**，且**不能是弱默认值**，否则启动被拒。
+> - **禁止对已运行过的数据卷更换密钥**：注入与数据卷 `secrets.env` 不一致会拒启（保护既有会话与密文）。
+>   如需重置，删除数据卷 `/data/secrets.env` 后重启（旧会话/密文随之作废）。
 
 ### 3. 创建 `docker-compose.yml`
 
@@ -58,10 +64,10 @@ services:
     environment:
       APP_PORT: "8080"
       DB_PATH: "/data/swb.db"
-      JWT_SECRET: "${JWT_SECRET}"
-      AES_KEY: "${AES_KEY}"
+      JWT_SECRET: "${JWT_SECRET:-}"        # 留空即由应用自动生成/复用数据卷密钥
+      AES_KEY: "${AES_KEY:-}"
     volumes:
-      - /opt/swb/data:/data                # 数据持久化目录（含数据库与备份）
+      - /opt/swb/data:/data                # 数据持久化目录（含数据库/备份/密钥 secrets.env）
     restart: unless-stopped
 ```
 

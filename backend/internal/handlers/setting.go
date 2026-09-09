@@ -20,8 +20,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// GetSetting 获取企业设置
+// GetSetting 获取企业公开设置（登录页/侧边栏品牌展示用）。
+// 只返回品牌与非敏感运行字段；SMTP 账号/收件邮箱等敏感项绝不在此泄露，需走 GetSettingFull。
 func GetSetting(c *gin.Context) {
+	var s models.Setting
+	db.DB.FirstOrCreate(&s, models.Setting{ID: 1})
+	c.JSON(http.StatusOK, gin.H{
+		"company_name":         s.CompanyName,
+		"slogan":               s.Slogan,
+		"version":              config.C.AppVersion,
+		"copyright":            s.Copyright,
+		"logo":                 s.Logo,
+		"timezone":             s.Timezone,
+		"log_retention_days":   s.LogRetentionDays,
+		"daily_summary_enabled": s.DailySummaryEnabled,
+		"overdue_grace_minutes": s.OverdueGraceMinutes,
+	})
+}
+
+// GetSettingFull 获取完整企业配置（仅超管后台）。含 SMTP 等敏感项，必须登录且为超管。
+func GetSettingFull(c *gin.Context) {
 	var s models.Setting
 	db.DB.FirstOrCreate(&s, models.Setting{ID: 1})
 	s.Version = config.C.AppVersion

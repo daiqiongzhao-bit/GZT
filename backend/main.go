@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -27,7 +28,10 @@ import (
 var webFS embed.FS
 
 func main() {
-	config.Init()
+	if err := config.Init(); err != nil {
+		fmt.Fprintln(os.Stderr, "启动失败(安全校验):", err)
+		os.Exit(1)
+	}
 
 	// 运行日志：默认写在数据库同目录的 runtime.log（即使数据库损坏也可排查）；
 	// 可用环境变量 LOG_FILE 覆盖。该文件随数据卷持久化（NAS 上为 /volume1/docker/gzt/data）。
@@ -80,6 +84,10 @@ func main() {
 		})
 		api.GET("/settings", handlers.GetSetting)   // 企业信息公开可读（登录页展示）
 		api.GET("/settings/logo", handlers.GetLogo) // 企业 Logo 公开可读（登录页展示）
+		// 知识附件（含中转缓存）公开可读：路由用不可猜测的 stored_name（纳秒随机串），
+		// 匿名者无法按自增主键枚举他人附件；富文本内嵌图片仍可经 <img src> 直接渲染。
+		api.GET("/workspace/knowledge_attachments/:key/download", handlers.DownloadKnowledgeAttachment)
+		api.GET("/workspace/temp-attachments/:key/download", handlers.DownloadTempAttachment)
 		api.GET("/version", func(c *gin.Context) {
 			c.JSON(200, gin.H{"version": config.C.AppVersion})
 		})
@@ -164,7 +172,7 @@ func main() {
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
 			auth.GET("/workspace/knowledge/:id/history", handlers.ListKnowledgeHistory)
 			auth.POST("/workspace/knowledge/:id/attachments", handlers.UploadKnowledgeAttachment)
-			auth.GET("/workspace/knowledge_attachments/:aid/download", handlers.DownloadKnowledgeAttachment)
+			auth.POST("/workspace/temp-attachments", handlers.UploadTempAttachment)
 			auth.DELETE("/workspace/knowledge_attachments/:aid", handlers.DeleteKnowledgeAttachment)
 			auth.POST("/workspace/knowledge", handlers.CreateKnowledge)
 			auth.PUT("/workspace/knowledge/:id", handlers.UpdateKnowledge)
@@ -201,7 +209,8 @@ func main() {
 			auth.POST("/settings/smtp", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateSMTP)
 			auth.POST("/settings/test-email", middleware.RequireRole(models.RoleSuperAdmin), handlers.TestEmail)
 
-			// 设置（仅超管写）
+			// 设置（仅超管写；完整配置读取也仅超管，避免 SMTP 等敏感项公开泄露）
+			auth.GET("/settings/full", middleware.RequireRole(models.RoleSuperAdmin), handlers.GetSettingFull)
 			auth.POST("/settings", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateSetting)
 			auth.POST("/settings/logo", middleware.RequireRole(models.RoleSuperAdmin), handlers.UploadLogo)
 			auth.DELETE("/settings/logo", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteLogo)

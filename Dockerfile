@@ -38,7 +38,9 @@ COPY --from=backend /out/app /usr/local/bin/swb
 EXPOSE 8080
 VOLUME ["/data"]
 ENV APP_PORT=8080 \
-    DB_PATH=/data/swb.db \
-    JWT_SECRET=please-change-me-in-prod-strong \
-    AES_KEY=please-change-this-aes-key-2024-now
+    DB_PATH=/data/swb.db
+# 不在镜像内硬编码 JWT_SECRET / AES_KEY 默认值。
+# 运行时可选注入（compose / docker run -e）；未注入时应用会在数据卷 /data/secrets.env
+# 首次启动自动生成强随机密钥并持久化，之后每次启动复用（见 config.resolveSecrets）。
+# 注意：注入弱默认值、或对已有数据卷更换密钥，会导致应用拒绝启动以保护既有数据。
 ENTRYPOINT ["/usr/local/bin/swb"]

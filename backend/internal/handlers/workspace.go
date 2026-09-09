@@ -141,6 +141,8 @@ func CreateKnowledge(c *gin.Context) {
 	if req.Scope != string(models.ScopePrivate) {
 		req.Scope = string(models.ScopeDepartment) // 默认同部门共享
 	}
+	// 服务端白名单净化，防存储型 XSS（纵深防御，绕过前端也拦得住）
+	req.Content = sanitizeRichContent(req.Content)
 	entry := models.KnowledgeEntry{
 		Title:     req.Title,
 		Category:  strings.TrimSpace(req.Category),
@@ -212,6 +214,8 @@ func UpdateKnowledge(c *gin.Context) {
 	oldTitle, oldCategory, oldContent, oldScope := entry.Title, entry.Category, entry.Content, entry.Scope
 	entry.Title = strings.TrimSpace(req.Title)
 	entry.Category = strings.TrimSpace(req.Category)
+	// 服务端白名单净化，防存储型 XSS（纵深防御）
+	req.Content = sanitizeRichContent(req.Content)
 	entry.Content = req.Content
 	if req.Scope == string(models.ScopePrivate) || req.Scope == string(models.ScopeDepartment) {
 		entry.Scope = models.WorkspaceScope(req.Scope)
@@ -811,11 +815,26 @@ func UploadKnowledgeAttachment(c *gin.Context) {
 	c.JSON(http.StatusOK, att)
 }
 
-// DownloadKnowledgeAttachment GET /workspace/knowledge/attachments/:aid/download
-// 附件下载/预览。可见者均可读；图片以 inline 预览，其余以附件下载。
-func DownloadKnowledgeAttachment(c *gin.Context) {
+// DownloadKnowledgeAttachment GET /workspace/knowledge_attachments/:key/download
+// 附件下载/预览。图片以 inline 预览，其余以附件下载。
+// :key 优先按不可猜的 stored_name（含纳秒随机串）匹配，杜绝按自增主键枚举下载他人附件；
+// 历史内容里仍残留按自增 id 拼的旧 URL，故 id 命中作为兼容兜底（仅命中不可在列表侧枚举的、本机上已存在的记录）。
+func findKnowledgeAttachment(key string) (*models.KnowledgeAttachment, bool) {
 	var att models.KnowledgeAttachment
-	if err := db.DB.First(&att, c.Param("aid")).Error; err != nil {
+	if err := db.DB.Where("stored_name = ?", key).First(&att).Error; err == nil {
+		return &att, true
+	}
+	// 兼容历史：按自增 id 兜底（旧富文本正文里存的是 /knowledge_attachments/{id}/download）
+	if id, err := strconv.ParseUint(key, 10, 64); err == nil {
+		if err2 := db.DB.First(&att, id).Error; err2 == nil {
+			return &att, true
+		}
+	}
+	return nil, false
+}
+func DownloadKnowledgeAttachment(c *gin.Context) {
+	att, ok := findKnowledgeAttachment(c.Param("key"))
+	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
 		return
 	}
@@ -961,17 +980,27 @@ func UploadTempAttachment(c *gin.Context) {
 		"file_name":   att.FileName,
 		"mime":        att.Mime,
 		"size":        att.Size,
-		"download_url": "/api/workspace/temp-attachments/" + strconv.FormatUint(uint64(att.ID), 10) + "/download",
+		"stored_name": att.StoredName,
+		"download_url": "/api/workspace/temp-attachments/" + att.StoredName + "/download",
 	})
 }
 
-// DownloadTempAttachment GET /workspace/temp-attachments/:id/download
-// 中转缓存文件公开可读（文件名不可猜测）；仅用于编辑期预览，转正后即失效。
+// DownloadTempAttachment GET /workspace/temp-attachments/:key/download
+// 中转缓存文件公开可读（不可猜测的 stored_name）；仅用于编辑期预览，转正后即失效。
+// 兼容历史：也接受自增 id（旧 URL 为 /temp-attachments/{id}/download）。
 func DownloadTempAttachment(c *gin.Context) {
+	key := c.Param("key")
 	var att models.KnowledgeTempAttachment
-	if err := db.DB.First(&att, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
-		return
+	if err := db.DB.Where("stored_name = ?", key).First(&att).Error; err != nil {
+		if id, perr := strconv.ParseUint(key, 10, 64); perr == nil {
+			if err2 := db.DB.First(&att, id).Error; err2 != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
+				return
+			}
+		} else {
+			c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
+			return
+		}
 	}
 	p := filepath.Join(tempAttachmentDir(), filepath.Base(att.StoredName))
 	if _, err := os.Stat(p); err != nil {
@@ -1046,9 +1075,14 @@ func adoptTempAttachments(content string, entryID uint, explicitTempIDs []uint, 
 			continue
 		}
 		db.DB.Delete(&t)
-		oldSrc := "/api/workspace/temp-attachments/" + strconv.FormatUint(uint64(tid), 10) + "/download"
-		newSrc := "/api/workspace/knowledge_attachments/" + strconv.FormatUint(uint64(att.ID), 10) + "/download"
+		oldSrc := "/api/workspace/temp-attachments/" + t.StoredName + "/download"
+		newSrc := "/api/workspace/knowledge_attachments/" + att.StoredName + "/download"
 		content = strings.ReplaceAll(content, oldSrc, newSrc)
+		// 兼容历史正文里按自增 id 拼的旧中转 URL
+		oldIdSrc := "/api/workspace/temp-attachments/" + strconv.FormatUint(uint64(tid), 10) + "/download"
+		if oldIdSrc != oldSrc {
+			content = strings.ReplaceAll(content, oldIdSrc, newSrc)
+		}
 		content = strings.ReplaceAll(content, `data-temp-id="`+strconv.FormatUint(uint64(tid), 10)+`"`, "")
 	}
 	return content

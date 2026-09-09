@@ -92,6 +92,7 @@ cd /root/GZT && docker compose --env-file /opt/swb/swb.env up -d
 
 | 版本 | 类型 | 内容 |
 |---|---|---|
+| v0.9.3 | 修复 | 部署/安全加固批量落地 + 密钥首启自动生成。①**密钥首启自动生成**：容器在数据卷 `/data/secrets.env` 首次启动自动生成强随机 JWT/AES 密钥并持久化，无 SSH / 仅 UI（群晖/Portainer/NAS）部署无需任何环境变量即可拉起并登录；显式注入的强密钥同样持久化复用；注入弱默认值或对既有数据卷更换密钥会被拒启以保护数据（修复此前强校验导致无 SSH 用户到不了登录页的问题）。②**XSS 净化**：新增 `sanitize.go`，知识库富文本落库前白名单净化（去 script/iframe/on*/javascript: 等）。③**附件越权**：附件下载/上传改按不可猜测的 `stored_name` 定位并兼容旧 id。④**CORS 白名单**：去掉默认 `*`，改 `CORS_ORIGINS` + 同源/localhost/扩展白名单。⑤**配置泄露**：公开 `/settings` 仅返回品牌字段，完整配置收敛到超管 `/settings/full`。⑥**默认密钥不落镜像**：Dockerfile/compose 移除内置默认，改 `${JWT_SECRET:-}`（缺省由应用自动生成）。⑦去除 department.go 重复 `InGroup` 块 |
 | v0.7.1 | 修复 | 导航角标把「逾期 ∪ 今日到期」算成两者相加，2 条任务显示成 4。新增 `due_total`（去重并集），前后端统一取该值 |
 | v0.7.2 | 修复 | 提醒里同一个人值多个班次时被重复列出；跨班次去重后本节显示「同上」 |
 | v0.7.3 | 修复 | `sendEmailNotify` 在未配置 SMTP 时返回 `nil` 被计为成功渠道，`sent` 虚高。改为哨兵错误 `ErrEmailNotConfigured`，未配置不计入渠道 |

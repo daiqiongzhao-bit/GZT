@@ -219,10 +219,12 @@ async function embedImagesFromHtml(html, blobs) {
 async function uploadFileReturnUrl(file) {
   if (props.entryId) {
     const att = await api.upload('/workspace/knowledge/' + props.entryId + '/attachments', file)
-    return { dl: '/api/workspace/knowledge_attachments/' + att.id + '/download', id: att.id, temp: false, name: att.file_name || file.name }
+    // 用不可猜的 stored_name 拼下载 URL，避免自增主键被枚举（后端按 stored_name 精确命中）
+    const key = att.stored_name || att.id
+    return { dl: '/api/workspace/knowledge_attachments/' + key + '/download', id: att.id, temp: false, name: att.file_name || file.name }
   }
   const att = await api.upload('/workspace/temp-attachments', file)
-  return { dl: att.download_url || ('/api/workspace/temp-attachments/' + att.id + '/download'), id: att.id, temp: true, name: att.file_name || file.name }
+  return { dl: att.download_url || ('/api/workspace/temp-attachments/' + (att.stored_name || att.id) + '/download'), id: att.id, temp: true, name: att.file_name || file.name }
 }
 
 // 给 <img> 设置上传后的地址与标记（中转缓存用 data-temp-id，正式用 data-att-id）
