@@ -141,6 +141,7 @@
               <p v-else class="bcast-hint">广播将发送给你所在部门（含子部门）的全部成员</p>
               <input v-model="bcastTitle" class="bcast-input" maxlength="60" placeholder="通知标题（必填）" :disabled="sendingBcast" />
               <textarea v-model="bcastContent" class="bcast-input bcast-ta" rows="3" maxlength="500" placeholder="通知内容（必填）" :disabled="sendingBcast"></textarea>
+              <input v-model="bcastLink" class="bcast-input" maxlength="500" placeholder="附带链接（可选，https://…）" :disabled="sendingBcast" />
               <button class="btn primary sm full" :disabled="sendingBcast || !bcastTitle.trim() || !bcastContent.trim()" @click="doBroadcast">
                 {{ sendingBcast ? '发送中…' : '发送广播' }}
               </button>
@@ -149,6 +150,7 @@
               <div v-for="n in notifs" :key="n.id" class="notif-item" :class="{ unread: !n.read }" @click="markRead(n)">
                 <div class="ni-title">{{ n.title }}</div>
                 <div class="ni-content">{{ n.content }}</div>
+                <a v-if="n.link" class="ni-link" :href="safeUrl(n.link)" target="_blank" rel="noopener noreferrer" @click.stop>🔗 {{ linkLabel(n.link) }}</a>
                 <div class="ni-time">{{ fmtNotif(n.created_at) }}</div>
               </div>
               <div v-if="!notifs.length" class="notif-empty">暂无通知</div>
@@ -355,9 +357,25 @@ const bcastOpen = ref(false)
 const bcastDept = ref(0)
 const bcastTitle = ref('')
 const bcastContent = ref('')
+const bcastLink = ref('')
 const sendingBcast = ref(false)
 const deptList = ref([])
 const deptOpts = computed(() => deptOptions(deptList.value))
+
+// 仅放行 http/https 链接（防伪协议注入）；非法或空返回空
+function safeUrl(u) {
+  if (!u) return ''
+  const s = String(u).trim()
+  if (/^https?:\/\//i.test(s)) return s
+  return ''
+}
+// 展示用的链接短文本（截断过长 URL）
+function linkLabel(u) {
+  const s = safeUrl(u)
+  if (!s) return ''
+  const host = s.replace(/^https?:\/\//i, '').split('/')[0]
+  return (s.length > 46 ? host + '/…' : s)
+}
 
 async function toggleBcast() {
   bcastOpen.value = !bcastOpen.value
@@ -374,11 +392,13 @@ async function doBroadcast() {
     const r = await post('/notifications/broadcast', {
       dept_id: auth.isSuper ? bcastDept.value : 0,
       title: bcastTitle.value.trim(),
-      content: bcastContent.value.trim()
+      content: bcastContent.value.trim(),
+      link: safeUrl(bcastLink.value)
     })
     bcastOpen.value = false
     bcastTitle.value = ''
     bcastContent.value = ''
+    bcastLink.value = ''
     const dn = r.dept_name || '部门'
     alert(`已向「${dn}」${r.sent} 名成员发送广播通知`)
     // 发送后刷新我的通知列表与未读
@@ -500,6 +520,8 @@ async function doBroadcast() {
 }
 .ni-title { font-size: 13.5px; font-weight: 700; color: var(--text); }
 .ni-content { font-size: 12.5px; color: var(--text-dim); margin-top: 4px; line-height: 1.6; }
+.ni-link { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent, #4f46e5); text-decoration: none; word-break: break-all; }
+.ni-link:hover { text-decoration: underline; }
 .ni-time { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
 .notif-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 60px 0; }
 

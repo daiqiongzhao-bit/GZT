@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/middleware"
@@ -48,6 +49,10 @@ func Login(c *gin.Context) {
 		return
 	}
 	resetLoginFailure(throttleKey)
+	// 记录最近登录时间（持久化，供个人中心展示）
+	now := time.Now()
+	db.DB.Model(&user).Update("last_login_at", now)
+	user.LastLoginAt = &now
 	claims := &models.Claims{
 		UserID:   user.ID,
 		Username: user.Username,

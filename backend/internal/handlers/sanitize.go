@@ -106,3 +106,22 @@ func stripUnsafeStyle(s string) string {
 		return " style='" + strings.Join(keep, ";") + "'"
 	})
 }
+
+// sanitizeLink 仅放行 http/https 绝对链接（用于站内通知附带的超链接）。
+// 其它协议（javascript:/data:/vbscript: 等）或空值一律返回空串，杜绝伪协议注入。
+func sanitizeLink(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// 去控制字符与空白，避免注入换行/引号
+	s = regexp.MustCompile(`[\x00-\x20\x7f]`).ReplaceAllString(s, "")
+	if len(s) > 2048 {
+		s = s[:2048]
+	}
+	low := strings.ToLower(s)
+	if strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://") {
+		return s
+	}
+	return ""
+}

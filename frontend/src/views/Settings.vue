@@ -22,6 +22,7 @@
         <div class="info-row"><label class="fld">角色</label><span class="info-val">{{ auth.roleLabel }}</span></div>
         <div class="info-row"><label class="fld">部门</label><span class="info-val">{{ auth.user?.dept?.name || '—' }}</span></div>
         <div class="info-row"><label class="fld">手机号</label><span class="info-val">{{ auth.user?.mobile || '—' }}</span></div>
+        <div class="info-row"><label class="fld">最近登录</label><span class="info-val">{{ auth.user?.last_login_at ? fmt(auth.user.last_login_at) : '—' }}</span></div>
       </div>
       <h3 class="section-title" style="margin-top:20px;">修改密码</h3>
       <div class="form-col" style="max-width:380px;">
@@ -155,6 +156,7 @@
         </label>
         <button class="btn ghost" @click="exportUsers">⬇ 导出人员</button>
         <button class="btn ghost" :class="{ active: batchMode }" @click="batchMode = !batchMode">{{ batchMode ? '退出批量' : '批量操作' }}</button>
+        <input v-model="userKw" class="glass-input user-search" placeholder="🔍 搜索姓名 / 工号 / 账号" style="max-width:200px;" />
         <span class="section-sub">按模板填好上传即可，登录账号已存在则更新资料</span>
       </div>
       <div v-if="batchMode && auth.canManage" class="batch-bar">
@@ -206,7 +208,7 @@
         </div>
       </div>
       <div class="list">
-        <div v-for="p in users" :key="p.id" class="row" :class="{ frozen: p.frozen, sel: batchMode && selectedIds.includes(p.id) }">
+        <div v-for="p in filteredUsers" :key="p.id" class="row" :class="{ frozen: p.frozen, sel: batchMode && selectedIds.includes(p.id) }">
           <input v-if="batchMode" type="checkbox" class="row-chk" :value="p.id" v-model="selectedIds" />
           <div class="row-main">
             <span class="avatar sm" :class="{ 'frozen-av': p.frozen }">{{ (p.name || '?')[0] }}</span>
@@ -233,7 +235,7 @@
             <span class="ru" style="font-size:12px">超管</span>
           </div>
         </div>
-        <div v-if="!users.length" class="empty">暂无人员</div>
+        <div v-if="!filteredUsers.length" class="empty">{{ users.length ? '未找到匹配人员' : '暂无人员' }}</div>
       </div>
 
       <!-- 编辑人员弹窗 -->
@@ -285,7 +287,13 @@
         任务模板：Sheet「每日工作内容」（时间/时段工作/负责班次）→ 每日任务；Sheet「月度工作内容」（N号/业务主题/工作内容）→ 每月任务。
       </p>
 
-      <h3 class="section-title" style="margin-top:20px;">自定义模板 <span class="section-sub" v-if="!auth.isSuper">（仅查看 / 下载，修改需超管）</span></h3>
+      <div class="tmpl-head" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px;">
+        <h3 class="section-title" style="margin:0;">自定义模板 <span class="section-sub" v-if="!auth.isSuper">（仅查看 / 下载，新增与修改需超管）</span></h3>
+        <button v-if="auth.isSuper" class="btn primary sm" @click="toggleTmplForm">
+          {{ tmplOpen ? '收起新增' : '＋ 新增模板' }}
+        </button>
+      </div>
+
       <div class="list">
         <div v-for="t in templates" :key="t.id" class="row">
           <div class="row-main">
@@ -300,10 +308,12 @@
             <button v-if="auth.isSuper" class="del" @click="deleteTemplate(t)">×</button>
           </div>
         </div>
-        <div v-if="!templates.length" class="empty">暂无自定义模板，超管可点击下方新增</div>
+        <div v-if="!templates.length" class="empty">
+          {{ auth.isSuper ? '暂无自定义模板，点击上方「＋ 新增模板」创建' : '暂无自定义模板（仅超管可新增，你可下载固定模板使用）' }}
+        </div>
       </div>
 
-      <div v-if="auth.isSuper" class="add-form" style="margin-top:16px;">
+      <div v-if="auth.isSuper && tmplOpen" class="add-form" style="margin-top:16px;">
         <div class="fg2">
           <div><label class="fld">模板类型</label>
             <select v-model="tmplForm.type" class="glass-input">
@@ -326,7 +336,12 @@
 
     <!-- 通知：多渠道 + 邮件 -->
     <section v-if="tab === 'hook' && auth.canManage" class="panel">
-      <h3 class="section-title">渠道通知 <span class="section-sub">地址与密钥均加密存储</span></h3>
+      <div class="hook-head" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <h3 class="section-title" style="margin:0;">渠道通知 <span class="section-sub">地址与密钥均加密存储</span></h3>
+        <button v-if="auth.canManage" class="btn primary sm" @click="toggleHookForm">
+          {{ hookOpen ? '收起表单' : '＋ 新增渠道' }}
+        </button>
+      </div>
       <div class="daily-summary-toggle">
         <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;">
           <input type="checkbox" v-model="dailySummary" @change="saveDailySummary" :disabled="!auth.isSuper || dsSaving" style="width:16px;height:16px" />
@@ -335,7 +350,7 @@
         <span class="section-sub" v-if="!auth.isSuper" style="margin-left:8px">仅超管可开关</span>
         <span v-if="dsSaving" class="section-sub" style="margin-left:8px">保存中…</span>
       </div>
-      <div v-if="auth.canManage" class="add-form">
+      <div v-if="auth.canManage && hookOpen" class="add-form" style="margin-top:6px;">
         <div class="fg2">
           <div><label class="fld">名称</label><input v-model="h.name" class="glass-input" placeholder="如：企业微信机器人" /></div>
           <div><label class="fld">类型</label>
@@ -362,17 +377,24 @@
           <button class="btn primary" :disabled="savingH" @click="addHook">{{ savingH ? '保存中…' : (editHookId ? '保存修改' : '添加') }}</button>
         </div>
       </div>
-      <div class="list">
-        <div v-for="w in hooks" :key="w.id" class="row">
-          <div class="row-main">
-            <div><div class="rn">{{ w.name }} <span class="chip" style="margin-left:6px">{{ typeLabel(w.type) }}</span><span class="ru" style="font-size:12px;color:var(--text-dim)">（{{ deptNameOf(w.dept_id) }}）</span></div><div class="ru mono">{{ w.url }}</div></div>
-          </div>
-          <button v-if="auth.canManage" class="op" style="margin-right:4px" @click="editHook(w)">编辑</button>
-          <button v-if="auth.canManage" class="del" @click="delHook(w)">删除</button>
-        </div>
-        <div v-if="!hooks.length" class="empty">暂无通知渠道</div>
-      </div>
       <p v-if="editHookId" class="hint">正在编辑「{{ hookEditingName }}」，改完点「保存修改」；密钥留空表示不修改</p>
+      <div v-if="hooks.length" class="hook-cards">
+        <div v-for="w in hooks" :key="w.id" class="hook-card">
+          <div class="hook-card-top">
+            <div class="hook-ico" :class="'t-' + w.type">{{ typeShort(w.type) }}</div>
+            <div class="hook-title">
+              <div class="rn">{{ w.name }} <span class="chip" style="margin-left:6px">{{ typeLabel(w.type) }}</span></div>
+              <div class="ru" style="font-size:12px;color:var(--text-dim)">推送范围：{{ deptNameOf(w.dept_id) }}</div>
+            </div>
+          </div>
+          <div class="ru mono hook-url" :title="w.url">{{ w.url }}</div>
+          <div class="hook-card-actions">
+            <button v-if="auth.canManage" class="btn ghost sm" @click="editHook(w)">编辑</button>
+            <button v-if="auth.canManage" class="btn danger sm" @click="delHook(w)">删除</button>
+          </div>
+        </div>
+      </div>
+      <div v-else class="empty">暂无通知渠道，点击上方「＋ 新增渠道」添加</div>
 
       <h3 class="section-title foldable" :class="{ open: smtpOpen }" style="margin-top:20px;" @click="smtpOpen = !smtpOpen">
         <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -560,6 +582,17 @@ const typeLabel = (t) => ({ wecom: '企业微信', dingtalk: '钉钉', feishu: '
 const saving = ref(false)
 const departments = ref([])
 const users = ref([])
+// 人员列表快速筛选（姓名 / 工号 / 登录账号）
+const userKw = ref('')
+const filteredUsers = computed(() => {
+  const kw = userKw.value.trim().toLowerCase()
+  if (!kw) return users.value
+  return users.value.filter((p) =>
+    (p.name || '').toLowerCase().includes(kw) ||
+    (p.emp_no || '').toLowerCase().includes(kw) ||
+    (p.username || '').toLowerCase().includes(kw)
+  )
+})
 // 批量操作
 const batchMode = ref(false)
 const selectedIds = ref([])
@@ -584,6 +617,19 @@ const savingH = ref(false)
 const testing = ref(false)
 const editHookId = ref(0)        // 正在编辑的 Webhook id；0 表示新增
 const hookEditingName = ref('')  // 编辑提示里显示的名称
+const hookOpen = ref(false)      // 新增/编辑渠道表单：默认收起
+function toggleHookForm() {
+  if (hookOpen.value) {
+    // 关闭：若在编辑态则一并取消编辑
+    if (editHookId.value) cancelEditHook()
+    else hookOpen.value = false
+  } else {
+    // 打开：确保是干净的新增态
+    if (editHookId.value) cancelEditHook()
+    hookOpen.value = true
+  }
+}
+function typeShort(t) { return { wecom: '企', dingtalk: '钉', feishu: '飞' }[t] || '通' }
 function deptNameOf(id) {
   const d = departments.value.find((x) => x.id === id)
   return d ? d.name : (id === 0 ? '全局' : `#${id}`)
@@ -908,6 +954,7 @@ async function addHook() {
       await api.post('/webhooks', body)
     }
     Object.assign(h, { name: '', url: '', dept_id: h.dept_id, type: 'wecom', secret: '' })
+    hookOpen.value = false   // 保存成功后收起新增/编辑表单
     await loadHooks()
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { savingH.value = false }
@@ -916,12 +963,14 @@ async function editHook(w) {
   editHookId.value = w.id
   hookEditingName.value = w.name
   Object.assign(h, { name: w.name, url: w.url, type: w.type, secret: '', dept_id: w.dept_id })
+  hookOpen.value = true
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 function cancelEditHook() {
   editHookId.value = 0
   hookEditingName.value = ''
   Object.assign(h, { name: '', url: '', dept_id: h.dept_id, type: 'wecom', secret: '' })
+  hookOpen.value = false
 }
 async function testHook() {
   if (!h.url) { alert('请先填写 Webhook 地址'); return }
@@ -938,12 +987,19 @@ async function delHook(w) { if (!confirm(`删除通知渠道「${w.name}」？`)
 // 模板管理
 const tmplForm = reactive({ id: null, type: 'task', name: '', content: '' })
 const tmplSaving = ref(false)
+const tmplOpen = ref(false)   // 自定义模板新增/编辑表单：默认收起
+function toggleTmplForm() {
+  // 收起时若在编辑态则重置，避免再次打开残留旧内容
+  if (tmplOpen.value && tmplForm.id) resetTmplForm()
+  tmplOpen.value = !tmplOpen.value
+}
 function resetTmplForm() { Object.assign(tmplForm, { id: null, type: 'task', name: '', content: '' }) }
 function editTemplate(t) {
   tmplForm.id = t.id
   tmplForm.type = t.type
   tmplForm.name = t.name
   tmplForm.content = t.content
+  tmplOpen.value = true
   window.scrollTo({ top: 9999, behavior: 'smooth' })
 }
 async function saveTemplate() {
@@ -1252,6 +1308,17 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .mono { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-dim); word-break: break-all; }
 .del { padding: 6px 13px; border-radius: 10px; border: 1px solid var(--glass-border); background: transparent; color: var(--text-faint); cursor: pointer; font-size: 12.5px; }
 .del:hover { color: var(--danger); border-color: rgba(225,29,72,0.4); }
+.hook-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.hook-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 13px; background: var(--overlay); border: 1px solid var(--glass-border); min-width: 0; }
+.hook-card-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hook-ico { width: 36px; height: 36px; flex: none; border-radius: 10px; display: grid; place-items: center; font-size: 15px; font-weight: 700; color: #fff; }
+.hook-ico.t-wecom { background: #3a8bfd; }
+.hook-ico.t-dingtalk { background: #2e8cff; }
+.hook-ico.t-feishu { background: #3370ff; }
+.hook-title { min-width: 0; }
+.hook-title .rn { font-size: 13.5px; }
+.hook-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hook-card-actions { display: flex; gap: 8px; margin-top: auto; }
 .log-list { display: flex; flex-direction: column; gap: 2px; }
 .log { display: flex; gap: 12px; padding: 10px 4px; font-size: 13px; border-bottom: 1px solid var(--hairline); }
 .log-time { color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }

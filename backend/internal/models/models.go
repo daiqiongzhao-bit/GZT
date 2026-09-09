@@ -69,6 +69,7 @@ type User struct {
 	MustChangePwd bool        `json:"must_change_pwd" gorm:"default:false"` // 必须修改密码：弱密码/管理员重置后登录强制改密
 	InGroup       bool        `json:"in_group" gorm:"default:false"`        // 已加入企业微信通知群：推送@对象，名单中不重复列出
 	TokenVersion  uint        `json:"token_version"`                        // 令牌版本：自增即令所有已签发token失效
+	LastLoginAt   *time.Time  `json:"last_login_at"`                        // 最近登录时间（登录成功时写入）
 	Dept          *Department `json:"dept,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 }
@@ -198,9 +199,10 @@ type SystemLog struct {
 type Notification struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	UserID    uint      `json:"user_id" gorm:"index"`      // 接收人
-	Kind      string    `json:"kind" gorm:"size:16"`       // schedule / user / password
+	Kind      string    `json:"kind" gorm:"size:16"`       // schedule / user / password / broadcast
 	Title     string    `json:"title" gorm:"size:128"`     // 短标题
 	Content   string    `json:"content" gorm:"size:512"`   // 详情：谁、何时、改了啥
+	Link      string    `json:"link" gorm:"size:512"`      // 附带的超链接（广播/定向发送可选）
 	ActorID   uint      `json:"actor_id"`                  // 操作人
 	ActorName string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
 	Read      bool      `json:"read" gorm:"default:false"` // 是否已读

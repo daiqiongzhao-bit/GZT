@@ -65,12 +65,14 @@
                 </label>
               </div>
             </div>
-            <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
+            <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
             <div v-if="kForm.id && kAtts.length" class="att-list">
               <div v-for="a in kAtts" :key="a.id" class="att-item">
                 <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
                 <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
                 <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
                 <span class="att-size dim">{{ fmtSize(a.size) }}</span>
                 <button class="del danger" @click="removeAtt(a)">删除</button>
               </div>
@@ -160,12 +162,14 @@
                   </label>
                 </div>
               </div>
-              <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览），单文件 ≤ 100MB</p>
+              <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB</p>
               <div v-if="kAtts.length" class="att-list">
                 <div v-for="a in kAtts" :key="a.id" class="att-item">
                   <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                  <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
                   <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
                   <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                  <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
                   <span class="att-size dim">{{ fmtSize(a.size) }}</span>
                   <button v-if="canDelAtt(a)" class="del danger" @click="removeAtt(a)">删除</button>
                 </div>
@@ -584,6 +588,10 @@ async function previewAtt(a) {
     const win = window.open(); if (win) { win.document.write('<iframe src="' + u + '" style="width:100%;height:100%;border:0"></iframe>'); win.document.title = a.file_name }
   } catch (e) { toast(e.message || '预览失败', 'error') }
 }
+// 是否可在线阅读（图片由缩略图预览，PDF 走浏览器原生内嵌预览）
+function isPdf(a) {
+  return a && (a.mime === 'application/pdf' || (a.file_name && /\.pdf$/i.test(a.file_name)))
+}
 async function uploadAtts(e) {
   const files = Array.from(e.target.files || [])
   e.target.value = ''
@@ -999,6 +1007,9 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .att-name:hover { color: var(--accent); text-decoration: underline; }
 .att-size { font-size: 11px; flex-shrink: 0; }
 .att-item .del { flex-shrink: 0; }
+.att-ico.pdf { color: var(--accent, #4f46e5); }
+.att-read { font-size: 11.5px; padding: 3px 10px; border-radius: 7px; border: 1px solid var(--accent, #4f46e5); background: transparent; color: var(--accent, #4f46e5); cursor: pointer; flex-shrink: 0; }
+.att-read:hover { background: var(--accent-soft, rgba(79,70,229,0.12)); }
 .att-empty { padding: 18px 0; }
 
 @media (max-width: 640px) {

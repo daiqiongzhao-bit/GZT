@@ -850,16 +850,16 @@ func DownloadKnowledgeAttachment(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "附件文件不存在"})
 		return
 	}
-	// 图片内嵌预览，其余触发下载（attachment 强制浏览器下载）
-	isImage := strings.HasPrefix(att.Mime, "image/")
+	// 图片与 PDF 内嵌预览（浏览器可直接展示 / 富文本 <img> 渲染），其余触发下载
+	isInline := strings.HasPrefix(att.Mime, "image/") || att.Mime == "application/pdf"
 	disp := "attachment"
-	if isImage {
+	if isInline {
 		disp = "inline"
 	}
 	// RFC 5987 编码文件名，中文可正常显示
 	enc := url.QueryEscape(att.FileName)
 	c.Header("Content-Type", att.Mime)
-	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, "attachment", enc))
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, enc, enc))
 	c.File(p)
 }
 

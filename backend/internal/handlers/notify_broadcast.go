@@ -21,6 +21,7 @@ func BroadcastNotification(c *gin.Context) {
 		DeptID  uint   `json:"dept_id"` // 0=默认本人部门（部门管理员）
 		Title   string `json:"title"`
 		Content string `json:"content"`
+		Link    string `json:"link"` // 附带超链接（可选，仅 http/https）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -28,6 +29,7 @@ func BroadcastNotification(c *gin.Context) {
 	}
 	req.Title = strings.TrimSpace(req.Title)
 	req.Content = strings.TrimSpace(req.Content)
+	req.Link = sanitizeLink(req.Link)
 	if req.Title == "" || req.Content == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "标题与内容均必填"})
 		return
@@ -73,6 +75,7 @@ func BroadcastNotification(c *gin.Context) {
 			Kind:      "broadcast",
 			Title:     req.Title,
 			Content:   req.Content,
+			Link:      req.Link,
 			ActorID:   cl.UserID,
 			ActorName: claimsName(cl),
 			Read:      false,

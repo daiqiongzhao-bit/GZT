@@ -40,6 +40,7 @@
     <!-- 状态条 -->
     <div class="rte-foot" v-if="!disabled">
       <span class="rte-tip">像 Word 一样直接编辑：可整篇复制粘贴（保留标题/列表/排版，图片自动上传）；新建条目时图片先暂存，保存后自动生效</span>
+      <span v-if="pasteWarn" class="rte-warn" role="alert">{{ pasteWarn }}</span>
       <span class="rte-count" v-if="modelValue">{{ textLen }} 字 · {{ imageCount }} 图</span>
     </div>
   </div>
@@ -71,6 +72,15 @@ const imageCount = ref(0)
 // 因此编辑态下始终允许插入图片（含新建条目）。
 const canInsertImage = computed(() => !props.disabled)
 const imageBtnHint = computed(() => props.disabled ? '' : (props.entryId ? '' : '图片将暂存，保存后自动生效'))
+
+// 粘贴时若检测到「本地占位图片无法读取」（常见于从 PDF / 部分文档复制），给出提示并自动消失
+const pasteWarn = ref('')
+let _pasteWarnTimer = null
+function flashPasteWarn(msg) {
+  pasteWarn.value = msg
+  clearTimeout(_pasteWarnTimer)
+  _pasteWarnTimer = setTimeout(() => { pasteWarn.value = '' }, 6000)
+}
 
 // ---------- 内容初始化 / 同步 ----------
 watch(() => props.modelValue, (v) => {
@@ -165,10 +175,15 @@ async function onPaste(e) {
   // 排版（标题/列表/粗体/对齐等语义标签）保留，仅去掉字体/字号等噪声样式。
   if (html) {
     e.preventDefault()
+    // 预估会丢失的「本地占位图」（PDF/部分文档复制常以 file:/// 引用，且剪贴板无对应图片文件）
+    const fileImgCount = (html.match(/<img[^>]+src\s*=\s*["']file:\/\//gi) || []).length
     const { html: handled, leftover } = await embedImagesFromHtml(html, blobs)
     exec('insertHTML', cleanPastedHtml(handled))
     // HTML 里没对应 <img> 的剩余 blob（如单独复制的一张图）补插到光标处
     for (const b of leftover) await uploadAndInsert(b)
+    if (fileImgCount > 0 && blobs.length === 0) {
+      flashPasteWarn('检测到无法读取的本地图片（常见于从 PDF / 文档复制），已省略图片。如需保留图片，请改用右上「上传附件」直接上传 PDF / 文件。')
+    }
     return
   }
   // 纯图片（无 HTML）：逐张上传插入
@@ -371,6 +386,7 @@ defineExpose({ focus: () => editable.value && editable.value.focus(), clear: () 
 .rte-body :deep(code) { background: var(--overlay-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 .rte-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--hairline); font-size: 11.5px; color: var(--text-faint); }
 .rte-tip { flex: 1; min-width: 0; }
+.rte-warn { color: #b45309; white-space: normal; max-width: 60%; }
 .rte-count { white-space: nowrap; }
 .rte-disabled .rte-body { background: var(--overlay); color: var(--text-dim); cursor: not-allowed; }
 </style>
