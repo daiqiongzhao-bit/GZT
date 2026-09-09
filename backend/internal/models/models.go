@@ -107,6 +107,7 @@ type Task struct {
 	Overdue      bool      `json:"overdue" gorm:"-"`        // 瞬态：是否逾期
 	DueToday     bool      `json:"due_today" gorm:"-"`      // 瞬态：今日是否应处理
 	DueThisMonth bool      `json:"due_this_month" gorm:"-"` // 瞬态：本月是否应处理
+	SoonOverdue  bool      `json:"soon_overdue" gorm:"-"`   // v0.9.2 瞬态：30 分钟内将逾期（橙色提醒）
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -265,6 +266,21 @@ type KnowledgeAttachment struct {
 	Mime       string    `json:"mime" gorm:"size:64"`            // Content-Type
 	Size       int64     `json:"size"`                           // 字节
 	OwnerID    uint      `json:"owner_id" gorm:"index"`          // 上传者
+	OwnerName  string    `json:"owner_name" gorm:"size:64"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// KnowledgeTempAttachment 知识附件「中转缓存」：条目尚未保存（新建）时，
+// 富文本粘贴/选择的图片与文件先落到此表与临时目录；待用户确认「保存」新建条目时，
+// 由 CreateKnowledge/UpdateKnowledge 把它们「转正」为正式 KnowledgeAttachment。
+// 这样新建条目也能在保存前就粘贴/上传图片，且误关页面不会留孤儿（由懒清理回收）。
+type KnowledgeTempAttachment struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	FileName   string    `json:"file_name" gorm:"size:255"`
+	StoredName string    `json:"stored_name" gorm:"size:128"`
+	Mime       string    `json:"mime" gorm:"size:64"`
+	Size       int64     `json:"size"`
+	OwnerID    uint      `json:"owner_id" gorm:"index"`
 	OwnerName  string    `json:"owner_name" gorm:"size:64"`
 	CreatedAt  time.Time `json:"created_at"`
 }

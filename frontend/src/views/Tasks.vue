@@ -218,6 +218,7 @@
               <td class="col-title">
                 <div class="t-title-row">
                   <span class="t-title">{{ t.title }}</span>
+                  <span v-if="t.soon_overdue && t.status !== 'done'" class="chip soon" title="距截止 30 分钟内，请尽快处理">即将逾期</span>
                   <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                 </div>
                 <div v-if="t.note" class="t-note">{{ t.note }}</div>

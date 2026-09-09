@@ -140,6 +140,41 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
+// dirExists 判断目录是否存在
+func dirExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// copyDir 递归复制目录（用于把知识库附件目录一并打包进备份）。
+// 目标已存在的文件会被覆盖；目标多出的文件保留（还原不刻意删当前多余文件）。
+func copyDir(src, dst string) error {
+	if !dirExists(src) {
+		return nil
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		sp := filepath.Join(src, e.Name())
+		dp := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := copyDir(sp, dp); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(sp, dp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateBackup 生成一份当前数据库的备份。bType 为 manual/auto；scope 为 all|schedule|task|user。
 // 说明：底层为整库 SQLite 快照，保证还原可靠且不破坏其他数据；scope 作为备份范围标签组织区分，
 // 跨类型细分数据可另用各模块的 CSV/Excel 导出。scope 非法时回退 all。
@@ -170,6 +205,12 @@ func CreateBackup(bType, scope string) (*BackupInfo, error) {
 	localPath := filepath.Join(dir, name)
 	if err := copyFile(src, localPath); err != nil {
 		return nil, err
+	}
+
+	// 知识库附件（图片/文档等磁盘文件）随数据库一起打包，否则还原后图片失效。
+	// 以 <备份名>.att 目录形式放在备份旁；还原时整体拷回附件目录。
+	if attSrc := kAttachmentDir(); dirExists(attSrc) {
+		_ = copyDir(attSrc, localPath+".att")
 	}
 
 	info := &BackupInfo{
@@ -227,9 +268,10 @@ func enforceRetentionLocked(retention int) {
 		}
 	}
 	sort.Strings(files) // 文件名含时间戳，字典序即时间序
-	if len(files) > retention {
+		if len(files) > retention {
 		for _, old := range files[:len(files)-retention] {
 			_ = os.Remove(filepath.Join(dir, old))
+			_ = os.RemoveAll(filepath.Join(dir, old+".att"))
 		}
 	}
 }
@@ -321,6 +363,14 @@ func RestoreBackup(id string) error {
 		return fmt.Errorf("还原失败: %w", err)
 	}
 
+	// 还原知识库附件目录（与数据库同盘目录）
+	if attSrc := src + ".att"; dirExists(attSrc) {
+		if attDst := kAttachmentDir(); attDst != "" {
+			_ = os.MkdirAll(attDst, 0o755)
+			_ = copyDir(attSrc, attDst)
+		}
+	}
+
 	// 关键：重建 GORM 连接，否则 DB 仍指向旧文件句柄
 	if err := db.Reopen(); err != nil {
 		_ = copyFile(currentBackup, config.C.DBPath)
@@ -342,6 +392,7 @@ func DeleteBackup(id string) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("备份不存在")
 	}
+	_ = os.RemoveAll(path + ".att")
 	return os.Remove(path)
 }
 

@@ -109,8 +109,32 @@ func Dashboard(c *gin.Context) {
 		}
 	}
 
+	// 「我的今日班次」：在今日当班名单里匹配当前登录用户（按姓名）。
+	// 由服务端算好直接下发，避免插件端再本地匹配时因姓名/时区不一致误判为「无排班」。
+	myShift := ""
+	if cl := currentClaims(c); cl != nil {
+		var me models.User
+		if db.DB.First(&me, cl.UserID).Error == nil {
+			meName := strings.TrimSpace(me.Name)
+			for _, s := range onDuty {
+				var people []string
+				json.Unmarshal([]byte(s.People), &people)
+				for _, n := range people {
+					if strings.TrimSpace(n) == meName {
+						myShift = s.Shift
+						break
+					}
+				}
+				if myShift != "" {
+					break
+				}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"today":           today,
+		"my_shift":        myShift,
 		"on_duty_count":   onDutyCount,
 		"today_tasks":     todayTaskCount,
 		"overdue_count":   overdueCount,

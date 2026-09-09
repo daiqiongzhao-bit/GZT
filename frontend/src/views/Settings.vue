@@ -1244,8 +1244,8 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .foldable.open .caret { transform: rotate(90deg); }
 .form-actions { display: flex; justify-content: flex-end; align-items: flex-end; gap: 10px; }
 .list { display: flex; flex-direction: column; gap: 8px; }
-.row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 13px; background: var(--overlay); border: 1px solid var(--glass-border); }
-.row-main { display: flex; align-items: center; gap: 11px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 13px; background: var(--overlay); border: 1px solid var(--glass-border); }
+.row-main { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; }
 .avatar.sm { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; flex: none; display: grid; place-items: center; background: var(--brand-grad); color: #fff; font-weight: 700; }
 .rn { font-size: 14px; font-weight: 600; display: flex; align-items: center; }
 .ru { font-size: 12px; color: var(--text-faint); margin-top: 3px; }

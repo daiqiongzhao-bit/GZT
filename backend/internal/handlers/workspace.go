@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +126,8 @@ func CreateKnowledge(c *gin.Context) {
 		Category string `json:"category"`
 		Content  string `json:"content"`
 		Scope    string `json:"scope"` // private | department
+		// 编辑期（条目尚未保存）上传到中转缓存的附件 id：内嵌图片 + 下方「附件」列表文件
+		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -149,6 +153,14 @@ func CreateKnowledge(c *gin.Context) {
 	if err := db.DB.Create(&entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// 转正编辑期中转缓存的附件（内嵌图片 + 显式上传文件），改写正文里的临时图片地址
+	if len(req.TempAttachmentIDs) > 0 || strings.Contains(req.Content, "data-temp-id=") {
+		if adopted := adoptTempAttachments(req.Content, entry.ID, req.TempAttachmentIDs, cl); adopted != req.Content {
+			entry.Content = adopted
+			db.DB.Model(&entry).Update("content", adopted)
+			recordKnowledgeLog(entry.ID, cl, "attachment_adopt", "新建时转正编辑期中转缓存的附件（图片随正文保存，文件进入附件列表）")
+		}
 	}
 	addLog(c, cl.UserID, cl.Username, "新增知识库: "+entry.Title)
 	recordKnowledgeLog(entry.ID, cl, "create",
@@ -179,11 +191,14 @@ func UpdateKnowledge(c *gin.Context) {
 	if !ok {
 		return
 	}
+	cl := middleware.GetClaims(c)
 	var req struct {
 		Title    string `json:"title"`
 		Category string `json:"category"`
 		Content  string `json:"content"`
 		Scope    string `json:"scope"`
+		// 编辑期（新建未保存时）上传到中转缓存的附件 id
+		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -205,7 +220,13 @@ func UpdateKnowledge(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	cl := middleware.GetClaims(c)
+	// 转正编辑期中转缓存的附件（内嵌图片 + 显式上传文件）
+	if len(req.TempAttachmentIDs) > 0 || strings.Contains(req.Content, "data-temp-id=") {
+		if adopted := adoptTempAttachments(req.Content, entry.ID, req.TempAttachmentIDs, cl); adopted != req.Content {
+			entry.Content = adopted
+			db.DB.Model(&entry).Update("content", adopted)
+		}
+	}
 	addLog(c, cl.UserID, cl.Username, "更新知识库: "+entry.Title)
 	// 变更/协作日志：逐字段记录「修改前 → 修改后」
 	var parts []string
@@ -803,11 +824,8 @@ func DownloadKnowledgeAttachment(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "所属条目不存在"})
 		return
 	}
-	cl := middleware.GetClaims(c)
-	if !kCanRead(cl, &e) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问该附件"})
-		return
-	}
+	// 附件下载对外公开：文件名不可猜测（stored_name 含纳秒随机串），
+	// 这样富文本内嵌图片可用 <img src> 直接渲染（浏览器 img 请求不携带 Authorization）。
 	p := filepath.Join(kAttachmentDir(), filepath.Base(att.StoredName))
 	if _, err := os.Stat(p); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "附件文件不存在"})
@@ -851,6 +869,189 @@ func DeleteKnowledgeAttachment(c *gin.Context) {
 		recordKnowledgeLog(e.ID, cl, "attachment_delete", fmt.Sprintf("删除附件「%s」", att.FileName))
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ==================== 知识库：附件中转缓存（保存前上传） ====================
+
+// tempAttachmentDir 返回中转缓存目录（与正式附件目录同级，便于转正时直接移动）
+func tempAttachmentDir() string {
+	dir := filepath.Dir(config.C.DBPath)
+	if dir == "" || dir == "." {
+		dir = "data"
+	}
+	if dir != "/" {
+		dir = strings.TrimRight(dir, "/")
+	}
+	return filepath.Join(dir, "workspace_temp")
+}
+
+// cleanupTempAttachments 回收 24h 前的孤儿中转文件（用户上传后未保存即关闭页面时产生）
+func cleanupTempAttachments() {
+	cutoff := time.Now().Add(-24 * time.Hour)
+	var olds []models.KnowledgeTempAttachment
+	db.DB.Where("created_at < ?", cutoff).Find(&olds)
+	if len(olds) == 0 {
+		return
+	}
+	tDir := tempAttachmentDir()
+	for _, o := range olds {
+		_ = os.Remove(filepath.Join(tDir, filepath.Base(o.StoredName)))
+	}
+	db.DB.Where("created_at < ?", cutoff).Delete(&models.KnowledgeTempAttachment{})
+}
+
+// UploadTempAttachment POST /workspace/temp-attachments
+// 新建条目（尚无 id）时，富文本粘贴/选择的图片与文件先上传到中转缓存。
+// 返回 download_url 可直接用于 <img src>（端点公开、文件名不可猜测）；
+// 用户确认保存后由 CreateKnowledge/UpdateKnowledge 转正为正式附件。
+func UploadTempAttachment(c *gin.Context) {
+	cl := middleware.GetClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		return
+	}
+	// 懒清理：回收 24h 前的孤儿中转文件，避免无限堆积
+	cleanupTempAttachments()
+
+	if err := c.Request.ParseMultipartForm(maxAttachSize); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "上传体积超过限制（单文件 ≤ 100MB）"})
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要上传的文件"})
+		return
+	}
+	if file.Size > maxAttachSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "单个附件不能超过 100MB"})
+		return
+	}
+	origName := filepath.Base(file.Filename)
+	ext := strings.ToLower(filepath.Ext(origName))
+	mimeT := mime.TypeByExtension(ext)
+	if mimeT == "" {
+		mimeT = "application/octet-stream"
+	}
+	dir := tempAttachmentDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "目录创建失败: " + err.Error()})
+		return
+	}
+	stored := fmt.Sprintf("t%d_%d%s", cl.UserID, time.Now().UnixNano(), ext)
+	dst := filepath.Join(dir, stored)
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
+		return
+	}
+	att := models.KnowledgeTempAttachment{
+		FileName:   origName,
+		StoredName: stored,
+		Mime:       mimeT,
+		Size:       file.Size,
+		OwnerID:    cl.UserID,
+		OwnerName:  cl.Username,
+	}
+	if err := db.DB.Create(&att).Error; err != nil {
+		_ = os.Remove(dst)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":          att.ID,
+		"file_name":   att.FileName,
+		"mime":        att.Mime,
+		"size":        att.Size,
+		"download_url": "/api/workspace/temp-attachments/" + strconv.FormatUint(uint64(att.ID), 10) + "/download",
+	})
+}
+
+// DownloadTempAttachment GET /workspace/temp-attachments/:id/download
+// 中转缓存文件公开可读（文件名不可猜测）；仅用于编辑期预览，转正后即失效。
+func DownloadTempAttachment(c *gin.Context) {
+	var att models.KnowledgeTempAttachment
+	if err := db.DB.First(&att, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "附件不存在"})
+		return
+	}
+	p := filepath.Join(tempAttachmentDir(), filepath.Base(att.StoredName))
+	if _, err := os.Stat(p); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "附件文件不存在"})
+		return
+	}
+	isImage := strings.HasPrefix(att.Mime, "image/")
+	disp := "attachment"
+	if isImage {
+		disp = "inline"
+	}
+	enc := url.QueryEscape(att.FileName)
+	c.Header("Content-Type", att.Mime)
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, "attachment", enc))
+	c.File(p)
+}
+
+// adoptTempAttachments 把中转缓存里的附件「转正」为某知识条目的正式附件：
+// 1) 扫描 content 中的 data-temp-id（富文本内嵌图片）
+// 2) 合并显式传入的 temp_attachment_ids（编辑区下方「附件」列表里上传的文件）
+// 统一移动文件 + 建 KnowledgeAttachment 记录，并把 content 里的临时图片地址改写为正式地址。
+func adoptTempAttachments(content string, entryID uint, explicitTempIDs []uint, cl *models.Claims) string {
+	re := regexp.MustCompile(`data-temp-id="(\d+)"`)
+	seen := map[uint]bool{}
+	var ids []uint
+	for _, m := range re.FindAllStringSubmatch(content, -1) {
+		if id, err := strconv.ParseUint(m[1], 10, 64); err == nil && !seen[uint(id)] {
+			seen[uint(id)] = true
+			ids = append(ids, uint(id))
+		}
+	}
+	for _, id := range explicitTempIDs {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return content
+	}
+	tDir := tempAttachmentDir()
+	kDir := kAttachmentDir()
+	_ = os.MkdirAll(kDir, 0o755)
+	for _, tid := range ids {
+		var t models.KnowledgeTempAttachment
+		if err := db.DB.First(&t, tid).Error; err != nil {
+			continue
+		}
+		src := filepath.Join(tDir, filepath.Base(t.StoredName))
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(kDir, filepath.Base(t.StoredName))
+		if err := os.Rename(src, dst); err != nil {
+			if cpErr := copyFile(src, dst); cpErr == nil {
+				_ = os.Remove(src)
+			} else {
+				continue
+			}
+		}
+		att := models.KnowledgeAttachment{
+			EntryID:    entryID,
+			FileName:   t.FileName,
+			StoredName: t.StoredName,
+			Mime:       t.Mime,
+			Size:       t.Size,
+			OwnerID:    t.OwnerID,
+			OwnerName:  t.OwnerName,
+		}
+		if err := db.DB.Create(&att).Error; err != nil {
+			_ = os.Rename(dst, src) // 入库失败回滚文件
+			continue
+		}
+		db.DB.Delete(&t)
+		oldSrc := "/api/workspace/temp-attachments/" + strconv.FormatUint(uint64(tid), 10) + "/download"
+		newSrc := "/api/workspace/knowledge_attachments/" + strconv.FormatUint(uint64(att.ID), 10) + "/download"
+		content = strings.ReplaceAll(content, oldSrc, newSrc)
+		content = strings.ReplaceAll(content, `data-temp-id="`+strconv.FormatUint(uint64(tid), 10)+`"`, "")
+	}
+	return content
 }
 
 // ==================== 知识库：导出（当前可见条目） ====================

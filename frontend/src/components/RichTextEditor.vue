@@ -39,7 +39,7 @@
 
     <!-- 状态条 -->
     <div class="rte-foot" v-if="!disabled">
-      <span class="rte-tip">支持 Markdown 风格的换行；粘贴图片自动上传；外部粘贴的富文本会自动去除字体/字号等噪声样式</span>
+      <span class="rte-tip">像 Word 一样直接编辑：可整篇复制粘贴（保留标题/列表/排版，图片自动上传）；新建条目时图片先暂存，保存后自动生效</span>
       <span class="rte-count" v-if="modelValue">{{ textLen }} 字 · {{ imageCount }} 图</span>
     </div>
   </div>
@@ -67,8 +67,10 @@ const active = reactive({ bold: false, italic: false, underline: false, strike: 
 const textLen = ref(0)
 const imageCount = ref(0)
 
-const canInsertImage = computed(() => !!props.entryId && !props.disabled)
-const imageBtnHint = computed(() => props.entryId ? '' : '请先保存条目后再插入图片')
+// 有 id 时图片直接落库；无 id（新建未保存）时图片先进「中转缓存」，保存时转正。
+// 因此编辑态下始终允许插入图片（含新建条目）。
+const canInsertImage = computed(() => !props.disabled)
+const imageBtnHint = computed(() => props.disabled ? '' : (props.entryId ? '' : '图片将暂存，保存后自动生效'))
 
 // ---------- 内容初始化 / 同步 ----------
 watch(() => props.modelValue, (v) => {
@@ -149,41 +151,112 @@ async function onFilePick(e) {
   for (const f of files) await uploadAndInsert(f)
 }
 async function onPaste(e) {
-  // 浏览器粘贴：优先处理图片；文字走默认（会自动走 execCommand 的 sanitize）
-  const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : []
-  const imageItems = items.filter((it) => it.kind === 'file' && it.type && it.type.startsWith('image/'))
-  if (imageItems.length) {
-    if (!canInsertImage.value) {
-      e.preventDefault()
-      alert('当前还未保存条目，无法上传图片。请先点「保存」再粘贴图片。')
-      return
-    }
-    e.preventDefault()
-    for (const it of imageItems) {
-      const f = it.getAsFile()
-      if (f) await uploadAndInsert(f)
-    }
-    return
-  }
-  // 文字粘贴：清理常见噪声样式（保留段落/列表/粗体/链接）
-  const html = e.clipboardData && e.clipboardData.getData ? e.clipboardData.getData('text/html') : ''
-  const text = e.clipboardData && e.clipboardData.getData ? e.clipboardData.getData('text/plain') : ''
+  const cd = e.clipboardData
+  if (!cd) return
+  // 剪贴板里的图片文件（直接复制的图片 / Word 复制时每张图都在此）
+  const blobs = Array.from(cd.items || [])
+    .filter((it) => it.kind === 'file' && it.type && it.type.startsWith('image/'))
+    .map((it) => it.getAsFile())
+    .filter(Boolean)
+  const html = cd.getData ? cd.getData('text/html') : ''
+  const text = cd.getData ? cd.getData('text/plain') : ''
+
+  // 富文本（来自 Word / 网页 / 手册）粘贴：把内嵌图片（base64 / file:///）上传后替换，
+  // 排版（标题/列表/粗体/对齐等语义标签）保留，仅去掉字体/字号等噪声样式。
   if (html) {
     e.preventDefault()
-    exec('insertHTML', cleanPastedHtml(html))
-  } else if (text) {
-    // 让默认行为走（自动换行）
+    const { html: handled, leftover } = await embedImagesFromHtml(html, blobs)
+    exec('insertHTML', cleanPastedHtml(handled))
+    // HTML 里没对应 <img> 的剩余 blob（如单独复制的一张图）补插到光标处
+    for (const b of leftover) await uploadAndInsert(b)
+    return
   }
+  // 纯图片（无 HTML）：逐张上传插入
+  if (blobs.length) {
+    e.preventDefault()
+    for (const b of blobs) await uploadAndInsert(b)
+    return
+  }
+  // 纯文本：让浏览器默认行为处理（自动换行）
 }
+
+// 把 HTML 中内嵌的图片（base64 / file:///）上传到服务器，并就地替换 <img src>。
+// blobs 为剪贴板里的图片文件，用于替换 Word 复制产生的 file:/// 占位图（按序消费）。
+async function embedImagesFromHtml(html, blobs) {
+  const tpl = document.createElement('template')
+  tpl.innerHTML = html
+  const imgs = Array.from(tpl.content.querySelectorAll('img'))
+  let bi = 0
+  for (const img of imgs) {
+    const src = img.getAttribute('src') || ''
+    if (/^https?:\/\//i.test(src)) continue // 外链图片保留原样
+    if (/^data:image\//i.test(src)) {
+      try {
+        const u = await uploadFileReturnUrl(dataURLToFile(src, 'paste-image.png'))
+        applyImgAttrs(img, u)
+      } catch { /* 忽略单张失败 */ }
+      continue
+    }
+    if (/^file:\/\//i.test(src)) {
+      // Word 复制的图片常以 file:/// 引用，浏览器无法读取；用剪贴板 blob 按序替换
+      if (bi < blobs.length) {
+        try {
+          const u = await uploadFileReturnUrl(blobs[bi])
+          applyImgAttrs(img, u)
+        } catch { img.remove() }
+        bi++
+      } else {
+        img.remove() // 无数据源，移除避免破图
+      }
+      continue
+    }
+    // 其他（如 data:application）保留
+  }
+  return { html: tpl.innerHTML, leftover: blobs.slice(bi) }
+}
+
+// 上传文件并返回可用于 <img src> 的地址（按是否已有 entryId 选择正式/中转端点）
+async function uploadFileReturnUrl(file) {
+  if (props.entryId) {
+    const att = await api.upload('/workspace/knowledge/' + props.entryId + '/attachments', file)
+    return { dl: '/api/workspace/knowledge_attachments/' + att.id + '/download', id: att.id, temp: false, name: att.file_name || file.name }
+  }
+  const att = await api.upload('/workspace/temp-attachments', file)
+  return { dl: att.download_url || ('/api/workspace/temp-attachments/' + att.id + '/download'), id: att.id, temp: true, name: att.file_name || file.name }
+}
+
+// 给 <img> 设置上传后的地址与标记（中转缓存用 data-temp-id，正式用 data-att-id）
+function applyImgAttrs(img, u) {
+  img.setAttribute('src', u.dl)
+  img.removeAttribute('srcset')
+  if (u.temp) {
+    img.setAttribute('data-temp-id', String(u.id))
+    img.removeAttribute('data-att-id')
+  } else {
+    img.setAttribute('data-att-id', String(u.id))
+    img.removeAttribute('data-temp-id')
+  }
+  img.setAttribute('data-att-name', u.name || '')
+  img.setAttribute('alt', u.name || 'image')
+}
+
+// data: URL → File（用于把粘贴的 base64 图片转成可上传的文件）
+function dataURLToFile(dataURL, filename) {
+  const m = /^data:([^;]*);base64,(.*)$/.exec(dataURL)
+  const mime = m ? m[1] : 'image/png'
+  const bin = atob(m ? m[2] : '')
+  const arr = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+  return new File([arr], filename, { type: mime })
+}
+
 async function uploadAndInsert(file) {
-  if (!props.entryId) return
+  if (props.disabled) return
   uploading.value = true
   try {
-    const url = props.uploadUrl || ('/workspace/knowledge/' + props.entryId + '/attachments')
-    const att = await api.upload(url, file)
-    if (!att || !att.id) throw new Error('上传返回为空')
-    const dl = '/api/workspace/knowledge_attachments/' + att.id + '/download'
-    const imgHtml = `<img src="${dl}" alt="${escapeAttr(att.file_name || 'image')}" data-att-id="${att.id}" data-att-name="${escapeAttr(att.file_name || '')}"/>`
+    const u = await uploadFileReturnUrl(file)
+    const attr = u.temp ? `data-temp-id="${u.id}"` : `data-att-id="${u.id}"`
+    const imgHtml = `<img src="${escapeAttr(u.dl)}" alt="${escapeAttr(u.name || 'image')}" ${attr} data-att-name="${escapeAttr(u.name || '')}"/>`
     exec('insertHTML', imgHtml)
   } catch (err) {
     emit('imageUploadError', err)

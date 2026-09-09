@@ -1,5 +1,15 @@
 <template>
   <div class="dash">
+    <!-- 首页品牌区：Logo + 公司名 + 当日日期 -->
+    <div class="dash-hero">
+      <img v-if="!logoFailed" :src="logoUrl" class="hero-logo" alt="Logo" @error="logoFailed = true" />
+      <div class="hero-title-wrap">
+        <div class="hero-title">{{ brand.company_name || '排班工作台' }}</div>
+        <div class="hero-sub">{{ brand.slogan || '班次 · 任务 · 知识 一体化' }}</div>
+      </div>
+      <div class="hero-date">{{ todayLabel }}</div>
+    </div>
+
     <!-- 自定义工具栏 -->
     <div class="dash-toolbar">
       <h3 class="section-title" style="margin:0">工作台总览</h3>
@@ -208,9 +218,19 @@ import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
+import brand from '@/brand'
 import EmptyState from '@/components/EmptyState.vue'
 
 const auth = useAuthStore()
+
+// 首页 Logo：已上传企业 Logo 跟随设置，否则用内置图标
+const logoFailed = ref(false)
+const logoUrl = computed(() => (brand.logo ? '/api/settings/logo?v=' + encodeURIComponent(brand.logo) : '/favicon.svg'))
+const WEEK = ['日', '一', '二', '三', '四', '五', '六']
+const todayLabel = computed(() => {
+  const d = new Date()
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 星期${WEEK[d.getDay()]}`
+})
 const dash = ref({ on_duty_count: 0, today_tasks: 0, month_tasks: 0, monthly_tasks: 0, overdue_count: 0, on_duty: [], on_duty_rows: [], today: '', today_task_list: [], month_task_list: [], monthly_task_list: [] })
 const schedules = ref([])
 const departments = ref([])
@@ -260,7 +280,8 @@ const STORE_KEY = 'swb_dash_layout'
 const statAll = ['on_duty', 'today_tasks', 'month_tasks', 'monthly_tasks', 'overdue', 'my_rate', 'my_work']
 const panelAll = ['on_duty_list', 'today_tasks_list', 'month_tasks_list', 'monthly_tasks_list']
 const PANELS = { on_duty_list: '今日当班', today_tasks_list: '今日任务', month_tasks_list: '本月任务', monthly_tasks_list: '当月任务' }
-const defaultPref = () => ({ stats: [...statAll], panels: [...panelAll] })
+// 首页默认只展示核心指标（避免一屏内容过多超出边界），其余可在「自定义」中勾选
+const defaultPref = () => ({ stats: ['on_duty', 'today_tasks', 'month_tasks', 'overdue'], panels: [...panelAll] })
 const pref = ref(defaultPref())
 const editMode = ref(false)
 
@@ -351,6 +372,12 @@ onUnmounted(() => useAutoRefresh(refreshDash, false))
 </script>
 
 <style scoped>
+.dash-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; padding: 14px 18px; border-radius: var(--radius); background: var(--bg-1); border: 1px solid var(--glass-border); }
+.hero-logo { width: 46px; height: 46px; border-radius: 12px; object-fit: contain; background: var(--overlay); flex: none; }
+.hero-title-wrap { flex: 1; min-width: 0; }
+.hero-title { font-size: 19px; font-weight: 800; line-height: 1.2; }
+.hero-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
+.hero-date { font-size: 13px; color: var(--text-dim); white-space: nowrap; text-align: right; }
 .dash-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .dash-toolbar .btn.on { background: var(--accent-soft); color: var(--accent); border-color: rgba(79,70,229,0.4); }
 

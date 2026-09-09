@@ -54,6 +54,11 @@
           <span>下载插件</span>
         </a>
 
+        <button v-if="canInstall" class="ext-dl install-btn" type="button" @click="installPwa" title="把应用安装到桌面，像 APP 一样打开">
+          <span class="ext-ico" v-html="downloadIcon"></span>
+          <span>安装到桌面</span>
+        </button>
+
         <div class="side-foot">
           <div class="user-mini">
             <div class="avatar">{{ userInitial }}</div>
@@ -216,6 +221,43 @@ const brandLogo = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-wid
 const logoutIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>'
 const shieldIcon = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="M9 12.5l2 2 4-4.5"/></svg>'
 const puzzleIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 4v3m-6 4h3m0 0a2 2 0 1 0 4 0 2 2 0 0 0-4 0zm4 0h3m-3-6V6a2 2 0 1 1 4 0v3m0 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 4v3a2 2 0 1 1-4 0"/></svg>'
+const downloadIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+
+// v0.9.2 PWA 安装按钮：本地部署后浏览器地址栏虽有 [⬇] 图标但应用内不弹窗，
+// 监听 main.js 缓存的 beforeinstallprompt 事件，由这里显式调用 prompt() 触发原生安装弹窗
+const canInstall = ref(false)
+function onPwaInstallable() { canInstall.value = !!window.__pwaInstallEvent }
+function onPwaInstalled() { canInstall.value = false }
+async function installPwa() {
+  const ev = window.__pwaInstallEvent
+  if (!ev) {
+    // 没有可用事件：浏览器可能已经触发过 / 用户在 iOS Safari（只支持添加到主屏幕）
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+      alert('iOS 暂不支持应用内安装，请在 Safari 分享菜单选择「添加到主屏幕」')
+    } else {
+      alert('当前浏览器暂未提供安装入口，可点地址栏右侧的 [⬇] 图标手动安装')
+    }
+    return
+  }
+  try {
+    await ev.prompt()
+    const choice = await ev.userChoice
+    if (choice && choice.outcome === 'accepted') canInstall.value = false
+  } catch (e) {
+    // ignore
+  }
+  window.__pwaInstallEvent = null
+}
+onMounted(() => {
+  window.addEventListener('pwa-installable', onPwaInstallable)
+  window.addEventListener('pwa-installed', onPwaInstalled)
+  // 进入即检查一次（如果事件在 main.js 之前已触发）
+  onPwaInstallable()
+})
+onUnmounted(() => {
+  window.removeEventListener('pwa-installable', onPwaInstallable)
+  window.removeEventListener('pwa-installed', onPwaInstalled)
+})
 const todayText = computed(() =>
   new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 )
@@ -378,8 +420,9 @@ async function doBroadcast() {
 .fade-enter-from { opacity: 0; transform: translateY(8px); }
 .fade-leave-to { opacity: 0; transform: translateY(-8px); }
 
-.ext-dl { display: flex; align-items: center; gap: 9px; padding: 9px 12px; margin-bottom: 6px; border-radius: 11px; border: 1px solid var(--glass-border); color: var(--text-dim); text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.15s; }
+.ext-dl { display: flex; align-items: center; gap: 9px; padding: 9px 12px; margin-bottom: 6px; border-radius: 11px; border: 1px solid var(--glass-border); color: var(--text-dim); text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.15s; background: transparent; font-family: inherit; width: 100%; text-align: left; }
 .ext-dl:hover { color: var(--text); border-color: var(--accent); background: var(--overlay-2); }
+.ext-dl.install-btn { color: var(--accent); border-color: rgba(79, 70, 229, 0.35); background: rgba(79, 70, 229, 0.06); }
 .ext-ico { display: grid; place-items: center; color: var(--accent); }
 
 .nav-badge {

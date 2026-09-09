@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,70 @@ func timeOf(deadline string) string {
 		return t.Format("15:04")
 	}
 	return ""
+}
+
+// isSoonOverdue v0.9.2：距截止 ≤ soonOverdueMinutes 分钟（默认 30）但尚未逾期
+// —— 比如 11:00 截单、当前 10:35，距离 25 分钟，需要橙色「即将逾期」提示
+// 让使用者知道这个任务马上就要逾期了，比单纯标红更早介入
+func isSoonOverdue(t models.Task) bool {
+	if t.Status == models.TaskStatusDone {
+		return false
+	}
+	now := time.Now()
+	switch t.Type {
+	case models.TaskTypeOnce:
+		if t.Deadline == "" {
+			return false
+		}
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local)
+		if err != nil {
+			return false
+		}
+		if !dl.After(now) {
+			return false // 已逾期不算「即将」
+		}
+		return dl.Sub(now) <= time.Duration(soonOverdueMinutes())*time.Minute
+	case models.TaskTypeDaily:
+		if t.Time == "" {
+			return false
+		}
+		dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, time.Local)
+		if err != nil {
+			return false
+		}
+		if !dt.After(now) {
+			return false
+		}
+		return dt.Sub(now) <= time.Duration(soonOverdueMinutes())*time.Minute
+	}
+	return false
+}
+
+// taskUrgencyKey v0.9.2：给未完成任务算一个「截止紧迫度」排序键。
+// 归一为 YYYY-MM-DDTHH:MM 字符串，字符串越小越紧迫：
+//  - 单次/月度任务用 deadline；daily 用当天 time
+//  - 解析失败或无截止时间的放到最后（用 nowStr，保证排在同窗但靠后），
+//    但已逾期/即将逾期已在排序第一步被提到最前，这里只是相对序。
+func taskUrgencyKey(t models.Task, nowStr string) string {
+	var k string
+	switch t.Type {
+	case models.TaskTypeOnce, models.TaskTypeMonthly:
+		k = t.Deadline
+	case models.TaskTypeDaily:
+		if t.Time != "" {
+			k = time.Now().Format("2006-01-02") + "T" + t.Time
+		}
+	}
+	if k == "" {
+		return "9999-12-31T23:59"
+	}
+	if len(k) >= 16 {
+		return k[:16]
+	}
+	if len(k) == 10 { // 只有日期
+		return k + "T23:59"
+	}
+	return k
 }
 
 // isOverdue 判断任务是否逾期（未完成且已超过其执行/截止时间）
@@ -346,7 +411,7 @@ func ListTasks(c *gin.Context) {
 	ResetRecurringTasks() // 周期任务跨日/跨月自动回到待办（幂等，同一周期只落库一次）
 	scope := deptScopeIDs(c)
 	var list []models.Task
-	q := db.DB.Order("created_at desc")
+	q := db.DB.Order("created_at asc")
 	if len(scope) > 0 {
 		q = q.Where("dept_id IN ?", scope)
 	}
@@ -355,11 +420,38 @@ func ListTasks(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// v0.9.2 排序：先算瞬态标记（overdue / due_today / soon），
+	// 再在内存里按「正序」排——需要马上处理 / 即将逾期的排最前，按截止时间近→远，
+	// 已完成的任务沉底。注意 overdue 等是 gorm:"-" 瞬态字段不落库，
+	// 不能写进 SQL WHERE/ORDER（会导致任务接口 500 → 插件/首页拿不到任务）。
 	for i := range list {
 		list[i].Overdue = isOverdue(list[i])
 		list[i].DueToday = isDueToday(list[i])
 		list[i].DueThisMonth = isDueThisMonth(list[i])
+		list[i].SoonOverdue = isSoonOverdue(list[i])
 	}
+	now := time.Now()
+	nowStr := now.Format("2006-01-02T15:04")
+	sort.SliceStable(list, func(a, b int) bool {
+		ta, tb := list[a], list[b]
+		doneA, doneB := ta.Status == models.TaskStatusDone, tb.Status == models.TaskStatusDone
+		if doneA != doneB {
+			return !doneA // 未完成排前面，已完成沉底
+		}
+		if doneA && doneB {
+			return ta.CompletedAt.After(tb.CompletedAt) // 已完成的按完成时间新→旧
+		}
+		// 未完成：优先「需要马上处理」的（逾期 / 即将逾期），再按截止时间正序
+		actA, actB := ta.Overdue || ta.SoonOverdue, tb.Overdue || tb.SoonOverdue
+		if actA != actB {
+			return actA
+		}
+		keyA, keyB := taskUrgencyKey(ta, nowStr), taskUrgencyKey(tb, nowStr)
+		if keyA != keyB {
+			return keyA < keyB
+		}
+		return ta.CreatedAt.Before(tb.CreatedAt)
+	})
 	c.JSON(http.StatusOK, list)
 }
 

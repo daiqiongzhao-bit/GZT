@@ -280,6 +280,11 @@ func overdueGraceMinutes() int {
 // invalidateGraceCache 在写入 Setting 后调用，强制下次重新读取。
 func invalidateGraceCache() { graceMinutesCache = -2 }
 
+// soonOverdueMinutes v0.9.2：距截止多少分钟内算「即将逾期」。默认 30 分钟，
+// 与逾期宽限期对齐：宽限期内「准时」完成都算 OK，所以「即将逾期」用同一阈值。
+// 改成单独配置可在 Setting 里加 SoonOverdueMinutes 字段，目前复用 grace。
+func soonOverdueMinutes() int { return overdueGraceMinutes() }
+
 // UpdateOverdueGrace POST /api/settings/overdue-grace 设置逾期宽限期（分钟）。仅超管。
 func UpdateOverdueGrace(c *gin.Context) {
 	var req struct {

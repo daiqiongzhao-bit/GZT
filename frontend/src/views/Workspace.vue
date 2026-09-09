@@ -54,19 +54,18 @@
               placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接"
             />
           </div>
-          <!-- 附件区：编辑现有条目直接显示，新建时提示先保存 -->
+          <!-- 附件区：编辑现有条目显示正式附件；新建未保存时先进「中转缓存」，保存后转正 -->
           <div class="edit-attach">
             <div class="att-head">
-              <span class="att-title">附件（{{ kAtts.length }}）</span>
-              <div v-if="kForm.id" class="att-upload">
+              <span class="att-title">附件（{{ kForm.id ? kAtts.length : pendingAtts.length }}）</span>
+              <div class="att-upload">
                 <span v-if="uploading" class="dim up-txt">上传中…</span>
                 <label class="btn sm">+ 上传文件
                   <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
                 </label>
               </div>
             </div>
-            <p v-if="kForm.id" class="att-hint dim">支持任意文件类型（图片可预览），单文件 ≤ 100MB</p>
-            <p v-else class="att-hint dim">先保存条目，再上传图片 / 文档等附件</p>
+            <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
             <div v-if="kForm.id && kAtts.length" class="att-list">
               <div v-for="a in kAtts" :key="a.id" class="att-item">
                 <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
@@ -77,6 +76,16 @@
               </div>
             </div>
             <div v-else-if="kForm.id" class="empty att-empty">还没有附件</div>
+            <div v-else-if="pendingAtts.length" class="att-list">
+              <div v-for="a in pendingAtts" :key="a.tempId" class="att-item">
+                <span v-if="a.mime && a.mime.startsWith('image/')" class="att-thumb">{{ fileIcon(a.fileName) }}</span>
+                <span v-else class="att-ico">{{ fileIcon(a.fileName) }}</span>
+                <span class="att-name">{{ a.fileName }}</span>
+                <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                <span class="dim">待保存</span>
+                <button class="del danger" @click="removePendingAtt(a)">移除</button>
+              </div>
+            </div>
           </div>
           <div class="fg2 bot">
             <div class="scope-switch">
@@ -445,6 +454,7 @@ async function loadCats() {
 function openNewK() {
   Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department' })
   kAtts.value = []
+  pendingAtts.value = []
   editingK.value = true
 }
 function openEditK(k) {
@@ -452,7 +462,7 @@ function openEditK(k) {
   editingK.value = true
   loadKAtts(k.id)
 }
-function cancelEditK() { editingK.value = false; kAtts.value = [] }
+function cancelEditK() { editingK.value = false; kAtts.value = []; pendingAtts.value = [] }
 async function saveK() {
   savingK.value = true
   try {
@@ -461,8 +471,14 @@ async function saveK() {
       await api.put('/workspace/knowledge/' + kForm.id, kForm)
       toast('已保存')
     } else {
-      const created = await api.post('/workspace/knowledge', kForm)
+      // 新建：把编辑期中转缓存的附件 id 一并带上，由后端转正
+      const payload = { ...kForm }
+      if (pendingAtts.value.length) payload.temp_attachment_ids = pendingAtts.value.map((a) => a.tempId)
+      const created = await api.post('/workspace/knowledge', payload)
       savedId = created && created.id ? created.id : null
+      // 同步后端转正后的正文（图片地址由临时改为正式），避免再次编辑时显示破图
+      if (created && created.content) kForm.content = created.content
+      pendingAtts.value = []
       toast('已创建，正在打开详情…')
     }
     // 刷新一次列表（同时拿到新条目对象供详情弹窗用）
@@ -506,6 +522,7 @@ function histActionLabel(a) {
 
 // ---- 知识库附件 ----
 const kAtts = ref([])
+const pendingAtts = ref([]) // 新建未保存时上传到中转缓存的附件（保存后转正）
 const uploading = ref(false)
 const baseUrl = (import.meta.env?.BASE_URL || '') + 'api'
 
@@ -555,18 +572,32 @@ async function previewAtt(a) {
 async function uploadAtts(e) {
   const files = Array.from(e.target.files || [])
   e.target.value = ''
+  if (!files.length) return
   // 既支持在详情弹窗里上传，也支持在编辑表单里上传
   const kid = viewK.value ? viewK.value.id : (kForm.id || 0)
-  if (!files.length || !kid) return
   uploading.value = true
   try {
-    for (const f of files) {
-      await api.upload('/workspace/knowledge/' + kid + '/attachments', f)
+    if (kid) {
+      // 已保存条目：直接落到正式附件
+      for (const f of files) {
+        await api.upload('/workspace/knowledge/' + kid + '/attachments', f)
+      }
+      toast('已上传 ' + files.length + ' 个附件')
+      loadKAtts(kid)
+    } else {
+      // 新建未保存：先进中转缓存，保存时（saveK）由后端转正
+      for (const f of files) {
+        const att = await api.upload('/workspace/temp-attachments', f)
+        pendingAtts.value.push({ tempId: att.id, fileName: att.file_name, mime: att.mime, size: att.size })
+      }
+      toast('已暂存 ' + files.length + ' 个附件，保存后生效')
     }
-    toast('已上传 ' + files.length + ' 个附件')
-    loadKAtts(kid)
   } catch (err) { toast(err.response?.data?.error || '上传失败', 'error') }
   finally { uploading.value = false }
+}
+function removePendingAtt(a) {
+  const i = pendingAtts.value.findIndex((x) => x.tempId === a.tempId)
+  if (i >= 0) pendingAtts.value.splice(i, 1)
 }
 async function removeAtt(a) {
   if (!confirm('删除附件「' + a.file_name + '」？')) return

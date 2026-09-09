@@ -31,3 +31,21 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   })
 }
+
+// v0.9.2 PWA 安装提示：浏览器默认只在用户访问 30s+ 且有交互后才自动弹安装横幅，
+// 多数情况下用户等不到。本地部署后地址栏虽有 [⬇] 图标但应用内看不到引导，
+// 这里拦截 beforeinstallprompt 缓存事件，由 App.vue 的"安装到桌面"按钮调用。
+// 注意：localhost / HTTPS 下 Chrome 才允许 prompt()，且站点必须满足 PWA 安装条件
+//（manifest + 192/512 icon + SW + 用户未安装）。开发模式（import.meta.env.PROD=false）
+// 也能捕获事件用于调试展示按钮态，但 .prompt() 在非安全上下文会被浏览器拒绝。
+window.__pwaInstallEvent = null
+window.addEventListener('beforeinstallprompt', (e) => {
+  // 阻止 Chrome 默认横幅（30s 后才弹，且只在地址栏），统一由应用内按钮触发
+  e.preventDefault()
+  window.__pwaInstallEvent = e
+  window.dispatchEvent(new CustomEvent('pwa-installable'))
+})
+window.addEventListener('appinstalled', () => {
+  window.__pwaInstallEvent = null
+  window.dispatchEvent(new CustomEvent('pwa-installed'))
+})
