@@ -180,12 +180,28 @@ const router = useRouter()
 const ready = ref(false)
 
 // 左下角 / 顶部版本号（取 /api/version，一次即可）
+// 顺带做「应用壳版本自检」：页面里的壳版本（构建时注入 index.html 的 meta）
+// 与服务端版本不一致 = 用户在跑旧壳，提示刷新，避免「点了菜单没反应」。
 const appVersion = ref('')
 async function loadVersion() {
   try {
     const v = await get('/version')
     appVersion.value = (v && v.version && String(v.version).replace(/^v/i, '')) || ''
+    checkStaleShell(appVersion.value)
   } catch (e) { /* 忽略，版本号非关键 */ }
+}
+
+function checkStaleShell(serverVer) {
+  if (!serverVer) return
+  const meta = document.querySelector('meta[name="app-version"]')
+  const shellVer = (meta && meta.getAttribute('content')) || ''
+  // 未注入（本地开发 / 手工构建）时跳过，避免误报
+  if (!shellVer || shellVer.indexOf('__') === 0) return
+  const norm = (s) => String(s).replace(/^v/i, '')
+  if (norm(shellVer) === norm(serverVer)) return
+  onSwUpdated(
+    `当前页面是旧版本（${norm(shellVer)}），服务器已是 ${norm(serverVer)}。\n继续用旧版本可能出现「点了菜单没反应」，是否立即刷新？`
+  )
 }
 
 // 导航栏任务角标：现在就该处理的任务数（打开即见，常驻刷新）
@@ -230,6 +246,28 @@ const downloadIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none
 const canInstall = ref(false)
 function onPwaInstallable() { canInstall.value = !!window.__pwaInstallEvent }
 function onPwaInstalled() { canInstall.value = false }
+
+// 检测到新版本 Service Worker：PWA 里没有刷新按钮，不提示的话用户会一直用旧壳，
+// 表现为「点了菜单没反应」。这里主动提示并让用户一键刷新。
+function onSwUpdated(msg) {
+  if (sessionStorage.getItem('sw-updated-tip') === '1') return
+  sessionStorage.setItem('sw-updated-tip', '1')
+  if (!confirm(msg || '检测到新版本，是否立即刷新以应用最新功能？')) return
+  // 顺手清掉旧缓存，确保刷新后拉到全新资源；最多等 1.5s，避免清缓存卡住导致不刷新
+  const go = () => location.reload()
+  if (window.caches && caches.keys) {
+    let done = false
+    const once = () => { if (!done) { done = true; go() } }
+    caches
+      .keys()
+      .then((ks) => Promise.all(ks.map((k) => caches.delete(k))))
+      .catch(() => {})
+      .then(once)
+    setTimeout(once, 1500)
+  } else {
+    go()
+  }
+}
 async function installPwa() {
   const ev = window.__pwaInstallEvent
   if (!ev) {
@@ -253,12 +291,14 @@ async function installPwa() {
 onMounted(() => {
   window.addEventListener('pwa-installable', onPwaInstallable)
   window.addEventListener('pwa-installed', onPwaInstalled)
+  window.addEventListener('sw-updated', onSwUpdated)
   // 进入即检查一次（如果事件在 main.js 之前已触发）
   onPwaInstallable()
 })
 onUnmounted(() => {
   window.removeEventListener('pwa-installable', onPwaInstallable)
   window.removeEventListener('pwa-installed', onPwaInstalled)
+  window.removeEventListener('sw-updated', onSwUpdated)
 })
 const todayText = computed(() =>
   new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })

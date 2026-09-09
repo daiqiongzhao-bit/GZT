@@ -1,7 +1,12 @@
 // 排班工作台 Service Worker
 // v3：应用壳缓存 + 关键数据离线缓存（班表/总览/我的信息），支持无网查看本人班表。
-const CACHE_SHELL = 'swb-shell-v3'
-const CACHE_DATA = 'swb-data-v1'
+//
+// __APP_VERSION__ 会在构建时替换为当前版本号（见 Dockerfile / build.sh），
+// 使每次发版 SW 内容都发生变化 → 浏览器检测到更新 → 重新激活并清理旧缓存，
+// 避免 PWA 长期停留在旧应用壳（表现为「点了菜单没反应」）。
+const BUILD_ID = '__APP_VERSION__'
+const CACHE_SHELL = 'swb-shell-' + BUILD_ID
+const CACHE_DATA = 'swb-data-' + BUILD_ID
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg']
 // 允许离线缓存的数据接口（按 URL 缓存，单人设备适用）
 const DATA_APIS = ['/api/schedules', '/api/dashboard', '/api/auth/me']

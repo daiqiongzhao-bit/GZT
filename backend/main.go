@@ -247,6 +247,7 @@ func main() {
 			if f, e := sub.Open(rel); e == nil {
 				if fi, fe := f.Stat(); fe == nil && !fi.IsDir() {
 					f.Close()
+					setCacheHeaders(c, rel)
 					fileServer.ServeHTTP(c.Writer, c.Request)
 					return
 				}
@@ -259,6 +260,7 @@ func main() {
 				return
 			}
 			defer idx.Close()
+			setCacheHeaders(c, "index.html")
 			c.Header("Content-Type", "text/html; charset=utf-8")
 			c.Status(http.StatusOK)
 			io.Copy(c.Writer, idx)
@@ -278,4 +280,25 @@ func main() {
 	}()
 
 	r.Run(":" + config.C.Port)
+}
+
+// setCacheHeaders 为前端静态资源设置缓存策略。
+//
+// 背景：SPA + PWA 场景下，若 index.html / sw.js 被浏览器或 Service Worker 缓存，
+// 发新版后用户仍加载旧壳，会出现「点了菜单没反应」这类难以定位的问题。
+//
+// 策略：
+//   - index.html、sw.js：no-cache（每次校验，保证发版后能拿到新壳与新 SW）
+//   - 带内容 hash 的 assets/*：可长期强缓存（hash 变化即为新文件）
+//   - 其他（favicon、manifest 等）：短缓存
+func setCacheHeaders(c *gin.Context, rel string) {
+	switch {
+	case rel == "index.html" || rel == "sw.js" || rel == "":
+		c.Header("Cache-Control", "no-cache, must-revalidate")
+		c.Header("Pragma", "no-cache")
+	case strings.HasPrefix(rel, "assets/"):
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	default:
+		c.Header("Cache-Control", "public, max-age=3600")
+	}
 }

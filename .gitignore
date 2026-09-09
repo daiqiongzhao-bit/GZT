@@ -11,3 +11,7 @@ data/
 
 # 环境
 .env
+
+# 本地运行产物（测试密钥 / 日志，勿提交）
+secrets.env
+runtime.log

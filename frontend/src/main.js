@@ -28,7 +28,24 @@ bindApp(app)
 // PWA：生产构建下注册 Service Worker
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        // 检测到新版本 SW：若当前页面已被 SW 接管，提示用户刷新，
+        // 否则用户会一直停留在旧应用壳（表现为点了菜单没反应）
+        reg.addEventListener('updatefound', () => {
+          const sw = reg.installing || reg.waiting
+          if (!sw) return
+          sw.addEventListener('statechange', () => {
+            // 'installed'/'activated' 都算就绪：sw.js 里用了 skipWaiting，
+            // 状态可能直接从 installing 跳到 activated，只判 'installed' 会漏。
+            if ((sw.state === 'installed' || sw.state === 'activated') && navigator.serviceWorker.controller) {
+              window.dispatchEvent(new CustomEvent('sw-updated'))
+            }
+          })
+        })
+      })
+      .catch(() => {})
   })
 }
 

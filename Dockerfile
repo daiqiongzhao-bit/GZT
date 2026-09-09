@@ -14,6 +14,16 @@ COPY frontend ./frontend
 COPY backend ./backend
 RUN cd frontend && pnpm install && pnpm build
 
+# 注入版本号：sw.js（内容变化触发浏览器更新 SW）+ index.html（应用壳版本自检）。
+# 目的：避免 PWA 长期停留在旧应用壳，出现「点了菜单没反应」这类问题。
+RUN VERSION=$(grep -oE 'AppVersion: *"v[0-9]+\.[0-9]+\.[0-9]+"' backend/internal/config/config.go | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+    if [ -n "$VERSION" ]; then \
+      for f in backend/web/dist/sw.js backend/web/dist/index.html; do \
+        [ -f "$f" ] && sed -i "s/__APP_VERSION__/${VERSION}/g" "$f"; \
+      done; \
+    fi; \
+    exit 0
+
 # 阶段 2：编译后端（嵌入前端产物，按目标架构交叉编译）
 FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS backend
 ARG TARGETARCH
