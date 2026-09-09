@@ -1,6 +1,9 @@
 package db
 
 import (
+	"strings"
+	"time"
+
 	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/models"
 
@@ -9,15 +12,34 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// buildDSN 构造 SQLite 连接串：开启 WAL + 忙等待，避免并发写出现 "database is locked"，
+// 并提升读并发；同时限制连接池，避免句柄耗尽。
+func buildDSN(path string) string {
+	dsn := path
+	if !strings.HasPrefix(dsn, "file:") {
+		dsn = "file:" + dsn
+	}
+	if !strings.Contains(dsn, "_pragma") {
+		dsn += "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+	}
+	return dsn
+}
+
 var DB *gorm.DB
 
 func Init() error {
 	var err error
-	DB, err = gorm.Open(sqlite.Open(config.C.DBPath), &gorm.Config{
+	DB, err = gorm.Open(sqlite.Open(buildDSN(config.C.DBPath)), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return err
+	}
+	// 连接池：WAL 下允许多读 + 单写，限制连接数避免句柄耗尽
+	if sqlDB, e := DB.DB(); e == nil {
+		sqlDB.SetMaxOpenConns(25)
+		sqlDB.SetMaxIdleConns(5)
+		sqlDB.SetConnMaxLifetime(10 * time.Minute)
 	}
 	return DB.AutoMigrate(
 		&models.Department{},

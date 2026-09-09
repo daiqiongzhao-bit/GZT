@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -133,11 +134,13 @@ func BroadcastNotification(c *gin.Context) {
 	}
 
 	now := time.Now()
+	bid := genBroadcastID(cl.UserID)
 	rows := make([]models.Notification, 0, len(users))
 	for _, u := range users {
 		rows = append(rows, models.Notification{
 			UserID:      u.ID,
 			Kind:        "broadcast",
+			BroadcastID: bid,
 			Title:       req.Title,
 			Content:     req.Content,
 			Link:        req.Link,
@@ -286,4 +289,91 @@ func canManageAny(c *gin.Context) bool {
 		return false
 	}
 	return cl.Role == models.RoleSuperAdmin
+}
+
+// genBroadcastID 生成一次广播的聚合键，把同一次广播发给多人的通知归为一组，便于做送达/已读统计。
+func genBroadcastID(actorID uint) string {
+	buf := make([]byte, 6)
+	_, _ = rand.Read(buf)
+	return fmt.Sprintf("bc_%d_%d_%x", actorID, time.Now().UnixNano(), buf)
+}
+
+// ListBroadcastStats GET /api/notifications/broadcasts
+// 返回当前用户可见的广播事件及其送达/已读统计。超管看全部；部门管理员只看自己发的。
+func ListBroadcastStats(c *gin.Context) {
+	cl := currentClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		return
+	}
+	q := db.DB.Model(&models.Notification{}).
+		Where("kind = ? AND broadcast_id <> ?", "broadcast", "")
+	if cl.Role != models.RoleSuperAdmin {
+		q = q.Where("actor_id = ?", cl.UserID)
+	}
+	type statRow struct {
+		BroadcastID string
+		Title       string
+		Content     string
+		ActorName   string
+		CreatedAt   time.Time
+		Total       int
+		ReadCount   int
+	}
+	var rows []statRow
+	err := q.Select("broadcast_id, MIN(title) as title, MIN(content) as content, MIN(actor_name) as actor_name, created_at, COUNT(*) as total, SUM(CASE WHEN \"read\" THEN 1 ELSE 0 END) as read_count").
+		Group("broadcast_id, created_at").
+		Order("created_at DESC").
+		Scan(&rows).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]gin.H, 0, len(rows))
+	for _, r := range rows {
+		unread := r.Total - r.ReadCount
+		if unread < 0 {
+			unread = 0
+		}
+		out = append(out, gin.H{
+			"broadcast_id": r.BroadcastID,
+			"title":        r.Title,
+			"content":      r.Content,
+			"actor_name":   r.ActorName,
+			"created_at":   r.CreatedAt,
+			"total":        r.Total,
+			"read":         r.ReadCount,
+			"unread":       unread,
+		})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// BroadcastUnreadList GET /api/notifications/broadcasts/:bid/unread
+// 返回某次广播尚未阅读的成员名单（姓名/工号/部门）。超管可看全部；部门管理员仅可看自己发的广播。
+func BroadcastUnreadList(c *gin.Context) {
+	cl := currentClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		return
+	}
+	bid := c.Param("bid")
+	q := db.DB.Table("notifications n").
+		Joins("JOIN users u ON u.id = n.user_id").
+		Joins("LEFT JOIN departments d ON d.id = u.dept_id").
+		Where("n.broadcast_id = ? AND n.read = ?", bid, false).
+		Select("u.name as name, u.emp_no as emp_no, d.name as dept_name")
+	if cl.Role != models.RoleSuperAdmin {
+		q = q.Where("n.actor_id = ?", cl.UserID)
+	}
+	var list []struct {
+		Name     string `json:"name"`
+		EmpNo    string `json:"emp_no"`
+		DeptName string `json:"dept_name"`
+	}
+	if err := q.Scan(&list).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
 }

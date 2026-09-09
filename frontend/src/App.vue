@@ -126,6 +126,7 @@
               <span class="notif-title">站内通知<em v-if="notifUnread > 0" class="notif-num">{{ notifUnread }}</em></span>
               <div class="notif-head-actions">
                 <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: bcastOpen }" @click="toggleBcast">{{ bcastOpen ? '收起' : '发通知' }}</button>
+                <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: bcastStatsOpen }" @click="toggleBcastStats">{{ bcastStatsOpen ? '收起' : '广播统计' }}</button>
                 <button class="btn ghost sm" :disabled="!notifUnread" @click="readAll">全部已读</button>
                 <button class="notif-close" @click="notifOpen = false" title="关闭">×</button>
               </div>
@@ -160,6 +161,31 @@
               <button class="btn primary sm full" :disabled="sendingBcast || !canBcastSend" @click="doBroadcast">
                 {{ sendingBcast ? '发送中…' : '发送广播' }}
               </button>
+            </div>
+            <div v-if="bcastStatsOpen" class="bcast-stats">
+              <div v-if="bcastStatsLoading" class="bs-loading">加载中…</div>
+              <div v-else-if="!bcastStats.length" class="bs-empty">暂无已发广播</div>
+              <div v-for="b in bcastStats" :key="b.broadcast_id" class="bs-item">
+                <div class="bs-top">
+                  <span class="bs-title">{{ b.title }}</span>
+                  <span class="bs-time">{{ fmtNotif(b.created_at) }}</span>
+                </div>
+                <div class="bs-meta">
+                  <span>共 {{ b.total }} 人</span>
+                  <span class="bs-read">已读 {{ b.read }}</span>
+                  <span class="bs-unread">未读 {{ b.unread }}</span>
+                </div>
+                <button class="bs-unread-btn" :disabled="b.unread === 0" @click="toggleUnread(b)">
+                  {{ (unreadMap[b.broadcast_id] && unreadMap[b.broadcast_id].open) ? '收起未读' : '查看未读 (' + b.unread + ')' }}
+                </button>
+                <div v-if="unreadMap[b.broadcast_id] && unreadMap[b.broadcast_id].open" class="bs-unread-list">
+                  <div v-if="unreadMap[b.broadcast_id].loading" class="bs-loading">加载中…</div>
+                  <div v-else-if="!unreadMap[b.broadcast_id].list.length" class="bs-empty">已全部阅读</div>
+                  <div v-for="u in unreadMap[b.broadcast_id].list" :key="u.emp_no || u.name" class="bs-unread-item">
+                    {{ u.name }}<span v-if="u.emp_no" class="bs-emp">（{{ u.emp_no }}）</span><span v-if="u.dept_name" class="bs-dept">· {{ u.dept_name }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="notif-list">
               <div v-for="n in notifs" :key="n.id" class="notif-item" :class="{ unread: !n.read }" @click="markRead(n)">
@@ -540,9 +566,50 @@ async function doBroadcast() {
     // 发送后刷新我的通知列表与未读
     notifs.value = await get('/notifications')
     loadNotifCount()
+    if (bcastStatsOpen.value) loadBcastStats()
   } catch (e) {
     alert((e.response && e.response.data && e.response.data.error) || '发送失败')
   } finally { sendingBcast.value = false }
+}
+
+// ---------- 广播送达/已读统计（v0.12.0）----------
+const bcastStatsOpen = ref(false)
+const bcastStatsLoading = ref(false)
+const bcastStats = ref([])
+const unreadMap = reactive({}) // bid -> { open, loading, list }
+
+async function toggleBcastStats() {
+  bcastStatsOpen.value = !bcastStatsOpen.value
+  if (bcastStatsOpen.value && !bcastStats.value.length) {
+    await loadBcastStats()
+  }
+}
+async function loadBcastStats() {
+  bcastStatsLoading.value = true
+  try {
+    const list = await get('/notifications/broadcasts')
+    bcastStats.value = Array.isArray(list) ? list : []
+  } catch (e) {
+    bcastStats.value = []
+  } finally {
+    bcastStatsLoading.value = false
+  }
+}
+async function toggleUnread(b) {
+  const bid = b.broadcast_id
+  if (!unreadMap[bid]) unreadMap[bid] = { open: false, loading: false, list: [] }
+  const m = unreadMap[bid]
+  m.open = !m.open
+  if (m.open && !m.list.length && !m.loading) {
+    m.loading = true
+    try {
+      m.list = await get('/notifications/broadcasts/' + encodeURIComponent(bid) + '/unread')
+    } catch (e) {
+      m.list = []
+    } finally {
+      m.loading = false
+    }
+  }
 }
 </script>
 
@@ -656,6 +723,22 @@ async function doBroadcast() {
 .bcast-att-x { border: none; background: none; color: var(--text-faint); font-size: 16px; cursor: pointer; line-height: 1; }
 .bcast-att-x:hover { color: var(--danger); }
 .full { width: 100%; justify-content: center; }
+/* 广播送达/已读统计（v0.12.0） */
+.bcast-stats { padding: 10px 14px 12px; border-bottom: 1px solid var(--glass-border); background: var(--overlay); display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow-y: auto; }
+.bs-item { border: 1px solid var(--glass-border); border-radius: 10px; padding: 10px 12px; background: var(--bg-1); display: flex; flex-direction: column; gap: 6px; }
+.bs-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.bs-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.bs-time { font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.bs-meta { display: flex; gap: 12px; font-size: 12px; color: var(--text-dim); }
+.bs-meta .bs-read { color: #19a974; }
+.bs-meta .bs-unread { color: #e0524f; }
+.bs-unread-btn { align-self: flex-start; font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--glass-border); background: var(--bg-1); color: var(--accent); cursor: pointer; }
+.bs-unread-btn:disabled { opacity: .5; cursor: not-allowed; }
+.bs-unread-list { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; border-top: 1px dashed var(--glass-border); }
+.bs-unread-item { font-size: 12px; color: var(--text-dim); }
+.bs-emp { color: var(--text-faint); }
+.bs-dept { color: var(--text-faint); }
+.bs-loading, .bs-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
 .notif-list { flex: 1; overflow-y: auto; padding: 8px 0; }
 .notif-item {
   padding: 13px 18px; border-bottom: 1px solid var(--glass-border); cursor: pointer;

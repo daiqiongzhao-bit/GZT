@@ -214,6 +214,7 @@ type Notification struct {
 	Attachments string    `json:"attachments" gorm:"type:text"` // JSON 数组：[]NotifAttachment（广播附件）
 	ActorID     uint      `json:"actor_id"`                  // 操作人
 	ActorName   string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
+	BroadcastID string    `json:"broadcast_id" gorm:"size:32;index"` // 同一次广播聚合键；空=非广播通知
 	Read        bool      `json:"read" gorm:"default:false"` // 是否已读
 	CreatedAt   time.Time `json:"created_at"`
 }

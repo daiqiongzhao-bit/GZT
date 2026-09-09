@@ -109,6 +109,9 @@ func main() {
 			auth.POST("/notifications/broadcast", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BroadcastNotification)
 			// 广播附件下载（接收人本人/超管）v0.11.0
 			auth.GET("/notifications/attachments/:key/download", handlers.DownloadNotifAttachment)
+			// 广播送达/已读统计（超管看全部；部门管理员看自己发的）v0.12.0
+			auth.GET("/notifications/broadcasts", handlers.ListBroadcastStats)
+			auth.GET("/notifications/broadcasts/:bid/unread", handlers.BroadcastUnreadList)
 
 			// 部门（仅超管写）
 			auth.GET("/departments", handlers.ListDepartments)
