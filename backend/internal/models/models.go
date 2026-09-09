@@ -195,18 +195,27 @@ type SystemLog struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// NotifAttachment 通知附件（广播通知可携带，永久保存）
+type NotifAttachment struct {
+	FileName   string `json:"file_name"`
+	StoredName string `json:"stored_name"` // 不可猜测的文件名，下载端点据此定位
+	Mime       string `json:"mime"`
+	Size       int64  `json:"size"`
+}
+
 // Notification 站内通知：管理员修改与用户相关信息时推送给当事人
 type Notification struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	UserID    uint      `json:"user_id" gorm:"index"`      // 接收人
-	Kind      string    `json:"kind" gorm:"size:16"`       // schedule / user / password / broadcast
-	Title     string    `json:"title" gorm:"size:128"`     // 短标题
-	Content   string    `json:"content" gorm:"size:512"`   // 详情：谁、何时、改了啥
-	Link      string    `json:"link" gorm:"size:512"`      // 附带的超链接（广播/定向发送可选）
-	ActorID   uint      `json:"actor_id"`                  // 操作人
-	ActorName string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
-	Read      bool      `json:"read" gorm:"default:false"` // 是否已读
-	CreatedAt time.Time `json:"created_at"`
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	UserID      uint      `json:"user_id" gorm:"index"` // 接收人
+	Kind        string    `json:"kind" gorm:"size:16"`  // schedule / user / password / broadcast
+	Title       string    `json:"title" gorm:"size:128"` // 短标题
+	Content     string    `json:"content" gorm:"size:512"` // 详情：谁、何时、改了啥
+	Link        string    `json:"link" gorm:"size:512"`     // 附带的超链接（广播/定向发送可选）
+	Attachments string    `json:"attachments" gorm:"type:text"` // JSON 数组：[]NotifAttachment（广播附件）
+	ActorID     uint      `json:"actor_id"`                  // 操作人
+	ActorName   string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
+	Read        bool      `json:"read" gorm:"default:false"` // 是否已读
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Claims JWT 载荷

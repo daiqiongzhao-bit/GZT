@@ -131,18 +131,33 @@
               </div>
             </div>
             <div v-if="bcastOpen" class="bcast-form">
-              <div v-if="auth.isSuper" class="bcast-row">
-                <span class="bcast-label">发给部门</span>
-                <select v-model="bcastDept" class="bcast-input" :disabled="sendingBcast">
-                  <option :value="0" disabled>请选择部门</option>
-                  <option v-for="d in deptOpts" :key="d.id" :value="d.id">{{ indentOf(d.depth) }}{{ d.name }}</option>
-                </select>
+              <div class="bcast-row">
+                <span class="bcast-label">发给部门（可多选）</span>
+                <label v-if="auth.isSuper" class="bcast-chk all">
+                  <input type="checkbox" :value="0" v-model="bcastDepts" /> 全部部门
+                </label>
+                <div class="bcast-depts" :class="{ disabled: bcastDepts.includes(0) }">
+                  <label v-for="d in bcastDeptOpts" :key="d.id" class="bcast-chk">
+                    <input type="checkbox" :value="d.id" v-model="bcastDepts" :disabled="bcastDepts.includes(0)" />
+                    {{ indentOf(d.depth) }}{{ d.name }}
+                  </label>
+                </div>
               </div>
-              <p v-else class="bcast-hint">广播将发送给你所在部门（含子部门）的全部成员</p>
               <input v-model="bcastTitle" class="bcast-input" maxlength="60" placeholder="通知标题（必填）" :disabled="sendingBcast" />
               <textarea v-model="bcastContent" class="bcast-input bcast-ta" rows="3" maxlength="500" placeholder="通知内容（必填）" :disabled="sendingBcast"></textarea>
               <input v-model="bcastLink" class="bcast-input" maxlength="500" placeholder="附带链接（可选，https://…）" :disabled="sendingBcast" />
-              <button class="btn primary sm full" :disabled="sendingBcast || !bcastTitle.trim() || !bcastContent.trim()" @click="doBroadcast">
+              <div class="bcast-attach">
+                <button type="button" class="bcast-file-btn" :disabled="sendingBcast || uploadingBcast" @click="bcastFileInput?.click()">
+                  {{ uploadingBcast ? '上传中…' : '📎 添加附件' }}
+                </button>
+                <input ref="bcastFileInput" type="file" multiple class="bcast-file-input" @change="onBcastFiles" />
+                <div v-for="a in bcastAttachments" :key="a.id" class="bcast-att-chip">
+                  <span class="bcast-att-name">{{ a.file_name }}</span>
+                  <span class="bcast-att-size">{{ fmtSize(a.size) }}</span>
+                  <button type="button" class="bcast-att-x" @click="removeBcastAtt(a)">×</button>
+                </div>
+              </div>
+              <button class="btn primary sm full" :disabled="sendingBcast || !canBcastSend" @click="doBroadcast">
                 {{ sendingBcast ? '发送中…' : '发送广播' }}
               </button>
             </div>
@@ -151,6 +166,11 @@
                 <div class="ni-title">{{ n.title }}</div>
                 <div class="ni-content">{{ n.content }}</div>
                 <a v-if="n.link" class="ni-link" :href="safeUrl(n.link)" target="_blank" rel="noopener noreferrer" @click.stop>🔗 {{ linkLabel(n.link) }}</a>
+                <div v-if="nAtts(n).length" class="ni-atts" @click.stop>
+                  <a v-for="a in nAtts(n)" :key="a.stored_name" class="ni-att" :href="attUrl(a)" target="_blank" rel="noopener noreferrer">
+                    📎 {{ a.file_name }}<span v-if="a.size" class="ni-att-size"> · {{ fmtSize(a.size) }}</span>
+                  </a>
+                </div>
                 <div class="ni-time">{{ fmtNotif(n.created_at) }}</div>
               </div>
               <div v-if="!notifs.length" class="notif-empty">暂无通知</div>
@@ -171,7 +191,7 @@ import { useAuthStore } from '@/store/auth'
 import { navItems, icons } from '@/icons'
 import { brand, loadBrand } from '@/brand'
 import { applyTheme } from '@/theme'
-import { get, post } from '@/api'
+import { get, post, upload } from '@/api'
 import { deptOptions, indentOf } from '@/utils/dept'
 
 const auth = useAuthStore()
@@ -392,15 +412,42 @@ function fmtNotif(t) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-// ---------- 部门广播（v0.2.0）----------
+// ---------- 部门广播（v0.2.0，v0.11.0 支持多部门/全部门+附件）----------
 const bcastOpen = ref(false)
-const bcastDept = ref(0)
+const bcastDepts = ref([]) // 多选部门；超管可含 0=全部
 const bcastTitle = ref('')
 const bcastContent = ref('')
 const bcastLink = ref('')
 const sendingBcast = ref(false)
+const uploadingBcast = ref(false)
+const bcastAttachments = ref([]) // 已上传临时附件 [{id,file_name,mime,size}]
+const bcastFileInput = ref(null)
 const deptList = ref([])
 const deptOpts = computed(() => deptOptions(deptList.value))
+
+// 部门管理员仅能选本人可管理（本人部门+子孙）的部门；超管为全部可选
+const myManageableDeptIDs = computed(() => {
+  if (auth.isSuper) return null // null 表示全量可选
+  const me = auth.user?.dept_id
+  if (me == null) return []
+  const set = new Set([me])
+  const children = {}
+  deptList.value.forEach((d) => { (children[d.parent_id] = children[d.parent_id] || []).push(d.id) })
+  const q = [me]
+  while (q.length) {
+    const p = q.shift()
+    ;(children[p] || []).forEach((id) => { set.add(id); q.push(id) })
+  }
+  return [...set]
+})
+const bcastDeptOpts = computed(() =>
+  auth.isSuper ? deptOpts.value : deptOpts.value.filter((d) => (myManageableDeptIDs.value || []).includes(d.id))
+)
+const canBcastSend = computed(() => {
+  if (!bcastTitle.value.trim() || !bcastContent.value.trim()) return false
+  if (auth.isSuper) return bcastDepts.value.length > 0
+  return true // 部门管理员默认本人部门
+})
 
 // 仅放行 http/https 链接（防伪协议注入）；非法或空返回空
 function safeUrl(u) {
@@ -416,31 +463,80 @@ function linkLabel(u) {
   const host = s.replace(/^https?:\/\//i, '').split('/')[0]
   return (s.length > 46 ? host + '/…' : s)
 }
+// 解析通知附件 JSON
+function nAtts(n) {
+  if (!n || !n.attachments) return []
+  try {
+    const arr = JSON.parse(n.attachments)
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+function attUrl(a) {
+  return '/api/notifications/attachments/' + a.stored_name + '/download'
+}
+function fmtSize(n) {
+  if (n == null) return ''
+  const u = ['B', 'KB', 'MB', 'GB']
+  let i = 0, v = n
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i]
+}
 
 async function toggleBcast() {
   bcastOpen.value = !bcastOpen.value
-  if (bcastOpen.value && auth.isSuper && !deptList.value.length) {
-    try { deptList.value = await get('/departments') } catch { /* 忽略 */ }
+  if (bcastOpen.value) {
+    if (auth.isSuper && !deptList.value.length) {
+      try { deptList.value = await get('/departments') } catch { /* 忽略 */ }
+    }
+    // 部门管理员默认勾选本人部门（含子部门会由后端展开）
+    if (!auth.isSuper && !bcastDepts.value.length && auth.user?.dept_id) {
+      bcastDepts.value = [auth.user.dept_id]
+    }
   }
+}
+async function onBcastFiles(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (!files.length) return
+  uploadingBcast.value = true
+  try {
+    for (const f of files) {
+      const att = await upload('/workspace/temp-attachments', f)
+      bcastAttachments.value.push({ id: att.id, file_name: att.file_name, mime: att.mime, size: att.size })
+    }
+  } catch (err) {
+    alert((err.response && err.response.data && err.response.data.error) || '附件上传失败')
+  } finally {
+    uploadingBcast.value = false
+  }
+}
+function removeBcastAtt(a) {
+  const i = bcastAttachments.value.findIndex((x) => x.id === a.id)
+  if (i >= 0) bcastAttachments.value.splice(i, 1)
 }
 async function doBroadcast() {
   if (!bcastTitle.value.trim() || !bcastContent.value.trim()) return
-  // 超管必须选部门；部门管理员不选即发给本人部门
-  if (auth.isSuper && !bcastDept.value) { alert('请选择接收部门'); return }
+  if (auth.isSuper && bcastDepts.value.length === 0) { alert('请选择接收部门'); return }
   sendingBcast.value = true
   try {
     const r = await post('/notifications/broadcast', {
-      dept_id: auth.isSuper ? bcastDept.value : 0,
+      dept_ids: bcastDepts.value,
       title: bcastTitle.value.trim(),
       content: bcastContent.value.trim(),
-      link: safeUrl(bcastLink.value)
+      link: safeUrl(bcastLink.value),
+      attachments: bcastAttachments.value.map((a) => ({ id: a.id }))
     })
     bcastOpen.value = false
     bcastTitle.value = ''
     bcastContent.value = ''
     bcastLink.value = ''
+    bcastDepts.value = []
+    bcastAttachments.value = []
     const dn = r.dept_name || '部门'
-    alert(`已向「${dn}」${r.sent} 名成员发送广播通知`)
+    const atxt = r.attachments ? `，${r.attachments} 个附件` : ''
+    alert(`已向「${dn}」${r.sent} 名成员发送广播通知${atxt}`)
     // 发送后刷新我的通知列表与未读
     notifs.value = await get('/notifications')
     loadNotifCount()
@@ -537,7 +633,7 @@ async function doBroadcast() {
 .notif-head-actions .btn { padding: 7px 12px; font-size: 12.5px; border-radius: 10px; }
 .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .notif-close { font-size: 22px; line-height: 1; color: var(--text-faint); background: none; border: none; cursor: pointer; padding: 4px; }
-/* 部门广播表单（v0.2.0） */
+/* 部门广播表单（v0.2.0，v0.11.0 多部门/全部门+附件） */
 .bcast-form { padding: 12px 16px 14px; border-bottom: 1px solid var(--glass-border); background: var(--overlay); display: flex; flex-direction: column; gap: 9px; }
 .bcast-row { display: flex; flex-direction: column; gap: 4px; }
 .bcast-label { font-size: 11.5px; color: var(--text-faint); }
@@ -546,6 +642,19 @@ async function doBroadcast() {
 .bcast-input::placeholder { color: var(--text-faint); }
 .bcast-ta { resize: vertical; min-height: 62px; font-family: inherit; line-height: 1.5; }
 .bcast-hint { font-size: 12px; color: var(--text-faint); margin: 0; line-height: 1.5; }
+.bcast-chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; padding: 2px 0; }
+.bcast-chk.all { font-weight: 600; color: var(--accent); }
+.bcast-depts { max-height: 168px; overflow-y: auto; border: 1px solid var(--glass-border); border-radius: 10px; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; background: var(--bg-1); }
+.bcast-depts.disabled { opacity: 0.5; pointer-events: none; }
+.bcast-attach { display: flex; flex-direction: column; gap: 6px; }
+.bcast-file-btn { align-self: flex-start; padding: 7px 12px; font-size: 12.5px; border-radius: 10px; border: 1px solid var(--glass-border); background: var(--bg-1); color: var(--text-dim); cursor: pointer; }
+.bcast-file-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.bcast-file-input { display: none; }
+.bcast-att-chip { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 10px; border-radius: 9px; background: var(--bg-1); border: 1px solid var(--glass-border); }
+.bcast-att-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.bcast-att-size { color: var(--text-faint); }
+.bcast-att-x { border: none; background: none; color: var(--text-faint); font-size: 16px; cursor: pointer; line-height: 1; }
+.bcast-att-x:hover { color: var(--danger); }
 .full { width: 100%; justify-content: center; }
 .notif-list { flex: 1; overflow-y: auto; padding: 8px 0; }
 .notif-item {
@@ -562,6 +671,10 @@ async function doBroadcast() {
 .ni-content { font-size: 12.5px; color: var(--text-dim); margin-top: 4px; line-height: 1.6; }
 .ni-link { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent, #4f46e5); text-decoration: none; word-break: break-all; }
 .ni-link:hover { text-decoration: underline; }
+.ni-atts { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; }
+.ni-att { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent, #4f46e5); text-decoration: none; word-break: break-all; padding: 5px 9px; border-radius: 8px; background: var(--accent-soft); border: 1px solid rgba(79,70,229,0.22); width: fit-content; }
+.ni-att:hover { text-decoration: underline; }
+.ni-att-size { color: var(--text-faint); }
 .ni-time { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
 .notif-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 60px 0; }
 
