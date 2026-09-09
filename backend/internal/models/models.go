@@ -214,7 +214,10 @@ type Notification struct {
 	Attachments string    `json:"attachments" gorm:"type:text"` // JSON 数组：[]NotifAttachment（广播附件）
 	ActorID     uint      `json:"actor_id"`                  // 操作人
 	ActorName   string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
-	BroadcastID string    `json:"broadcast_id" gorm:"size:32;index"` // 同一次广播聚合键；空=非广播通知
+	BroadcastID string     `json:"broadcast_id" gorm:"size:32;index"` // 同一次广播聚合键；空=非广播通知
+	RequireAck  bool       `json:"require_ack" gorm:"default:false"`  // 广播要求接收人「确认收到」
+	Ack         bool       `json:"ack" gorm:"default:false"`          // 接收人是否已确认收到
+	AckedAt     *time.Time `json:"acked_at"`                          // 确认时间
 	Read        bool      `json:"read" gorm:"default:false"` // 是否已读
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -343,4 +346,37 @@ type WorkHandover struct {
 	Note          string     `json:"note" gorm:"type:text"`         // 接收人完成时的备注
 	CompletedAt   *time.Time `json:"completed_at"`
 	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// ============ 通知增强：定时广播 / 浏览器推送（v0.13.0） ============
+
+// ScheduledBroadcast 定时广播：到点自动向目标部门发送站内广播（可单次/每日/按周）。
+// Repeat: once 单次（发送后停用） / daily 每天 / weekly 按周（WeekDays 逗号分隔 1-7）
+type ScheduledBroadcast struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	Title       string    `json:"title" gorm:"size:128;not null"`
+	Content     string    `json:"content" gorm:"size:512;not null"`
+	Link        string    `json:"link" gorm:"size:512"`
+	RequireAck  bool      `json:"require_ack" gorm:"default:false"`
+	AllDepts    bool      `json:"all_depts" gorm:"default:false"` // 全部部门
+	DeptIDs     string    `json:"dept_ids" gorm:"type:text"`      // JSON []uint：目标部门（顶层/用户所选，发送时含子孙）
+	Repeat      string    `json:"repeat" gorm:"size:8;default:once"` // once|daily|weekly
+	WeekDays    string    `json:"week_days" gorm:"size:32"`       // weekly：逗号分隔 1-7（1=周一…7=周日）
+	SendAt      time.Time `json:"send_at"`                        // 下次触发时间（发送成功后按 repeat 前移到下一次）
+	CreatorID   uint      `json:"creator_id"`
+	CreatorName string    `json:"creator_name" gorm:"size:64"`
+	Active      bool      `json:"active" gorm:"default:true"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// PushSubscription 浏览器 Web Push 订阅（每个用户可多设备）
+type PushSubscription struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	UserID    uint      `json:"user_id" gorm:"index;not null"`
+	Endpoint  string    `json:"endpoint" gorm:"type:text;not null"`
+	P256dh    string    `json:"p256dh" gorm:"type:text;not null"`
+	Auth      string    `json:"auth" gorm:"type:text;not null"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

@@ -53,6 +53,8 @@ func Init() error {
 		&models.Log{},
 		&models.Template{},
 		&models.Notification{},
+		&models.ScheduledBroadcast{},
+		&models.PushSubscription{},
 		&models.KnowledgeEntry{},
 		&models.KnowledgeAttachment{},
 		&models.KnowledgeTempAttachment{},

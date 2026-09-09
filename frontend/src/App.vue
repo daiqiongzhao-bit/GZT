@@ -126,6 +126,7 @@
               <span class="notif-title">站内通知<em v-if="notifUnread > 0" class="notif-num">{{ notifUnread }}</em></span>
               <div class="notif-head-actions">
                 <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: bcastOpen }" @click="toggleBcast">{{ bcastOpen ? '收起' : '发通知' }}</button>
+                <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: schedOpen }" @click="toggleSched">{{ schedOpen ? '收起' : '定时广播' }}</button>
                 <button v-if="auth.canManage" class="btn ghost sm" :class="{ on: bcastStatsOpen }" @click="toggleBcastStats">{{ bcastStatsOpen ? '收起' : '广播统计' }}</button>
                 <button class="btn ghost sm" :disabled="!notifUnread" @click="readAll">全部已读</button>
                 <button class="notif-close" @click="notifOpen = false" title="关闭">×</button>
@@ -158,9 +159,54 @@
                   <button type="button" class="bcast-att-x" @click="removeBcastAtt(a)">×</button>
                 </div>
               </div>
+              <label class="bcast-chk require">
+                <input type="checkbox" v-model="bcastRequireAck" :disabled="sendingBcast" /> 要求接收人确认收到
+              </label>
               <button class="btn primary sm full" :disabled="sendingBcast || !canBcastSend" @click="doBroadcast">
                 {{ sendingBcast ? '发送中…' : '发送广播' }}
               </button>
+            </div>
+            <div v-if="schedOpen" class="bcast-form sched-form">
+              <p class="bcast-hint">沿用上方已填写的标题、内容、链接与部门（含「要求确认」勾选）。</p>
+              <div class="bcast-row">
+                <span class="bcast-label">首次发送时间</span>
+                <input v-model="schedSendAt" type="datetime-local" class="bcast-input" :disabled="creatingSched" />
+              </div>
+              <div class="bcast-row">
+                <span class="bcast-label">重复</span>
+                <div class="sched-repeat">
+                  <label class="bcast-chk"><input type="radio" value="once" v-model="schedRepeat" /> 单次</label>
+                  <label class="bcast-chk"><input type="radio" value="daily" v-model="schedRepeat" /> 每天</label>
+                  <label class="bcast-chk"><input type="radio" value="weekly" v-model="schedRepeat" /> 按周</label>
+                </div>
+              </div>
+              <div v-if="schedRepeat === 'weekly'" class="bcast-row">
+                <span class="bcast-label">每周几</span>
+                <div class="sched-week">
+                  <button v-for="(label, i) in ['一','二','三','四','五','六','日']" :key="label" type="button"
+                    class="wd-chip" :class="{ on: schedWeekDays.includes(i + 1) }"
+                    @click="toggleWeekDay(i + 1)">{{ label }}</button>
+                </div>
+              </div>
+              <button class="btn primary sm full" :disabled="creatingSched || !canSchedSend" @click="createScheduled">
+                {{ creatingSched ? '预约中…' : '预约定时广播' }}
+              </button>
+              <div class="sched-list">
+                <div v-if="schedLoading" class="bs-loading">加载中…</div>
+                <div v-else-if="!scheds.length" class="bs-empty">暂无定时广播预约</div>
+                <div v-for="s in scheds" :key="s.id" class="sched-item">
+                  <div class="sched-top">
+                    <span class="sched-title">{{ s.title }}</span>
+                    <button class="sched-del" :disabled="creatingSched" @click="delScheduled(s)">删除</button>
+                  </div>
+                  <div class="sched-meta">
+                    <span v-if="!s.active" class="sched-inactive">已停用</span>
+                    <span>{{ fmtNotif(s.send_at) }}</span>
+                    <span class="sched-tag">{{ s.repeat === 'daily' ? '每天' : s.repeat === 'weekly' ? ('每周' + weekLabel(s.week_days)) : '单次' }}</span>
+                    <span>· {{ s.dept_name }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div v-if="bcastStatsOpen" class="bcast-stats">
               <div v-if="bcastStatsLoading" class="bs-loading">加载中…</div>
@@ -174,15 +220,26 @@
                   <span>共 {{ b.total }} 人</span>
                   <span class="bs-read">已读 {{ b.read }}</span>
                   <span class="bs-unread">未读 {{ b.unread }}</span>
+                  <template v-if="b.require_ack">
+                    <span class="bs-acked">✓ 确认 {{ b.ack }}</span>
+                    <span class="bs-noack">待确认 {{ b.no_ack }}</span>
+                  </template>
                 </div>
-                <button class="bs-unread-btn" :disabled="b.unread === 0" @click="toggleUnread(b)">
-                  {{ (unreadMap[b.broadcast_id] && unreadMap[b.broadcast_id].open) ? '收起未读' : '查看未读 (' + b.unread + ')' }}
-                </button>
-                <div v-if="unreadMap[b.broadcast_id] && unreadMap[b.broadcast_id].open" class="bs-unread-list">
-                  <div v-if="unreadMap[b.broadcast_id].loading" class="bs-loading">加载中…</div>
-                  <div v-else-if="!unreadMap[b.broadcast_id].list.length" class="bs-empty">已全部阅读</div>
-                  <div v-for="u in unreadMap[b.broadcast_id].list" :key="u.emp_no || u.name" class="bs-unread-item">
-                    {{ u.name }}<span v-if="u.emp_no" class="bs-emp">（{{ u.emp_no }}）</span><span v-if="u.dept_name" class="bs-dept">· {{ u.dept_name }}</span>
+                <div class="bs-btns">
+                  <button class="bs-btn" :disabled="outstandingOf(b) === 0" @click="toggleMembers(b)">
+                    {{ listState(b).open ? '收起名单' : '查看' + (b.require_ack ? '待确认' : '未读') + ' (' + outstandingOf(b) + ')' }}
+                  </button>
+                  <button class="bs-btn warn" :disabled="outstandingOf(b) === 0 || nudgingBid === b.broadcast_id" @click="nudgeBroadcast(b)">
+                    {{ nudgingBid === b.broadcast_id ? '催办中…' : '催办 ' + outstandingOf(b) }}
+                  </button>
+                </div>
+                <div v-if="listState(b).open" class="bs-unread-list">
+                  <div v-if="listState(b).loading" class="bs-loading">加载中…</div>
+                  <div v-else-if="!listState(b).list.length" class="bs-empty">{{ b.require_ack ? '已全部确认' : '已全部阅读' }}</div>
+                  <div v-for="u in listState(b).list" :key="(u.emp_no || '') + u.name" class="bs-unread-item">
+                    {{ u.name }}<span v-if="u.emp_no" class="bs-emp">（{{ u.emp_no }}）</span>
+                    <span v-if="u.dept_name" class="bs-dept">· {{ u.dept_name }}</span>
+                    <span v-if="b.require_ack && u.read" class="bs-readflag">已读未确认</span>
                   </div>
                 </div>
               </div>
@@ -196,6 +253,10 @@
                   <a v-for="a in nAtts(n)" :key="a.stored_name" class="ni-att" :href="attUrl(a)" target="_blank" rel="noopener noreferrer">
                     📎 {{ a.file_name }}<span v-if="a.size" class="ni-att-size"> · {{ fmtSize(a.size) }}</span>
                   </a>
+                </div>
+                <div class="ni-ack" @click.stop>
+                  <button v-if="n.require_ack && !n.ack" class="btn primary xs" :disabled="ackingId === n.id" @click="ackNotif(n)">{{ ackingId === n.id ? '处理中…' : '确认收到' }}</button>
+                  <span v-else-if="n.require_ack && n.ack" class="ni-acked">✓ 已确认</span>
                 </div>
                 <div class="ni-time">{{ fmtNotif(n.created_at) }}</div>
               </div>
@@ -387,6 +448,7 @@ onMounted(async () => {
   if (auth.user) {
     loadBadge()
     loadNotifCount()
+    initPush() // Web Push 订阅（HTTPS 下才生效；非安全上下文自动跳过）
     badgeTimer = setInterval(() => { loadBadge(); loadNotifCount() }, 60000)
   }
   loadVersion()
@@ -444,6 +506,7 @@ const bcastDepts = ref([]) // 多选部门；超管可含 0=全部
 const bcastTitle = ref('')
 const bcastContent = ref('')
 const bcastLink = ref('')
+const bcastRequireAck = ref(false) // 要求接收人确认收到
 const sendingBcast = ref(false)
 const uploadingBcast = ref(false)
 const bcastAttachments = ref([]) // 已上传临时附件 [{id,file_name,mime,size}]
@@ -512,6 +575,7 @@ function fmtSize(n) {
 
 async function toggleBcast() {
   bcastOpen.value = !bcastOpen.value
+  if (bcastOpen.value) { bcastStatsOpen.value = false; schedOpen.value = false }
   if (bcastOpen.value) {
     if (auth.isSuper && !deptList.value.length) {
       try { deptList.value = await get('/departments') } catch { /* 忽略 */ }
@@ -552,12 +616,14 @@ async function doBroadcast() {
       title: bcastTitle.value.trim(),
       content: bcastContent.value.trim(),
       link: safeUrl(bcastLink.value),
+      require_ack: bcastRequireAck.value,
       attachments: bcastAttachments.value.map((a) => ({ id: a.id }))
     })
     bcastOpen.value = false
     bcastTitle.value = ''
     bcastContent.value = ''
     bcastLink.value = ''
+    bcastRequireAck.value = false
     bcastDepts.value = []
     bcastAttachments.value = []
     const dn = r.dept_name || '部门'
@@ -572,16 +638,26 @@ async function doBroadcast() {
   } finally { sendingBcast.value = false }
 }
 
-// ---------- 广播送达/已读统计（v0.12.0）----------
+// ---------- 广播送达/已读/确认统计（v0.12.0/v0.13.0）----------
 const bcastStatsOpen = ref(false)
 const bcastStatsLoading = ref(false)
 const bcastStats = ref([])
-const unreadMap = reactive({}) // bid -> { open, loading, list }
+const memMap = reactive({}) // bid -> { open, loading, list } 未读/待确认名单
+const nudgingBid = ref('')
+const ackingId = ref(0)
 
+function listState(b) {
+  return memMap[b.broadcast_id] || { open: false, loading: false, list: [] }
+}
+function outstandingOf(b) {
+  return b.require_ack ? (b.no_ack || 0) : (b.unread || 0)
+}
 async function toggleBcastStats() {
   bcastStatsOpen.value = !bcastStatsOpen.value
-  if (bcastStatsOpen.value && !bcastStats.value.length) {
-    await loadBcastStats()
+  if (bcastStatsOpen.value) {
+    bcastOpen.value = false
+    schedOpen.value = false
+    if (!bcastStats.value.length) await loadBcastStats()
   }
 }
 async function loadBcastStats() {
@@ -595,21 +671,176 @@ async function loadBcastStats() {
     bcastStatsLoading.value = false
   }
 }
-async function toggleUnread(b) {
+async function toggleMembers(b) {
   const bid = b.broadcast_id
-  if (!unreadMap[bid]) unreadMap[bid] = { open: false, loading: false, list: [] }
-  const m = unreadMap[bid]
+  if (!memMap[bid]) memMap[bid] = { open: false, loading: false, list: [] }
+  const m = memMap[bid]
   m.open = !m.open
   if (m.open && !m.list.length && !m.loading) {
     m.loading = true
     try {
-      m.list = await get('/notifications/broadcasts/' + encodeURIComponent(bid) + '/unread')
+      const sub = b.require_ack ? 'unacked' : 'unread'
+      m.list = await get('/notifications/broadcasts/' + encodeURIComponent(bid) + '/' + sub)
     } catch (e) {
       m.list = []
     } finally {
       m.loading = false
     }
   }
+}
+async function nudgeBroadcast(b) {
+  const n = outstandingOf(b)
+  if (!n) return
+  if (!confirm(`向 ${n} 名尚未处理（${b.require_ack ? '未确认' : '未读'}）的成员发送催办提醒？`)) return
+  nudgingBid.value = b.broadcast_id
+  try {
+    const r = await post('/notifications/broadcasts/' + encodeURIComponent(b.broadcast_id) + '/nudge')
+    alert(`已催办 ${r.sent} 人`)
+  } catch (e) {
+    alert((e.response && e.response.data && e.response.data.error) || '催办失败')
+  } finally {
+    nudgingBid.value = ''
+  }
+}
+// 确认收到（确认同时算已读）
+async function ackNotif(n) {
+  ackingId.value = n.id
+  try {
+    await post('/notifications/' + n.id + '/ack')
+    n.ack = true
+    n.read = true
+    notifUnread.value = Math.max(0, notifUnread.value - 1)
+    if (bcastStatsOpen.value) loadBcastStats()
+  } catch (e) {
+    alert((e.response && e.response.data && e.response.data.error) || '操作失败')
+  } finally {
+    ackingId.value = 0
+  }
+}
+
+// ---------- 定时广播（v0.13.0）----------
+const schedOpen = ref(false)
+const schedSendAt = ref('')
+const schedRepeat = ref('once')
+const schedWeekDays = ref([])
+const scheds = ref([])
+const schedLoading = ref(false)
+const creatingSched = ref(false)
+
+const canSchedSend = computed(() => {
+  if (!bcastTitle.value.trim() || !bcastContent.value.trim()) return false
+  if (!schedSendAt.value) return false
+  if (schedRepeat.value === 'weekly' && !schedWeekDays.value.length) return false
+  if (auth.isSuper && !bcastDepts.value.length) return false
+  return true
+})
+function weekLabel(days) {
+  const labels = { 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日' }
+  const ds = String(days || '').split(',').filter(Boolean)
+  return ds.map((d) => labels[d]).filter(Boolean).join('、') || '按周'
+}
+function toggleWeekDay(d) {
+  const i = schedWeekDays.value.indexOf(d)
+  if (i >= 0) schedWeekDays.value.splice(i, 1)
+  else schedWeekDays.value.push(d)
+}
+async function toggleSched() {
+  schedOpen.value = !schedOpen.value
+  if (schedOpen.value) {
+    bcastOpen.value = false
+    bcastStatsOpen.value = false
+    await loadScheds()
+    // 部门管理员默认本人部门
+    if (!auth.isSuper && !bcastDepts.value.length && auth.user?.dept_id) bcastDepts.value = [auth.user.dept_id]
+  }
+}
+async function loadScheds() {
+  schedLoading.value = true
+  try {
+    const list = await get('/scheduled-broadcasts')
+    scheds.value = Array.isArray(list) ? list : []
+  } catch (e) {
+    scheds.value = []
+  } finally {
+    schedLoading.value = false
+  }
+}
+async function createScheduled() {
+  if (!canSchedSend.value) return
+  if (!bcastTitle.value.trim() || !bcastContent.value.trim()) { alert('请先填写标题与内容'); return }
+  if (auth.isSuper && bcastDepts.value.length === 0) { alert('请选择接收部门或勾选全部'); return }
+  creatingSched.value = true
+  try {
+    const all = bcastDepts.value.includes(0)
+    const iso = new Date(schedSendAt.value).toISOString()
+    const r = await post('/scheduled-broadcasts', {
+      all,
+      dept_ids: all ? [] : bcastDepts.value,
+      title: bcastTitle.value.trim(),
+      content: bcastContent.value.trim(),
+      link: safeUrl(bcastLink.value),
+      require_ack: bcastRequireAck.value,
+      send_at: iso,
+      repeat: schedRepeat.value,
+      week_days: schedRepeat.value === 'weekly' ? schedWeekDays.value : []
+    })
+    schedSendAt.value = ''
+    schedRepeat.value = 'once'
+    schedWeekDays.value = []
+    bcastTitle.value = ''
+    bcastContent.value = ''
+    bcastLink.value = ''
+    bcastRequireAck.value = false
+    bcastDepts.value = []
+    await loadScheds()
+    alert(`已预约「${r.title || '定时广播'}」`)
+  } catch (e) {
+    alert((e.response && e.response.data && e.response.data.error) || '预约失败')
+  } finally {
+    creatingSched.value = false
+  }
+}
+async function delScheduled(s) {
+  if (!confirm(`取消定时广播「${s.title}」？`)) return
+  try {
+    await fetch('/api/scheduled-broadcasts/' + s.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + (localStorage.getItem('sw_token') || '') } })
+    await loadScheds()
+  } catch (e) {
+    alert('删除失败')
+  }
+}
+
+// ---------- Web Push 订阅（v0.13.0；需 HTTPS 生效，非安全上下文自动跳过）----------
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(base64)
+  const output = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i)
+  return output
+}
+async function initPush() {
+  try {
+    if (!auth.user) return
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !window.isSecureContext) return
+    if (!('Notification' in window)) return
+    if (Notification.permission === 'denied') return
+    if (sessionStorage.getItem('wb-push-asked')) return
+    sessionStorage.setItem('wb-push-asked', '1')
+    let perm = Notification.permission
+    if (perm === 'default') perm = await Notification.requestPermission()
+    if (perm !== 'granted') return
+    const reg = await navigator.serviceWorker.ready
+    const pub = await get('/push/vapid-public')
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub && pub && pub.public_key) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(pub.public_key) })
+    }
+    if (sub) {
+      const j = sub.toJSON()
+      await post('/push/subscribe', { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth })
+    }
+  } catch (e) { /* 非 HTTPS / 浏览器限制：静默跳过 */ }
 }
 </script>
 
@@ -739,6 +970,33 @@ async function toggleUnread(b) {
 .bs-emp { color: var(--text-faint); }
 .bs-dept { color: var(--text-faint); }
 .bs-loading, .bs-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
+/* v0.13.0：确认回执 + 催办 + 定时广播样式 */
+.btn.xs { padding: 4px 10px; font-size: 12px; border-radius: 8px; min-height: 26px; }
+.bs-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.bs-btn { font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--glass-border); background: var(--bg-1); color: var(--accent); cursor: pointer; }
+.bs-btn.warn { color: #e0524f; }
+.bs-btn:disabled { opacity: .45; cursor: not-allowed; }
+.bs-meta .bs-acked { color: #19a974; }
+.bs-meta .bs-noack { color: #e0524f; }
+.bs-readflag { color: #d97706; font-size: 11px; margin-left: 6px; }
+.bs-name { color: var(--text-dim); }
+.ni-ack { margin-top: 8px; }
+.ni-acked { font-size: 12px; color: #19a974; font-weight: 700; }
+.bcast-chk.require { margin: 2px 0 4px; font-size: 12.5px; color: var(--text-dim); user-select: none; }
+.sched-form { border-top: 1px dashed var(--glass-border); }
+.sched-repeat { display: flex; gap: 14px; flex-wrap: wrap; }
+.sched-repeat .bcast-chk { font-size: 13px; }
+.sched-week { display: flex; gap: 6px; flex-wrap: wrap; }
+.wd-chip { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--glass-border); background: var(--bg-1); color: var(--text-dim); font-size: 13px; cursor: pointer; }
+.wd-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.sched-list { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--glass-border); padding-top: 10px; }
+.sched-item { border: 1px solid var(--glass-border); border-radius: 10px; padding: 9px 11px; background: var(--bg-1); }
+.sched-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sched-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.sched-del { font-size: 11.5px; color: #e0524f; border: none; background: transparent; cursor: pointer; padding: 4px 6px; }
+.sched-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-faint); margin-top: 4px; align-items: center; }
+.sched-tag { background: var(--overlay-2); padding: 1px 7px; border-radius: 6px; color: var(--text-dim); }
+.sched-inactive { color: #e0524f; }
 .notif-list { flex: 1; overflow-y: auto; padding: 8px 0; }
 .notif-item {
   padding: 13px 18px; border-bottom: 1px solid var(--glass-border); cursor: pointer;

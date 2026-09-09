@@ -70,3 +70,26 @@ self.addEventListener('fetch', (e) => {
       .catch(() => caches.match(req))
   )
 })
+
+// ---------- Web Push 推送展示（v0.13.0，需 HTTPS）----------
+self.addEventListener('push', (e) => {
+  let data = { title: '企业任务通知', body: '', url: '/' }
+  try {
+    if (e.data) data = Object.assign(data, e.data.json())
+  } catch (err) { /* 非 JSON 负载忽略 */ }
+  const opts = { body: data.body || '', data: { url: data.url || '/' }, badge: '/favicon.svg', icon: '/favicon.svg' }
+  e.waitUntil(self.registration.showNotification(data.title || '企业任务通知', opts))
+})
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = (e.notification.data && e.notification.data.url) || '/'
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if ('focus' in c) { c.focus(); if ('navigate' in c) c.navigate(url); return }
+      }
+      return self.clients.openWindow(url)
+    })
+  )
+})

@@ -3,6 +3,7 @@ package handlers
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
@@ -24,19 +25,21 @@ func claimsName(cl *models.Claims) string {
 	return cl.Username
 }
 
-// notifyUser 给指定用户发一条站内通知（actorID/actorName 为操作人）
+// notifyUser 给指定用户发一条站内通知（actorID/actorName 为操作人），成功后尝试 Web Push
 func notifyUser(userID uint, kind, title, content string, actorID uint, actorName string) {
 	if userID == 0 || actorID == userID {
 		return // 无人可发 / 自己操作自己不发
 	}
-	_ = db.DB.Create(&models.Notification{
+	if err := db.DB.Create(&models.Notification{
 		UserID:    userID,
 		Kind:      kind,
 		Title:     title,
 		Content:   content,
 		ActorID:   actorID,
 		ActorName: actorName,
-	}).Error
+	}).Error; err == nil {
+		pushToUser(userID, title, pushBody(content))
+	}
 }
 
 // notifyPeopleByName 按姓名给系统内用户发通知（匹配不到的用户跳过）
@@ -56,15 +59,17 @@ func notifyPeopleByName(names []string, kind, titleFmt, contentFmt string, actor
 			if seen[u.ID] || u.ID == actorID {
 				continue
 			}
-			seen[u.ID] = true
-			_ = db.DB.Create(&models.Notification{
-				UserID:    u.ID,
-				Kind:      kind,
-				Title:     titleFmt,
-				Content:   contentFmt,
-				ActorID:   actorID,
-				ActorName: actorName,
-			}).Error
+		seen[u.ID] = true
+		if err := db.DB.Create(&models.Notification{
+			UserID:    u.ID,
+			Kind:      kind,
+			Title:     titleFmt,
+			Content:   contentFmt,
+			ActorID:   actorID,
+			ActorName: actorName,
+		}).Error; err == nil {
+			pushToUser(u.ID, titleFmt, pushBody(contentFmt))
+		}
 		}
 	}
 }
@@ -93,6 +98,17 @@ func MarkNotificationRead(c *gin.Context) {
 	cl := currentClaims(c)
 	id, _ := strconv.Atoi(c.Param("id"))
 	db.DB.Model(&models.Notification{}).Where("id = ? AND user_id = ?", id, cl.UserID).Update("read", true)
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// MarkNotificationAck POST /api/notifications/:id/ack 确认收到（确认同时视为已读）
+func MarkNotificationAck(c *gin.Context) {
+	cl := currentClaims(c)
+	id, _ := strconv.Atoi(c.Param("id"))
+	now := time.Now()
+	db.DB.Model(&models.Notification{}).
+		Where("id = ? AND user_id = ?", id, cl.UserID).
+		Updates(map[string]interface{}{"ack": true, "read": true, "acked_at": now})
 	c.JSON(200, gin.H{"ok": true})
 }
 

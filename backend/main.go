@@ -65,6 +65,10 @@ func main() {
 	go handlers.StartBackupScheduler()
 	go handlers.StartNotifyScheduler()
 	go handlers.StartLogRetentionScheduler()
+	// v0.13.0：历史广播统计回填（幂等）+ 定时广播调度器 + VAPID 密钥准备（Web Push）
+	handlers.BackfillBroadcastIDs()
+	_ = handlers.EnsurePushKeys()
+	go handlers.StartScheduledBroadcastScheduler()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -91,6 +95,8 @@ func main() {
 		api.GET("/version", func(c *gin.Context) {
 			c.JSON(200, gin.H{"version": config.C.AppVersion})
 		})
+		// Web Push VAPID 公钥（订阅前获取，公开即可；私钥在服务端）
+		api.GET("/push/vapid-public", handlers.GetVapidPublicKey)
 
 		// 需登录
 		auth := api.Group("")
@@ -105,13 +111,24 @@ func main() {
 			auth.GET("/notifications/unread-count", handlers.UnreadNotificationCount)
 			auth.POST("/notifications/:id/read", handlers.MarkNotificationRead)
 			auth.POST("/notifications/read-all", handlers.MarkAllNotificationsRead)
+			// 广播确认回执（接收人确认收到）v0.13.0
+			auth.POST("/notifications/:id/ack", handlers.MarkNotificationAck)
 			// 部门广播通知（部门管/超管）v0.2.0
 			auth.POST("/notifications/broadcast", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BroadcastNotification)
 			// 广播附件下载（接收人本人/超管）v0.11.0
 			auth.GET("/notifications/attachments/:key/download", handlers.DownloadNotifAttachment)
-			// 广播送达/已读统计（超管看全部；部门管理员看自己发的）v0.12.0
+			// 广播送达/已读/确认统计（超管看全部；部门管理员看自己发的）v0.12.0/v0.13.0
 			auth.GET("/notifications/broadcasts", handlers.ListBroadcastStats)
 			auth.GET("/notifications/broadcasts/:bid/unread", handlers.BroadcastUnreadList)
+			auth.GET("/notifications/broadcasts/:bid/unacked", handlers.BroadcastUnackedList)
+			auth.POST("/notifications/broadcasts/:bid/nudge", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.NudgeBroadcast)
+			// Web Push 订阅管理（登录用户本人）v0.13.0
+			auth.POST("/push/subscribe", handlers.PushSubscribe)
+			auth.POST("/push/unsubscribe", handlers.PushUnsubscribe)
+			// 定时广播（部门管/超管）v0.13.0
+			auth.GET("/scheduled-broadcasts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListScheduledBroadcasts)
+			auth.POST("/scheduled-broadcasts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateScheduledBroadcast)
+			auth.DELETE("/scheduled-broadcasts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteScheduledBroadcast)
 
 			// 部门（仅超管写）
 			auth.GET("/departments", handlers.ListDepartments)
