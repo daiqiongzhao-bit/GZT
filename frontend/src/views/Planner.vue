@@ -27,6 +27,8 @@
             <span v-html="icons.plus"></span>{{ generating ? '生成中…' : '一键生成' }}
           </button>
           <button class="btn ghost" :disabled="!hasPlan || validing" @click="doValidate">{{ validing ? '校验中…' : '重新校验' }}</button>
+          <button class="btn ghost" :disabled="!hasPlan || savingDraft" @click="openSaveDraft">{{ savingDraft ? '暂存中…' : '暂存为草稿' }}</button>
+          <button class="btn ghost" :disabled="!canOperate" @click="openDrafts">草稿箱<template v-if="drafts.length"> ({{ drafts.length }})</template></button>
           <button class="btn ghost" :disabled="!hasPlan || applying" @click="doApply">{{ applying ? '发布中…' : '发布到班表' }}</button>
         </div>
       </div>
@@ -382,6 +384,44 @@
         </section>
       </template>
     </template>
+
+    <!-- 草稿箱：多版本暂存 / 读取 / 推送 -->
+    <div v-if="draftBox" class="picker-mask" @click.self="draftBox = false">
+      <div class="picker glass" style="max-width:680px">
+        <div class="pk-head">
+          <b>草稿箱</b>
+          <span class="section-sub">{{ deptName }} · {{ year }} 年 {{ month }} 月</span>
+        </div>
+
+        <div class="pk-body" style="flex-direction:column;align-items:stretch;max-height:52vh;overflow:auto">
+          <p v-if="!drafts.length" class="hint" style="margin:0">
+            还没有草稿。生成班表后点「暂存为草稿」，可以把多个版本存起来慢慢挑。
+          </p>
+          <div v-for="d in drafts" :key="d.id" class="draft-row" :class="{ on: d.applied }">
+            <div class="dr-main">
+              <div class="dr-title">
+                {{ d.name }}
+                <span v-if="d.applied" class="tag ok">已发布</span>
+              </div>
+              <div class="dr-meta">
+                {{ d.days }} 天 · {{ draftStat(d) }} · {{ d.creator }} · {{ fmtTime(d.created_at) }}
+              </div>
+              <div v-if="d.note" class="dr-note">{{ d.note }}</div>
+            </div>
+            <div class="dr-ops">
+              <button class="btn ghost sm" @click="loadDraft(d)">读取</button>
+              <button class="btn ghost sm" @click="applyDraft(d)">推送到班表</button>
+              <button class="btn ghost sm danger" @click="removeDraft(d)">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pk-foot">
+          <span class="hint" style="margin-right:auto">推送会覆盖该部门本月的正式班表</span>
+          <button class="btn ghost" @click="draftBox = false">关闭</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 手动调整班次的浮层 -->
     <div v-if="editCell" class="picker-mask" @click.self="editCell = null">
@@ -764,6 +804,121 @@ async function doApply() {
     alert(out)
   } catch (e) {
     alert(e.response?.data?.error || '发布失败')
+  } finally {
+    applying.value = false
+  }
+}
+
+// ---------- 草稿箱（多版本暂存）----------
+// 生成后往往需要反复微调，定稿前不该直接覆盖正式班表。
+// 流程：生成预览 → 暂存多个版本 → 挑一版推送到正式班表。
+const drafts = ref([])
+const draftBox = ref(false)
+const savingDraft = ref(false)
+
+async function fetchDrafts() {
+  if (!canOperate.value) return
+  try {
+    const r = await api.get('/shift-drafts', {
+      params: { dept_id: deptId.value, year: year.value, month: month.value }
+    })
+    drafts.value = r.items || []
+  } catch (e) {
+    drafts.value = []
+  }
+}
+
+async function openDrafts() {
+  await fetchDrafts()
+  draftBox.value = true
+}
+
+function draftStat(d) {
+  try {
+    const st = typeof d.stats === 'string' ? JSON.parse(d.stats || '{}') : (d.stats || {})
+    const err = st.error ?? st.errors ?? 0
+    const warn = st.warn ?? st.warnings ?? 0
+    if (!err && !warn) return '无违规'
+    return `违规 ${err} 条${warn ? ` / 提醒 ${warn} 条` : ''}`
+  } catch {
+    return ''
+  }
+}
+
+function fmtTime(t) {
+  if (!t) return ''
+  const d = new Date(t)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+async function openSaveDraft() {
+  if (!hasPlan.value) return
+  const defName = `方案${String(drafts.value.length + 1).padStart(2, '0')}`
+  const name = prompt('给这个版本起个名字：', defName)
+  if (name === null) return
+  const note = prompt('备注（可留空）：', '') || ''
+  savingDraft.value = true
+  try {
+    await api.post('/shift-drafts', {
+      dept_id: deptId.value,
+      year: year.value,
+      month: month.value,
+      name: name.trim() || defName,
+      note: note.trim(),
+      plan: plan.value,
+      stats: {
+        error: violations.value.filter((v) => v.level === 'error').length,
+        warn: violations.value.filter((v) => v.level !== 'error').length
+      }
+    })
+    await fetchDrafts()
+    draftBox.value = true
+  } catch (e) {
+    alert(e.response?.data?.error || '暂存失败')
+  } finally {
+    savingDraft.value = false
+  }
+}
+
+async function loadDraft(d) {
+  try {
+    const r = await api.get(`/shift-drafts/${d.id}`)
+    plan.value = r.plan || {}
+    // 草稿里的年份月份可能与当前筛选不同，跟随切过去，避免看错月
+    if (r.year) year.value = r.year
+    if (r.month) month.value = r.month
+    await doValidate()
+    draftBox.value = false
+    tab.value = 'preview'
+  } catch (e) {
+    alert(e.response?.data?.error || '读取失败')
+  }
+}
+
+async function removeDraft(d) {
+  if (!confirm(`删除草稿「${d.name}」？`)) return
+  try {
+    await api.delete(`/shift-drafts/${d.id}`)
+    await fetchDrafts()
+  } catch (e) {
+    alert(e.response?.data?.error || '删除失败')
+  }
+}
+
+async function applyDraft(d) {
+  const stat = draftStat(d)
+  if (!confirm(`把草稿「${d.name}」推送到正式班表？\n\n该部门 ${year.value} 年 ${month.value} 月既有班表将被覆盖。\n当前快照：${stat}`)) return
+  applying.value = true
+  try {
+    const r = await api.post(`/shift-drafts/${d.id}/apply`)
+    let out = `推送成功：写入 ${r.created} 条班次记录。`
+    if (r.notes?.length) out += '\n\n' + r.notes.join('\n')
+    alert(out)
+    await fetchDrafts()
+    draftBox.value = false
+  } catch (e) {
+    alert(e.response?.data?.error || '推送失败')
   } finally {
     applying.value = false
   }

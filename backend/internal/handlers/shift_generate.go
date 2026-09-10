@@ -482,32 +482,39 @@ func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month
 	hasLoad := len(load) >= freeLen
 
 	// 在 [ideal-1, ideal, ideal+1] 里挑「覆盖日期负载之和」最小的偏移。
-	// 微调幅度限制在 ±1：偏移离理想值越远，人与人之间的错峰越乱。
+	//
+	// 注意：精确铺开（useSpread）时【不做微调】。
+	// ideal 本身已经是「N 个人均匀铺满 [0,offMax]」的最优解，
+	// 任何偏移都会与相邻人的相位撞车——实测 6 人排班中出现
+	// 两人同取 off=5、off=1 无人占用的情况，每天休息人数随之在 1~3 波动。
+	// 错峰的价值远大于局部负载均衡，故此时直接用 ideal。
 	best := ideal
-	bestScore := -1
-	for _, cand := range []int{ideal, ideal - 1, ideal + 1} {
-		if cand < 0 || cand > offMax {
-			continue
-		}
-		score := 0
-		for i, n := range segLens {
-			s0 := slotStart[i] + cand
-			for k := 0; k < n; k++ {
-				pos := s0 + k
-				if wrap && pos >= freeLen {
-					pos -= freeLen
-				}
-				if hasLoad && pos >= 0 && pos < len(load) {
-					score += load[pos]
+	if !useSpread {
+		bestScore := -1
+		for _, cand := range []int{ideal, ideal - 1, ideal + 1} {
+			if cand < 0 || cand > offMax {
+				continue
+			}
+			score := 0
+			for i, n := range segLens {
+				s0 := slotStart[i] + cand
+				for k := 0; k < n; k++ {
+					pos := s0 + k
+					if wrap && pos >= freeLen {
+						pos -= freeLen
+					}
+					if hasLoad && pos >= 0 && pos < len(load) {
+						score += load[pos]
+					}
 				}
 			}
-		}
-		if !hasLoad {
-			score = abs(cand - ideal) // 无负载时退回「离理想偏移最近」
-		}
-		if bestScore < 0 || score < bestScore {
-			bestScore = score
-			best = cand
+			if !hasLoad {
+				score = abs(cand - ideal) // 无负载时退回「离理想偏移最近」
+			}
+			if bestScore < 0 || score < bestScore {
+				bestScore = score
+				best = cand
+			}
 		}
 	}
 
