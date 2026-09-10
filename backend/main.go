@@ -175,6 +175,29 @@ func main() {
 			auth.PUT("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateSchedule)
 			auth.DELETE("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSchedule)
 
+			// 排班管理（v0.18.0）：规则 / 员工偏好 / 需求 / 特殊工作日 / 生成
+			auth.GET("/shift-rules", handlers.GetShiftRule)
+			auth.PUT("/shift-rules", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateShiftRule)
+
+			auth.GET("/shift-prefs", handlers.ListUserShiftPrefs)
+			auth.PUT("/shift-prefs", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertUserShiftPref)
+			auth.DELETE("/shift-prefs/:userId", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUserShiftPref)
+
+			// 员工需求：提交/查看人人可用（限本人）；删除按状态区分；解锁仅管理员
+			auth.GET("/shift-requests", handlers.ListShiftRequests)
+			auth.POST("/shift-requests", handlers.CreateShiftRequest)
+			auth.PUT("/shift-requests/:id", handlers.UpdateShiftRequest)
+			auth.DELETE("/shift-requests/:id", handlers.DeleteShiftRequest)
+			auth.POST("/shift-requests/:id/unlock", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UnlockShiftRequest)
+
+			auth.GET("/special-workdays", handlers.ListSpecialWorkDays)
+			auth.POST("/special-workdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialWorkDay)
+			auth.DELETE("/special-workdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialWorkDay)
+
+			auth.POST("/schedules/generate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GenerateSchedule)
+			auth.POST("/schedules/validate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ValidatePlan)
+			auth.POST("/schedules/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlan)
+
 			// 任务
 			auth.GET("/tasks", handlers.ListTasks)
 			auth.GET("/tasks/counts", handlers.TaskCounts)

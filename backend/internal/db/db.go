@@ -68,6 +68,11 @@ func Init() error {
 		&models.WorkHandoverEvent{},
 		&models.WSFileAttachment{},
 		&models.SystemLog{},
+		// v0.18.0 排班管理
+		&models.ShiftRule{},
+		&models.UserShiftPref{},
+		&models.ShiftRequest{},
+		&models.SpecialWorkDay{},
 	)
 }
 

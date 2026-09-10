@@ -1,0 +1,528 @@
+package handlers
+
+import (
+	"fmt"
+	"sort"
+	"time"
+
+	"shiftworkbench/internal/models"
+)
+
+// ============ 整月自动排班生成器 ============
+//
+// 算法总览（严格按约束强度分阶段，前者为后者的硬前提）：
+//
+//   阶段0  可行性预检：倒班人数 ÷ 班次数 ≥ 每班最少人数，否则直接报错
+//   阶段1  铺硬约束：固定班次人员、已锁定需求（休假/上班）、特殊工作日
+//   阶段2  排休息：按月出勤目标确定每人应休天数 → 按连续休上限切段铺开
+//          （先排休息再填空班次，避免"排完班次找不到连续空档休息"）
+//   阶段3  填班次：逐日填补，优先满足每班最少人数，规避连续上班上限
+//   阶段4  软约束优化：休假前早班 / 休假后晚班，能改则改
+//   阶段5  收尾：enforceLocks 再校验一次，确保没有任何锁定需求被覆盖
+//
+// 关于【固定班次人员不占用每班最少人数】：
+//   阶段3 只把倒班人员计入每班人数；固定班次人员单独排（阶段1），
+//   二者互不干扰。校验引擎（规则7）同样只统计倒班人员，
+//   因此固定班次人员的存在既不会帮忙凑数，也不会因此产生误报。
+
+// GenResult 生成结果
+type GenResult struct {
+	Plan       map[string]map[string]string `json:"plan"`
+	Violations []Violation                  `json:"violations"`
+	Notes      []string                     `json:"notes"`
+	Warnings   []string                     `json:"warnings"`
+}
+
+// feasible 可行性预检：倒班人数能否满足每班最少人数。
+// 固定班次人员不计入可用人力（按业务约定不占用名额）。
+func (pi *PlanInfo) feasible() error {
+	if pi.Rule.MinPerShift <= 0 {
+		return nil
+	}
+	rotating := 0
+	for _, p := range pi.People {
+		if !p.IsFixed() {
+			rotating++
+		}
+	}
+	// 特殊工作日全员上班，但固定班次人员仍不计入倒班班次人数
+	need := pi.Rule.MinPerShift * len(pi.Shifts)
+	if rotating < need {
+		return fmt.Errorf(
+			"当前部门倒班人员 %d 人，%d 个班次每班至少 %d 人需 %d 人，人手不足；"+
+				"请增加倒班人员、减少班次或调低每班最少人数（固定班次人员不计入该名额）",
+			rotating, len(pi.Shifts), pi.Rule.MinPerShift, need)
+	}
+	return nil
+}
+
+// GeneratePlan 生成整月排班计划。
+func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
+	if len(pi.People) == 0 {
+		return nil, fmt.Errorf("该部门没有可排班人员（已排除冻结与休假中人员）")
+	}
+	if len(pi.Shifts) == 0 {
+		return nil, fmt.Errorf("该部门没有可排班次，请先在「班次设置」中配置")
+	}
+	if err := pi.feasible(); err != nil {
+		return nil, err
+	}
+
+	res := &GenResult{Plan: map[string]map[string]string{}}
+	plan := res.Plan
+	days := daysInRange(pi.First, pi.Last)
+	// forcedWork: 特殊工作日要求上班的名单（date → []姓名），阶段2 不得将其排为休息
+	forcedWork := map[string][]string{}
+
+	// 分类人员
+	var fixed, rotating []PlanPerson
+	for _, p := range pi.People {
+		if p.IsFixed() {
+			fixed = append(fixed, p)
+		} else {
+			rotating = append(rotating, p)
+		}
+	}
+
+	// —— 阶段1a：固定班次人员（规则1）——
+	// 固定日上固定班次，非固定日休息。不参与轮转，不占用人数名额。
+	for _, p := range fixed {
+		for _, d := range days {
+			k := dateKey(d)
+			if p.fixedOn(d) {
+				setPlan(plan, k, p.Name, p.FixedShift)
+			} else {
+				setPlan(plan, k, p.Name, RestShift)
+			}
+		}
+	}
+
+	// —— 阶段1b：已锁定需求（规则4）——
+	// 休假锁定 → 当天休息（后续阶段不得覆盖）
+	for _, p := range rotating {
+		for _, r := range pi.ReqByUser[p.UserID] {
+			if r.Status != models.PrefStatusLocked || r.Type != models.PrefTypeRest {
+				continue
+			}
+			for _, d := range days {
+				if requestCovers(r, d) {
+					setPlan(plan, dateKey(d), p.Name, RestShift)
+				}
+			}
+		}
+	}
+
+	// —— 阶段1c：特殊工作日（规则6）——
+	// 全员上班：把当天处于休息的倒班人员记入「已定待排班」集合。
+	// 用独立集合而非空串占位，避免与阶段2 的"未定"状态混淆。
+	for _, p := range rotating {
+		for _, d := range days {
+			if !pi.isSpecialWorkDay(d) {
+				continue
+			}
+			k := dateKey(d)
+			lockedRest := false
+			for _, r := range pi.ReqByUser[p.UserID] {
+				if r.Status == models.PrefStatusLocked && r.Type == models.PrefTypeRest && requestCovers(r, d) {
+					lockedRest = true
+					break
+				}
+			}
+			if lockedRest {
+				continue // 员工已锁定休假，需求优先
+			}
+			if isRestShift(lookPlan(plan, k, p.Name)) {
+				forcedWork[k] = append(forcedWork[k], p.Name)
+				res.Notes = append(res.Notes,
+					fmt.Sprintf("%s 为特殊工作日（%s），%s 已自动安排上班", k, pi.Special[k], p.Name))
+			}
+		}
+	}
+
+	// —— 阶段2：排休息（规则2 + 规则3）——
+	// 目标：每人休息天数 = 月天数 - 月出勤目标（不低于连续休上限约束所需）
+	totalDays := len(days)
+	targetWork := pi.Rule.MonthWorkDays
+	if targetWork > totalDays {
+		targetWork = totalDays
+	}
+	targetRest := totalDays - targetWork
+	if targetRest < 0 {
+		targetRest = 0
+	}
+
+	for _, p := range rotating {
+		pi.assignRestDays(plan, p, days, targetRest, forcedWork)
+	}
+
+	// —— 阶段3：填班次（规则7 每班最少人数，仅统计倒班人员）——
+	if err := pi.fillShifts(plan, rotating, days, res); err != nil {
+		return nil, err
+	}
+
+	// —— 阶段4：软约束优化（规则5）——
+	pi.applyAdjacencyRules(plan, rotating, days, res)
+
+	// —— 阶段5：收尾 ——
+	// 兜底清理：任何仍未被 resolve 的占位都归为休息，绝不让内部哨兵值外泄到班表。
+	for _, d := range days {
+		k := dateKey(d)
+		for _, p := range pi.People {
+			if isPendingShift(lookPlan(plan, k, p.Name)) {
+				setPlan(plan, k, p.Name, RestShift)
+			}
+		}
+	}
+
+	// 强制还原锁定需求（规则4 兜底）
+	res.Notes = append(res.Notes, pi.enforceLocks(plan)...)
+
+	// 校验
+	res.Violations = pi.validatePlan(plan)
+	return res, nil
+}
+
+// mustWorkOn 判断某倒班人员在某天是否「必须上班」：
+// 特殊工作日（规则6）或 已锁定的上班需求（规则4）。
+func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
+	if pi.isSpecialWorkDay(day) {
+		return true
+	}
+	for _, r := range pi.ReqByUser[p.UserID] {
+		if r.Type == models.PrefTypeWork && r.Status == models.PrefStatusLocked && requestCovers(r, day) {
+			return true
+		}
+	}
+	return false
+}
+
+// assignRestDays 为某人铺开休息日（规则2 连续休上限 + 规则3 月出勤目标）。
+//
+// 策略：把应休天数切成若干段，每段长度不超过 maxRest，
+// 段与段之间至少间隔 1 个工作日；同时避开已锁定的上班需求。
+// 休息段的起始日尽量均匀分布，避免全挤在月初/月末。
+func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string) {
+	maxRest := pi.Rule.MaxRestStreak
+	if maxRest <= 0 {
+		maxRest = 3
+	}
+	if targetRest <= 0 {
+		return
+	}
+
+	// 已确定休息 / 已确定上班（更早阶段决定，本函数不得推翻）
+	rest := map[string]bool{}
+	blocked := map[string]bool{}
+
+	// 1) 尊重更早阶段（锁定需求）已写入的计划。
+	//    注意：必须用「键是否存在」判断，不能用 lookPlan 的返回值——
+	//    无记录与休息都返回空串，混为一谈会让每一天都被当成休息。
+	for _, d := range days {
+		k := dateKey(d)
+		m, ok := plan[k]
+		if !ok {
+			continue
+		}
+		cur, exists := m[p.Name]
+		if !exists {
+			continue
+		}
+		if isRestShift(cur) {
+			rest[k] = true
+		} else if !isPendingShift(cur) {
+			blocked[k] = true // 已指定具体班次 → 保持不动
+		}
+	}
+	// 2) 锁定上班需求 → 不可休息
+	for _, r := range pi.ReqByUser[p.UserID] {
+		if r.Type != models.PrefTypeWork || r.Status != models.PrefStatusLocked {
+			continue
+		}
+		for _, d := range days {
+			if requestCovers(r, d) {
+				blocked[dateKey(d)] = true
+			}
+		}
+	}
+	// 3) 特殊工作日强制上班（规则6）→ 不可休息
+	for k, names := range forcedWork {
+		for _, n := range names {
+			if n == p.Name {
+				blocked[k] = true
+			}
+		}
+	}
+
+	need := targetRest - len(rest)
+	if need > 0 {
+		// 切成不超过 maxRest 的段，尽量用满上限以减少段数
+		var segLens []int
+		for need > 0 {
+			n := maxRest
+			if n > need {
+				n = need
+			}
+			segLens = append(segLens, n)
+			need -= n
+		}
+
+		// 可自由安排的天（未被更早阶段占用）
+		var free []time.Time
+		for _, d := range days {
+			k := dateKey(d)
+			if rest[k] || blocked[k] {
+				continue
+			}
+			free = append(free, d)
+		}
+
+		if len(free) > 0 {
+			// 段间保留 1 天上班日，避免休息段连成一片突破连续休上限
+			needSlots := 0
+			for i, n := range segLens {
+				needSlots += n
+				if i < len(segLens)-1 {
+					needSlots++
+				}
+			}
+			if needSlots <= len(free) {
+				// 均匀铺开：按等分位置放置每段起点
+				gap := float64(len(free)) / float64(len(segLens))
+				cursor := 0
+				for i, n := range segLens {
+					start := int(float64(i) * gap)
+					if start < cursor {
+						start = cursor
+					}
+					for start+n > len(free) && start > cursor {
+						start--
+					}
+					for j := 0; j < n && start+j < len(free); j++ {
+						rest[dateKey(free[start+j])] = true
+					}
+					cursor = start + n + 1
+				}
+			} else {
+				// 空间不足：尽力铺（后续校验会报告违规）
+				si := 0
+				for _, n := range segLens {
+					for j := 0; j < n && si < len(free); j++ {
+						rest[dateKey(free[si])] = true
+						si++
+					}
+					si++
+				}
+			}
+		}
+	}
+
+	// 落库：休息 → RestShift；其余 → PendingShift 占位，待 fillShifts 填班次。
+	// 必须写显式占位（而非空串）：空串与"无记录"无法区分，会让后续阶段
+	// 把「已定要上班」误当成休息。
+	for _, d := range days {
+		k := dateKey(d)
+		cur := lookPlan(plan, k, p.Name)
+		// blocked 优先：锁定上班需求 / 特殊工作日（规则6）要求必须上班，
+		// 即使休息段算法把它算进休息区间，也不得覆盖。
+		if blocked[k] {
+			if isRestShift(cur) {
+				setPlan(plan, k, p.Name, PendingShift)
+			}
+			continue
+		}
+		if rest[k] {
+			setPlan(plan, k, p.Name, RestShift)
+			continue
+		}
+		if isRestShift(cur) {
+			setPlan(plan, k, p.Name, PendingShift)
+		}
+	}
+}
+
+// fillShifts 为所有已占位（非休息）的倒班人员填入具体班次。
+// 规则7 只统计倒班人员；固定班次人员不参与本函数。
+func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time, res *GenResult) error {
+	// 跨天轮转游标：每个员工一个"下一个班次"的偏移，实现轮流倒班
+	next := map[uint]int{}
+	for i, p := range rotating {
+		next[p.UserID] = i % len(pi.Shifts)
+	}
+
+	for _, d := range days {
+		k := dateKey(d)
+		// 当天需要上班的倒班人员。
+		// PendingShift 表示「已定要上班、班次待填」；只有 RestShift / 无记录才是休息。
+		var working []PlanPerson
+		for _, p := range rotating {
+			cur := lookPlan(plan, k, p.Name)
+			if isRestShift(cur) {
+				continue
+			}
+			working = append(working, p)
+		}
+		if len(working) == 0 {
+			continue
+		}
+
+		// 当天各班次已有人数（锁定上班需求可能已指定具体班次）
+		count := map[string]int{}
+		assigned := map[uint]string{}
+		for _, p := range working {
+			sh := lookPlan(plan, k, p.Name)
+			// 仅统计「已是真实班次」的人；PendingShift 是待填占位，不能计入
+			if sh == "" || isPendingShift(sh) {
+				continue
+			}
+			count[sh]++
+			assigned[p.UserID] = sh
+		}
+
+		// 待分配的人：优先分给人数最少的班次，保证「每班最少人数」
+		var pending []PlanPerson
+		for _, p := range working {
+			if _, ok := assigned[p.UserID]; !ok {
+				pending = append(pending, p)
+			}
+		}
+		// 按「当前人数最少的班次」优先级依次分配
+		for _, p := range pending {
+			// 候选班次按当天已排人数升序、且考虑该员工的下一个轮转班次
+			best := pi.pickShiftFor(plan, p, k, d, count, next)
+			count[best]++
+			assigned[p.UserID] = best
+			setPlan(plan, k, p.Name, best)
+			// 该员工下一天从下一个班次开始，形成轮转
+			next[p.UserID] = (indexOf(pi.Shifts, best) + 1) % len(pi.Shifts)
+		}
+	}
+	return nil
+}
+
+// pickShiftFor 为某员工在某天选择班次：
+// 优先填补当天人数最少的班次（满足规则7），其次考虑轮转连续性。
+func (pi *PlanInfo) pickShiftFor(plan map[string]map[string]string, p PlanPerson, k string, d time.Time, count map[string]int, next map[uint]int) string {
+	// 候选：全部班次，按 (当天人数, 是否等于轮转期望) 排序
+	type cand struct {
+		shift string
+		cnt   int
+		pref  int // 0 = 正是轮转期望，1 = 其他
+	}
+	cands := make([]cand, 0, len(pi.Shifts))
+	want := pi.Shifts[next[p.UserID]%len(pi.Shifts)]
+	for _, sh := range pi.Shifts {
+		c := cand{shift: sh, cnt: count[sh]}
+		if sh != want {
+			c.pref = 1
+		}
+		cands = append(cands, c)
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].cnt != cands[j].cnt {
+			return cands[i].cnt < cands[j].cnt
+		}
+		return cands[i].pref < cands[j].pref
+	})
+	return cands[0].shift
+}
+
+// indexOf 返回班次在池中的下标；不存在返回 0。
+func indexOf(list []string, v string) int {
+	for i, s := range list {
+		if s == v {
+			return i
+		}
+	}
+	return 0
+}
+
+// applyAdjacencyRules 软约束优化（规则5）：
+// 休假前一天尽量排早班、休假后第一天尽量排晚班。
+// 只在「不破坏每班最少人数」的前提下做交换，避免按下葫芦浮起瓢。
+func (pi *PlanInfo) applyAdjacencyRules(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time, res *GenResult) {
+	if pi.Morning == "" || pi.Evening == "" || pi.Morning == pi.Evening {
+		return
+	}
+	wantBefore := pi.Rule.RequireMorningBeforeRest
+	wantAfter := pi.Rule.RequireEveningAfterRest
+	if !wantBefore && !wantAfter {
+		return
+	}
+
+	nameSet := map[string]PlanPerson{}
+	for _, p := range rotating {
+		nameSet[p.Name] = p
+	}
+
+	for _, d := range days {
+		k := dateKey(d)
+
+		// 统计当天各班次人数（仅倒班人员）
+		count := map[string]int{}
+		byShift := map[string][]string{}
+		for _, p := range rotating {
+			sh := lookPlan(plan, k, p.Name)
+			if isRestShift(sh) {
+				continue
+			}
+			count[sh]++
+			byShift[sh] = append(byShift[sh], p.Name)
+		}
+		if len(count) == 0 {
+			continue
+		}
+
+		// 需要调整的人：次日休假 → 今天应早班；昨日休假 → 今天应晚班
+		target := map[string]string{} // name → 期望班次
+		for _, p := range rotating {
+			cur := lookPlan(plan, k, p.Name)
+			if isRestShift(cur) {
+				continue
+			}
+			if wantBefore {
+				nk := dateKey(d.AddDate(0, 0, 1))
+				if !d.AddDate(0, 0, 1).After(pi.Last) && isRestShift(lookPlan(plan, nk, p.Name)) {
+					target[p.Name] = pi.Morning
+				}
+			}
+			if wantAfter {
+				pk := dateKey(d.AddDate(0, 0, -1))
+				if !d.AddDate(0, 0, -1).Before(pi.First) && isRestShift(lookPlan(plan, pk, p.Name)) {
+					target[p.Name] = pi.Evening
+				}
+			}
+		}
+
+		// 逐个尝试：直接改（若原班次人数充裕）
+		for name, want := range target {
+			cur := lookPlan(plan, k, name)
+			if cur == want {
+				continue
+			}
+			// 原班次改后仍不少于下限 → 直接改
+			if pi.Rule.MinPerShift <= 0 || count[cur]-1 >= pi.Rule.MinPerShift {
+				count[cur]--
+				count[want]++
+				setPlan(plan, k, name, want)
+				continue
+			}
+			// 否则尝试与目标班次的人对调
+			swapped := false
+			for _, other := range byShift[want] {
+				otherCur := lookPlan(plan, k, other)
+				if otherCur == want && (pi.Rule.MinPerShift <= 0 || count[otherCur]-1 >= pi.Rule.MinPerShift) && other != name {
+					// other 改到 cur，name 改到 want
+					setPlan(plan, k, other, cur)
+					setPlan(plan, k, name, want)
+					swapped = true
+					break
+				}
+			}
+			if !swapped {
+				res.Warnings = append(res.Warnings,
+					fmt.Sprintf("%s %s 无法调整为「%s」（会低于每班最少 %d 人），已在违规明细中提示",
+						k, name, want, pi.Rule.MinPerShift))
+			}
+		}
+	}
+}

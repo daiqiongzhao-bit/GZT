@@ -15,12 +15,15 @@ export const icons = {
   users: wrap('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
   calendar: wrap('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><rect x="7" y="13" width="3" height="3" rx="0.5"/><rect x="14" y="13" width="3" height="3" rx="0.5"/>'),
   backup: wrap('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>'),
-  workspace: wrap('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/>')
+  workspace: wrap('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/>'),
+  // v0.18.0 排班管理：日历 + 齿轮（规则配置 / 自动生成）
+  planner: wrap('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8 13.5h4M8 17h6"/><path d="M16.5 12.6l.5-.3.6.3v1l-.5.3m-1.2 1.2l-.3.5.3.6h1l.3-.5m1.2-1.2l.5.3.6-.3v-1l-.5-.3"/>')
 }
 
 export const navItems = [
   { to: '/', label: '概览', icon: icons.dashboard },
   { to: '/schedule', label: '班表', icon: icons.schedule },
+  { to: '/planner', label: '排班', icon: icons.planner },
   { to: '/tasks', label: '任务', icon: icons.tasks },
   { to: '/workspace', label: '知识库', icon: icons.workspace },
   { to: '/settings', label: '设置', icon: icons.settings }

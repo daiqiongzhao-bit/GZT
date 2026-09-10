@@ -5,6 +5,7 @@ const routes = [
   { path: '/login', name: 'login', component: () => import('@/views/Login.vue'), meta: { public: true } },
   { path: '/', name: 'dashboard', component: () => import('@/views/Dashboard.vue'), meta: { title: '概览' } },
   { path: '/schedule', name: 'schedule', component: () => import('@/views/Schedule.vue'), meta: { title: '班表' } },
+  { path: '/planner', name: 'planner', component: () => import('@/views/Planner.vue'), meta: { title: '排班管理' } },
   { path: '/tasks', name: 'tasks', component: () => import('@/views/Tasks.vue'), meta: { title: '任务' } },
   { path: '/workspace', name: 'workspace', component: () => import('@/views/Workspace.vue'), meta: { title: '知识库' } },
   { path: '/backup', name: 'backup', component: () => import('@/views/Backup.vue'), meta: { title: '备份还原' } },

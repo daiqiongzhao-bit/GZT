@@ -85,6 +85,110 @@ type Schedule struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ============ 排班管理（v0.18.0）：规则 / 员工偏好 / 休假需求 / 特殊工作日 ============
+
+// 员工排班模式
+const (
+	ShiftModeRotate = "rotate" // 参与倒班（默认）
+	ShiftModeFixed  = "fixed"  // 固定班次，不参与倒班（如 A 固定行政班）
+)
+
+// 员工需求类型
+const (
+	PrefTypeRest = "rest" // 申请休假（指定日期/区间/每周固定）
+	PrefTypeWork = "work" // 申请上班（指定日期/区间/每周固定）
+)
+
+// 员工需求重复方式
+const (
+	PrefRepeatOnce = "once"   // 单次：指定日期或区间
+	PrefRepeatWeek = "weekly" // 每周重复：指定星期几
+)
+
+// 员工需求状态
+const (
+	PrefStatusLocked  = "locked"  // 已锁定：员工确认提交，不可自行修改（需管理员解锁）
+	PrefStatusPending = "pending" // 待确认（草稿）
+)
+
+// ShiftRule 排班规则配置：按部门一行（各部门独立配置）
+type ShiftRule struct {
+	ID     uint `json:"id" gorm:"primaryKey"`
+	DeptID uint `json:"dept_id" gorm:"uniqueIndex"` // 一个部门一条规则
+	// 规则2：连续上限。最高连续休息天数 / 最高连续上班天数
+	MaxRestStreak int `json:"max_rest_streak" gorm:"default:3"` // 默认 3
+	MaxWorkStreak int `json:"max_work_streak" gorm:"default:6"` // 默认 6
+	// 规则3：月度出勤天数。默认 22 天班；0 = 不按此约束（只是参考值）
+	MonthWorkDays int `json:"month_work_days" gorm:"default:22"`
+	// 规则5：休假前后班次约束
+	RequireMorningBeforeRest bool   `json:"require_morning_before_rest" gorm:"default:false"` // 休假前一天必须早班
+	RequireEveningAfterRest  bool   `json:"require_evening_after_rest" gorm:"default:false"`  // 休假后第一天必须晚班
+	MorningShiftName         string `json:"morning_shift_name" gorm:"size:32"`                // 「早班」的班次名（默认取第一个班次或"早班"）
+	EveningShiftName         string `json:"evening_shift_name" gorm:"size:32"`                // 「晚班」的班次名
+	// 规则7：每班次最少人数
+	MinPerShift int `json:"min_per_shift" gorm:"default:0"` // 0 = 不约束
+	// 规则3 补充：是否允许超出月度出勤天数（0 不允许 / 1 允许）
+	AllowExceedMonthDays bool      `json:"allow_exceed_month_days" gorm:"default:true"`
+	UpdatedBy            string    `json:"updated_by" gorm:"size:64"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+// UserShiftPref 员工排班偏好：固定班次 / 不参与倒班
+// 对应规则1：可设置固定人员班次，比如 A 固定行政班，不参与倒班
+type UserShiftPref struct {
+	ID     uint `json:"id" gorm:"primaryKey"`
+	UserID uint `json:"user_id" gorm:"uniqueIndex;not null"`
+	DeptID uint `json:"dept_id" gorm:"index"`
+	// Mode: rotate 参与倒班 / fixed 固定班次
+	Mode string `json:"mode" gorm:"size:16;default:rotate"`
+	// FixedShift: Mode=fixed 时生效，该员工的固定班次名（如「行政班」）
+	FixedShift string `json:"fixed_shift" gorm:"size:32"`
+	// FixedWeekDays: 固定班次的生效星期（逗号分隔 1-7，空=每天）；支持"周一至周五行政班"
+	FixedWeekDays string    `json:"fixed_week_days" gorm:"size:32"`
+	Note          string    `json:"note" gorm:"size:255"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// ShiftRequest 员工休假/上班需求申请。
+// 对应规则4：员工可以提需求，确认后锁定不可更改（管理员可解锁）。
+// 对应规则4 例：B 员工申请每个周末固定休；C 员工申请本月 25-28 休。
+type ShiftRequest struct {
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	UserID   uint   `json:"user_id" gorm:"index;not null"`
+	UserName string `json:"user_name" gorm:"size:64"`
+	DeptID   uint   `json:"dept_id" gorm:"index"`
+	// Type: rest 休假 / work 指定上班
+	Type string `json:"type" gorm:"size:8;default:rest"`
+	// Repeat: once 单次（用 StartDate~EndDate）/ weekly 每周固定（用 WeekDays）
+	Repeat string `json:"repeat" gorm:"size:8;default:once"`
+	// StartDate/EndDate: YYYY-MM-DD，Repeat=once 时生效（同一天时两者相等）
+	StartDate string `json:"start_date" gorm:"size:10;index"`
+	EndDate   string `json:"end_date" gorm:"size:10"`
+	// WeekDays: Repeat=weekly 时生效，逗号分隔 1-7（1=周一…7=周日），如 "6,7" = 每周末
+	WeekDays string `json:"week_days" gorm:"size:32"`
+	Reason   string `json:"reason" gorm:"size:255"`
+	// Status: locked 已锁定不可改 / pending 草稿
+	Status string `json:"status" gorm:"size:16;default:locked"`
+	// LockedAt: 锁定时间（员工提交或首次被排班引用）
+	LockedAt  *time.Time `json:"locked_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// SpecialWorkDay 特殊工作日（全员上班日）。
+// 对应规则6：可设置某一天全员上班（如店庆、节假日），员工无需求则默认上班。
+type SpecialWorkDay struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Date      string    `json:"date" gorm:"size:10;index;not null"` // YYYY-MM-DD
+	DeptID    uint      `json:"dept_id" gorm:"index"`               // 0 = 全部部门
+	Name      string    `json:"name" gorm:"size:64"`                // 事由：店庆 / 节假日
+	AllStaff  bool      `json:"all_staff" gorm:"default:true"`      // 是否全员上班
+	Note      string    `json:"note" gorm:"size:255"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Task 任务：每日/每周/每月/临时单次，支持逾期。
 // Shift 班次归属：早班/中班/晚班/早晚/全员（谁当班谁负责）
 // WeekDays 为「按周执行」：Type=daily 时可勾选星期几触发（1=周一…7=周日，空=每天都执行）
