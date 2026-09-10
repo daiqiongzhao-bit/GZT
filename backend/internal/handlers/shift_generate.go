@@ -215,6 +215,13 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 //     当 maxRest<3 时无法补 3，退化为纯双休。
 //  3. 用 userID+year+month 作为种子，保证同一人同一月结果稳定可复现。
 func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
+	return splitRestStreaksMin(total, maxRest, 0, userID, year, month)
+}
+
+// splitRestStreaksMin 同 splitRestStreaks，但额外接受 minWantSegs：
+// 调用方根据「连续上班上限」算出的最少段数，用于从源头避免长班次，
+// 从而不必事后拆散双休（事后拆散会把班表打得过碎）。
+func splitRestStreaksMin(total, maxRest, minWantSegs int, userID uint, year, month int) []int {
 	if total <= 0 {
 		return nil
 	}
@@ -265,6 +272,12 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 	wantSegs := (total + 1) / 2
 	if wantSegs < minSegs {
 		wantSegs = minSegs
+	}
+	// 为避免「连续上班超过上限」，段数还得够多。
+	// 宁可多排几个单休，也不要让人连上 7、8 天
+	// ——用户原话：「可以把某个双休改成单休啊，为什么那么死板？」
+	if wantSegs < minWantSegs {
+		wantSegs = minWantSegs
 	}
 	if wantSegs > maxSegs {
 		wantSegs = maxSegs
@@ -622,15 +635,36 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 		}
 	}
 
+	// 连续上班上限与本月工作日数，用于反推休息段数下限
+	maxWork := pi.Rule.MaxWorkStreak
+	if maxWork <= 0 {
+		maxWork = 6
+	}
+	workDays := len(days) - targetRest
+	if workDays < 0 {
+		workDays = 0
+	}
+
 	need := targetRest - len(rest)
 	if need > 0 {
 		// 切成不超过 maxRest 的段。
 		//
 		// 关键点：maxRest 是【上限】而非【固定值】。若每次都用满上限，
 		// 8 天休息会被机械切成 [3,3,2]，全员一模一样，既不真实也不人性化。
-		// 这里改为混合长度：以单休(1)/双休(2)为主、偶尔出现 3 连休，
+		// 这里改为：以双休(2)为主、必要时用单休(1)调配，
 		// 且用确定性种子打散，保证同一(人,月)每次生成结果一致（可复现）。
-		segLens := splitRestStreaks(need, maxRest, p.UserID, pi.Year, pi.Month)
+		//
+		// 段数下限由「连续上班上限」反推：
+		//   工作块数 ≈ 休息段数 - 1（若月初月末都在休），
+		//   要让块长 ≤ maxWork，段数就得 ≥ ⌈工作日/maxWork⌉ + 1。
+		// 这样从源头就排不出 7、8 天的长班次，
+		// 不必事后拆散双休（事后拆会把班表打得过碎）。
+		minWantSegs := 0
+		if maxWork > 0 {
+			blocks := (workDays + maxWork - 1) / maxWork
+			minWantSegs = blocks + 1
+		}
+		segLens := splitRestStreaksMin(need, maxRest, minWantSegs, p.UserID, pi.Year, pi.Month)
 
 		// 可自由安排的天（未被更早阶段占用）
 		var free []time.Time
