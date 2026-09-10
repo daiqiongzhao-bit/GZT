@@ -935,7 +935,9 @@ function fmtTime(s) {
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
-const scopeLabel = (s) => (s === 'private' ? '仅自己' : '同部门共享')
+// v0.16.1：补上 public（全公司可见）分支。此前 public 被兜底成「同部门共享」，
+// 导致管理员设为全公司可见的条目（如内置操作手册）在列表/详情里显示为部门共享。
+const scopeLabel = (s) => (s === 'private' ? '仅自己' : s === 'public' ? '全公司可见' : '同部门共享')
 const scopeChip = (s) => (s === 'private' ? '' : 'accent')
 function switchTab(t) { tab.value = t }
 
