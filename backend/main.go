@@ -55,6 +55,17 @@ func main() {
 		_ = db.DB.Create(&models.SystemLog{Level: string(lvl), Source: source, Message: message, Detail: detail}).Error
 	})
 	service.Seed()
+	// 手册随版本种入知识库（v0.16.0）：每版本仅首次启动种入一次，
+	// 管理员删除后同版本内不再重建，升级到新版本时会重新补齐。
+	if pdf, err := fs.ReadFile(webFS, "web/dist/manual.pdf"); err == nil {
+		if r := handlers.SeedManualToKnowledge(pdf); r.Seeded {
+			logger.Info("server", "操作手册已种入知识库：%s（条目 #%d，%d 字节）", r.Title, r.EntryID, r.Size)
+		} else {
+			logger.Info("server", "操作手册未种入知识库：%s", r.Reason)
+		}
+	} else {
+		logger.Info("server", "未找到内嵌操作手册（web/dist/manual.pdf），跳过种入")
+	}
 	// 应用系统配置的时区（默认 Asia/Shanghai，可在设置中修改）
 	var st models.Setting
 	db.DB.FirstOrCreate(&st, models.Setting{ID: 1})
@@ -232,11 +243,26 @@ func main() {
 			auth.POST("/workspace/logs", handlers.CreateWorkLog)
 			auth.PUT("/workspace/logs/:id", handlers.UpdateWorkLog)
 			auth.DELETE("/workspace/logs/:id", handlers.DeleteWorkLog)
+			// v0.16.0 工作日志补齐：统计 / 导出
+			auth.GET("/workspace/logs/stats", handlers.WorkLogStats)
+			auth.GET("/workspace/logs/export", handlers.ExportWorkLogs)
+			// v0.16.0 日志转交接单（把「还没做完的」一键转给他人）
+			auth.POST("/workspace/logs/:id/handover", handlers.LogToHandover)
 
 			auth.GET("/workspace/handovers", handlers.ListHandovers)
 			auth.POST("/workspace/handovers", handlers.CreateHandover)
 			auth.POST("/workspace/handovers/:id/status", handlers.UpdateHandoverStatus)
 			auth.DELETE("/workspace/handovers/:id", handlers.DeleteHandover)
+			// v0.16.0 交接接力补齐：统计 / 处理时间线 / 退回 / 催办
+			auth.GET("/workspace/handovers/stats", handlers.HandoverStats)
+			auth.GET("/workspace/handovers/:id/events", handlers.ListHandoverEvents)
+			auth.POST("/workspace/handovers/:id/urge", handlers.UrgeHandover)
+
+			// v0.16.0 工作台统一附件（日志 / 交接单共用，复用知识库附件存储口径）
+			auth.GET("/workspace/attachments", handlers.ListWSAttachments)
+			auth.POST("/workspace/attachments", handlers.UploadWSAttachment)
+			auth.GET("/workspace/attachments/:key/download", handlers.DownloadWSAttachment)
+			auth.DELETE("/workspace/attachments/:id", handlers.DeleteWSAttachment)
 
 			// 模板管理（管理员可查看下载，超管可修改）
 			auth.GET("/templates", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListTemplates)

@@ -25,16 +25,37 @@
         <div class="panel-head">
           <h3 class="section-title">知识条目 <span class="section-sub">{{ knowledge.length }} 条<template v-if="kbView==='trash'"> · 回收站 {{ trash.length }} 条</template></span></h3>
           <div class="head-actions kb-actions">
-            <button v-if="kbView!=='stats'" class="btn ghost sm" :class="{on:kbView==='stats'}" @click="toggleStats">📊 统计</button>
-            <button v-if="kbView!=='trash'" class="btn ghost sm" :class="{on:kbView==='trash'}" @click="openTrash">🗑 回收站</button>
-            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建">📋 模板</button>
+            <!-- ① 视图切换（互斥）：条目 / 统计 / 回收站 -->
+            <div class="seg-group" role="group" aria-label="视图切换">
+              <button class="seg" :class="{ on: kbView === 'list' }" @click="kbGo('list')">条目</button>
+              <button class="seg" :class="{ on: kbView === 'stats' }" @click="kbGo('stats')">📊 统计</button>
+              <button class="seg" :class="{ on: kbView === 'trash' }" @click="kbGo('trash')">🗑 回收站</button>
+            </div>
+
+            <span class="kb-div" aria-hidden="true"></span>
+
+            <!-- ② 创建：模板 / 导入 -->
+            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
             <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
-            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportK" title="导出为纯文本">导出TXT</button>
-            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportMarkdown" title="导出为 Markdown">导出MD</button>
-            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportDoc" title="导出为 Word">导出Word</button>
-            <button v-if="kbView==='trash'" class="btn ghost sm danger" @click="emptyTrash">清空回收站</button>
-            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn primary" @click="openNewK">+ 新建</button>
-            <button v-else class="btn ghost" @click="kbView='list'">← 返回列表</button>
+
+            <!-- ③ 导出：三种格式收进一个下拉，避免平铺占位 -->
+            <div v-if="kbView === 'list'" class="kb-menu-wrap" @click.stop>
+              <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
+                ⬆ 导出 <i class="caret">▾</i>
+              </button>
+              <transition name="pop">
+                <div v-if="exportMenu" class="kb-menu" @click.stop>
+                  <button class="menu-item" @click="pickExport(exportMarkdown)"><span class="mi-ico">📝</span><span>Markdown（.md）</span></button>
+                  <button class="menu-item" @click="pickExport(exportDoc)"><span class="mi-ico">📄</span><span>Word（.doc）</span></button>
+                  <button class="menu-item" @click="pickExport(exportK)"><span class="mi-ico">📃</span><span>纯文本（.txt）</span></button>
+                </div>
+              </transition>
+            </div>
+
+            <!-- ④ 危险操作 / 主操作 -->
+            <button v-if="kbView === 'trash'" class="btn ghost sm danger" @click="emptyTrash">清空回收站</button>
+            <button v-if="kbView === 'list'" class="btn primary" @click="openNewK">+ 新建</button>
+            <button v-else class="btn ghost" @click="kbGo('list')">← 返回列表</button>
           </div>
         </div>
 
@@ -179,6 +200,7 @@
               <div class="scope-switch">
                 <label class="fld">可见范围</label>
                 <select v-model="kForm.scope" class="glass-input">
+                  <option value="public" v-if="auth.isSuper">全公司可见</option>
                   <option value="department">同部门共享</option>
                   <option value="private">仅自己可见</option>
                 </select>
@@ -452,19 +474,48 @@
       <section class="panel">
         <div class="panel-head">
           <h3 class="section-title">工作日志
-            <span class="section-sub">{{ viewDate }} · 共 {{ logs.length }} 篇</span>
+            <span class="section-sub">记录当天做了什么、还剩什么没做完</span>
           </h3>
           <div class="head-actions">
-            <input type="date" v-model="viewDate" class="glass-input date-input" @change="loadLogs" />
+            <button class="btn ghost sm" @click="logStatsOpen = !logStatsOpen">{{ logStatsOpen ? '收起统计' : '📊 统计' }}</button>
+            <button class="btn ghost sm" @click="exportLogs" title="按当前筛选条件导出 CSV（Excel 可直接打开）">⬆ 导出</button>
             <button v-if="!editingLog" class="btn primary" @click="openNewLog">+ 写一篇</button>
             <button v-else class="btn ghost" @click="cancelEditLog">收起</button>
           </div>
         </div>
 
-        <!-- 我写的/部门共享 切换（日志可共享，便于组内互见交接当天进展） -->
-        <div class="log-view-toggle">
-          <button class="seg" :class="{ on: logScope === 'mine' }" @click="setLogScope('mine')">我写的</button>
-          <button class="seg" :class="{ on: logScope === 'dept' }" @click="setLogScope('dept')">部门共享日志</button>
+        <!-- 统计看板 -->
+        <div v-if="logStatsOpen" class="ws-stats">
+          <div class="ws-stat"><b>{{ logStats?.total ?? '—' }}</b><span>篇（当前筛选）</span></div>
+          <div class="ws-stat"><b>{{ logStats?.people ?? '—' }}</b><span>人参与</span></div>
+          <div class="ws-stat"><b>{{ logStats?.with_pending ?? '—' }}</b><span>含未完成事项</span></div>
+          <div class="ws-stat"><b>{{ logStats?.edited ?? '—' }}</b><span>被编辑过</span></div>
+          <div class="ws-stat" :class="{ warn: (logStats?.missing_today?.length || 0) > 0 }">
+            <b>{{ logStats?.missing_today?.length ?? 0 }}</b><span>今日未填写</span>
+          </div>
+          <button v-if="logStats?.missing_today?.length" class="btn ghost sm" @click="logMissingOpen = !logMissingOpen">
+            {{ logMissingOpen ? '收起名单' : '查看名单' }}
+          </button>
+        </div>
+        <div v-if="logStatsOpen && logMissingOpen && logStats?.missing_today?.length" class="ws-missing">
+          <span class="dim">今日（{{ logStats.today }}）尚未填写：</span>
+          <span v-for="m in logStats.missing_today" :key="m.user_id" class="chip miss">{{ m.name }}<template v-if="m.emp_no"> · {{ m.emp_no }}</template></span>
+        </div>
+
+        <!-- 筛选栏 -->
+        <div class="ws-filters">
+          <label class="ff"><span>从</span><input type="date" v-model="logFrom" class="glass-input date-input" @change="applyLogFilter" /></label>
+          <label class="ff"><span>到</span><input type="date" v-model="logTo" class="glass-input date-input" @change="applyLogFilter" /></label>
+          <input v-model="logKw" class="glass-input ff-grow" placeholder="搜索主题 / 已做 / 未完成" @keyup.enter="applyLogFilter" />
+          <select v-model="logOwner" class="glass-input ff-owner" @change="applyLogFilter">
+            <option value="">全部记录人</option>
+            <option v-for="u in pickableUsers" :key="u.id" :value="u.id">{{ u.name }}</option>
+          </select>
+          <div class="sub-tabs">
+            <button class="seg" :class="{ on: logScope === 'mine' }" @click="setLogScope('mine')">我写的</button>
+            <button class="seg" :class="{ on: logScope === 'dept' }" @click="setLogScope('dept')">部门共享</button>
+          </div>
+          <button class="btn ghost sm" @click="resetLogFilters">重置</button>
         </div>
 
         <!-- 内联写日志 -->
@@ -485,7 +536,7 @@
           </div>
           <div>
             <label class="fld"><b style="color:var(--warn)">⏳ 还没做完的 / 待办遗留</b></label>
-            <textarea v-model="logForm.pending" class="glass-input ta" rows="2" placeholder="哪些还没做完，可让交接/同事清楚从哪继续"></textarea>
+            <textarea v-model="logForm.pending" class="glass-input ta" rows="2" placeholder="哪些还没做完，可一键转成交接单交给下一个人"></textarea>
           </div>
           <div class="fg2 bot">
             <div class="scope-switch">
@@ -510,9 +561,16 @@
               <span v-if="l.title" class="log-title">{{ l.title }}</span>
               <span class="chip" :class="scopeChip(l.scope)">{{ scopeLabel(l.scope) }}</span>
               <span class="dim owner">{{ l.owner_name === (auth.user && auth.user.username) ? '我' : l.owner_name }}</span>
-              <span v-if="l.owner_id === auth.user?.id" class="ops">
-                <button class="del" @click="openEditLog(l)">编辑</button>
-                <button class="del danger" @click="removeLog(l)">删除</button>
+              <span v-if="l.edit_count" class="chip tiny" :title="'最后修改：' + (l.last_editor_name || '') + ' · ' + fmtTime(l.updated_at)">已编辑 {{ l.edit_count }} 次</span>
+              <span v-if="l.attach_count" class="chip tiny">📎 {{ l.attach_count }}</span>
+              <span v-if="l.handover_count" class="chip tiny ok">已转交接</span>
+              <span class="ops">
+                <button class="del" @click="toggleLogAttach(l)">{{ logAttachOpen === l.id ? '收起附件' : '📎 附件' }}</button>
+                <button v-if="l.pending && l.owner_id === auth.user?.id" class="del" @click="openLogHandover(l)" title="把「还没做完的」一键转成交接单">转交接</button>
+                <template v-if="l.owner_id === auth.user?.id">
+                  <button class="del" @click="openEditLog(l)">编辑</button>
+                  <button class="del danger" @click="removeLog(l)">删除</button>
+                </template>
               </span>
             </div>
             <div v-if="l.done" class="log-sec done">
@@ -522,10 +580,96 @@
               <span class="sec-label">还没做完的</span>{{ l.pending }}
             </div>
             <div v-if="!l.done && !l.pending" class="dim">（本篇暂无内容）</div>
+
+            <!-- 附件区（展开式，按需加载） -->
+            <div v-if="logAttachOpen === l.id" class="attach-box">
+              <div v-if="logAttachList.length" class="attach-list">
+                <div v-for="a in logAttachList" :key="a.id" class="attach-row">
+                  <span class="att-ico" :title="a.file_name">{{ fileIcon(a.file_name) }}</span>
+                  <span class="attach-name" @click="downloadWSAtt(a)" :title="'下载 ' + a.file_name">{{ a.file_name }}</span>
+                  <span class="dim">{{ fmtSize(a.size) }}</span>
+                  <span class="dim">{{ a.owner_name }}</span>
+                  <button class="del danger" @click="removeWSAtt(a, 'log', l.id)">删除</button>
+                </div>
+              </div>
+              <div v-else class="dim">暂无附件</div>
+              <label class="btn ghost sm file-btn">
+                {{ uploading ? '上传中…' : '＋ 上传附件' }}
+                <input type="file" :disabled="uploading" hidden @change="(e) => uploadWSAtt(e, 'log', l.id)" />
+              </label>
+            </div>
           </div>
         </div>
-        <div v-else class="empty">这一天还没有日志，点「写一篇」记录今天的工作吧</div>
+        <div v-else class="empty">没有符合条件的日志，换个筛选条件或点「写一篇」记录今天的工作</div>
+
+        <!-- 分页 -->
+        <div v-if="logTotal > logLimit" class="pager">
+          <button class="btn ghost sm" :disabled="logOffset === 0" @click="logPage(-1)">← 上一页</button>
+          <span class="dim">第 {{ Math.floor(logOffset / logLimit) + 1 }} / {{ Math.ceil(logTotal / logLimit) }} 页 · 共 {{ logTotal }} 篇</span>
+          <button class="btn ghost sm" :disabled="logOffset + logLimit >= logTotal" @click="logPage(1)">下一页 →</button>
+        </div>
       </section>
+
+      <!-- 日志 → 交接单：把「还没做完的」一键转出去 -->
+      <div v-if="logHvTarget" class="modal-mask" @click.self="cancelLogHandover">
+        <div class="modal sm">
+          <div class="modal-head">
+            <span class="modal-title" style="margin:0">把「还没做完的」转成交接单</span>
+            <button class="modal-close" @click="cancelLogHandover" aria-label="关闭">×</button>
+          </div>
+          <div class="modal-meta dim">
+            源自 {{ logHvTarget.log_date }} 的日志「{{ logHvTarget.title || '（无主题）' }}」，转出后接收人会收到通知。
+          </div>
+          <div class="modal-scroll">
+            <div class="hv-form">
+              <div>
+                <label class="fld">交接标题 *</label>
+                <input v-model="logHvForm.title" class="glass-input" />
+              </div>
+              <div>
+                <label class="fld">需要接收人继续做的事 *</label>
+                <textarea v-model="logHvForm.todo" class="glass-input ta" rows="3" placeholder="默认取日志里「还没做完的」内容，可修改"></textarea>
+              </div>
+              <div>
+                <label class="fld">接收人 * <span class="dim" style="font-weight:normal">（可多选）</span></label>
+                <div class="multi-pick">
+                  <div v-if="logHvForm.assignee_ids.length" class="chips">
+                    <span v-for="uid in logHvForm.assignee_ids" :key="uid" class="chip pick-chip">
+                      {{ userNameOf(uid) }}<button type="button" class="x" @click="toggleAssigneeIn(logHvForm.assignee_ids, uid)" aria-label="移除">×</button>
+                    </span>
+                  </div>
+                  <button type="button" class="btn ghost sm" @click="logHvPicker = !logHvPicker">{{ logHvPicker ? '收起选择' : '+ 添加接收人' }}</button>
+                  <div v-if="logHvPicker" class="picker-list">
+                    <label v-for="u in pickableUsers" :key="u.id" class="picker-row">
+                      <input type="checkbox" :checked="logHvForm.assignee_ids.includes(u.id)" @change="toggleAssigneeIn(logHvForm.assignee_ids, u.id)" />
+                      <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
+                    </label>
+                    <div v-if="!pickableUsers.length" class="dim picker-empty">没有可选的接收人</div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label class="fld">优先级与截止时间</label>
+                <div class="pri-row">
+                  <select v-model="logHvForm.priority" class="glass-input">
+                    <option value="normal">普通</option>
+                    <option value="urgent">紧急</option>
+                  </select>
+                  <input type="datetime-local" v-model="logHvForm.due_at" class="glass-input" title="期望完成时间（可留空）" />
+                </div>
+              </div>
+              <div>
+                <label class="fld">交接说明（可选）</label>
+                <input v-model="logHvForm.note" class="glass-input" placeholder="补充背景，会追加到「当前进展」" />
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn ghost" @click="cancelLogHandover">取消</button>
+            <button class="btn primary" :disabled="savingLogHv" @click="saveLogHandover">{{ savingLogHv ? '提交中…' : '转成交接单' }}</button>
+          </div>
+        </div>
+      </div>
     </template>
 
     <!-- ========== 交接接力 ========== -->
@@ -541,6 +685,50 @@
             <button v-if="!editingH" class="btn primary" @click="openNewH">+ 发起交接</button>
             <button v-else class="btn ghost" @click="cancelEditH">返回列表</button>
           </div>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="stat-cards">
+          <button class="stat-card" :class="{ on: hStatus === 'all' }" @click="setHFilter('status', 'all')">
+            <b>{{ hStats?.total ?? 0 }}</b><span>全部</span>
+          </button>
+          <button class="stat-card warn" :class="{ on: hStatus === 'pending' }" @click="setHFilter('status', 'pending')">
+            <b>{{ hStats?.pending ?? 0 }}</b><span>待接手</span>
+          </button>
+          <button class="stat-card accent" :class="{ on: hStatus === 'in_progress' }" @click="setHFilter('status', 'in_progress')">
+            <b>{{ hStats?.in_progress ?? 0 }}</b><span>处理中</span>
+          </button>
+          <button class="stat-card ok" :class="{ on: hStatus === 'done' }" @click="setHFilter('status', 'done')">
+            <b>{{ hStats?.done ?? 0 }}</b><span>已完成</span>
+          </button>
+          <button class="stat-card" :class="{ on: hStatus === 'returned' }" @click="setHFilter('status', 'returned')">
+            <b>{{ hStats?.returned ?? 0 }}</b><span>已退回</span>
+          </button>
+          <button class="stat-card danger" :class="{ on: hPriority === 'urgent' }" @click="setHFilter('priority', hPriority === 'urgent' ? '' : 'urgent')">
+            <b>{{ hStats?.urgent ?? 0 }}</b><span>紧急未完成</span>
+          </button>
+          <button class="stat-card danger" :class="{ on: hOverdueOnly }" @click="hOverdueOnly = !hOverdueOnly; applyHFilter()">
+            <b>{{ hOverdueOnly ? '只看' : (hStats?.overdue ?? 0) }}</b><span>已逾期</span>
+          </button>
+        </div>
+
+        <!-- 筛选栏 -->
+        <div class="ws-filters">
+          <input v-model="hKw" class="glass-input ff-grow" placeholder="搜索标题 / 进展 / 待办" @keyup.enter="applyHFilter" />
+          <select v-model="hStatus" class="glass-input" @change="applyHFilter">
+            <option value="all">全部状态</option>
+            <option value="pending">待接手</option>
+            <option value="in_progress">处理中</option>
+            <option value="done">已完成</option>
+            <option value="returned">已退回</option>
+          </select>
+          <select v-model="hPriority" class="glass-input" @change="applyHFilter">
+            <option value="">全部优先级</option>
+            <option value="urgent">仅紧急</option>
+            <option value="normal">仅普通</option>
+          </select>
+          <label class="ff chk"><input type="checkbox" v-model="hOverdueOnly" @change="applyHFilter" /><span>仅看逾期</span></label>
+          <button class="btn ghost sm" @click="resetHFilters">重置</button>
         </div>
 
         <!-- 新建交接 -->
@@ -568,6 +756,16 @@
                 </div>
               </div>
             </div>
+            <div>
+              <label class="fld">优先级与截止时间</label>
+              <div class="pri-row">
+                <select v-model="hForm.priority" class="glass-input">
+                  <option value="normal">普通</option>
+                  <option value="urgent">紧急</option>
+                </select>
+                <input type="datetime-local" v-model="hForm.due_at" class="glass-input" title="期望完成时间（可留空）" />
+              </div>
+            </div>
           </div>
           <div>
             <label class="fld"><b style="color:var(--accent)">📌 我做到哪了（当前进展）</b></label>
@@ -590,10 +788,18 @@
           <div v-if="handovers.length" class="h-list">
             <div v-for="h in handovers" :key="h.id" class="h-card" :class="'st-' + h.status">
               <div class="h-head">
+                <span v-if="h.priority === 'urgent'" class="chip danger">紧急</span>
                 <span class="chip" :class="statusChip(h.status)">{{ statusLabel(h.status) }}</span>
                 <span class="h-title">{{ h.title }}</span>
                 <span class="dim">#{{ h.id }}</span>
+                <span v-if="h.overdue" class="chip danger" :title="'已超过期望完成时间 ' + fmtTime(h.due_at)">已逾期</span>
+                <span v-else-if="h.due_at && h.status !== 'done'" class="chip tiny" :title="'期望完成时间'">⏰ {{ fmtTime(h.due_at) }}</span>
+                <span v-if="h.attach_count" class="chip tiny">📎 {{ h.attach_count }}</span>
+                <span v-if="h.urge_count" class="chip tiny warn" :title="'最近催办 ' + fmtTime(h.last_urge_at)">已催办 {{ h.urge_count }} 次</span>
                 <span class="ops">
+                  <button class="del" @click="toggleHTimeline(h)">{{ hTimelineOpen === h.id ? '收起轨迹' : '处理轨迹' }}<template v-if="h.event_count"> ({{ h.event_count }})</template></button>
+                  <button class="del" @click="toggleHAttach(h)">{{ hAttachOpen === h.id ? '收起附件' : '📎 附件' }}</button>
+                  <button v-if="isSenderOf(h) && h.status !== 'done'" class="del" @click="urgeH(h)" title="提醒接收人尽快处理">催办</button>
                   <button v-if="h.sender_id === auth.user?.id" class="del danger" @click="removeH(h)">删除</button>
                 </span>
               </div>
@@ -601,6 +807,7 @@
                 {{ hScope === 'inbox' ? '来自' : '发给' }} <b>{{ hScope === 'inbox' ? h.sender_name : assigneeNamesText(h) }}</b>
                 <template v-if="hScope === 'outbox' && parseAssigneeNames(h).length > 1">（{{ parseAssigneeNames(h).length }} 人）</template>
                 · {{ fmtTime(h.created_at) }}
+                <template v-if="h.accepted_at && h.status !== 'pending'"> · {{ h.accepted_by_name || '接收人' }} 于 {{ fmtTime(h.accepted_at) }} 接手</template>
                 <template v-if="h.status === 'done'"> · 完成于 {{ fmtTime(h.completed_at) }}</template>
               </div>
               <div v-if="h.from_progress" class="h-prog">
@@ -609,28 +816,74 @@
               <div v-if="h.todo" class="h-todo">
                 <span class="sec-label">待继续</span>{{ h.todo }}
               </div>
+              <div v-if="h.status === 'returned'" class="h-note ret-note">
+                <span class="sec-label">退回原因</span><b>{{ h.return_reason || '（未填写）' }}</b>
+              </div>
               <div v-if="h.status === 'in_progress'" class="h-note">
                 <span class="sec-label">接收人备注</span><span class="dim">{{ h.note || '（处理中，暂无备注）' }}</span>
               </div>
               <div v-if="h.status === 'done' && h.note" class="h-note done-note">
                 <span class="sec-label">完成说明</span>{{ h.note }}
               </div>
+
+              <!-- 处理轨迹 -->
+              <div v-if="hTimelineOpen === h.id" class="timeline">
+                <div v-if="hTimeline.length" class="tl-list">
+                  <div v-for="e in hTimeline" :key="e.id" class="tl-item" :class="'tl-' + e.action">
+                    <span class="tl-dot"></span>
+                    <span class="tl-act">{{ handoverActionLabel(e.action) }}</span>
+                    <span class="tl-who">{{ e.actor_name }}</span>
+                    <span class="tl-time dim">{{ fmtTime(e.created_at) }}</span>
+                    <span v-if="e.note" class="tl-note">{{ e.note }}</span>
+                  </div>
+                </div>
+                <div v-else class="dim">暂无处理轨迹</div>
+              </div>
+
+              <!-- 附件 -->
+              <div v-if="hAttachOpen === h.id" class="attach-box">
+                <div v-if="hAttachList.length" class="attach-list">
+                  <div v-for="a in hAttachList" :key="a.id" class="attach-row">
+                    <span class="att-ico">{{ fileIcon(a.file_name) }}</span>
+                    <span class="attach-name" @click="downloadWSAtt(a)" :title="'下载 ' + a.file_name">{{ a.file_name }}</span>
+                    <span class="dim">{{ fmtSize(a.size) }}</span>
+                    <span class="dim">{{ a.owner_name }}</span>
+                    <button class="del danger" @click="removeWSAtt(a, 'handover', h.id)">删除</button>
+                  </div>
+                </div>
+                <div v-else class="dim">暂无附件</div>
+                <label class="btn ghost sm file-btn">
+                  {{ uploading ? '上传中…' : '＋ 上传附件' }}
+                  <input type="file" :disabled="uploading" hidden @change="(e) => uploadWSAtt(e, 'handover', h.id)" />
+                </label>
+              </div>
+
               <!-- 操作区：任一接收人可推进 -->
               <div v-if="isAssigneeOf(h) && h.status !== 'done'" class="h-actions">
-                <template v-if="h.status === 'pending'">
+                <template v-if="h.status === 'pending' || h.status === 'returned'">
                   <button class="btn sm ok" @click="setHStatus(h, 'in_progress')">👌 接手处理</button>
                 </template>
                 <template v-if="h.status === 'in_progress' || h.status === 'pending'">
                   <button class="btn sm primary" @click="promptDone(h)">✅ 标记完成</button>
                 </template>
+                <button class="btn sm ghost" @click="promptReturn(h)">↩ 退回</button>
+                <button v-if="h.status === 'in_progress'" class="btn sm" @click="promptNote(h)">✍️ 更新进度备注</button>
               </div>
-              <div v-if="h.status === 'in_progress'" class="h-actor-edit">
-                <button v-if="isAssigneeOf(h)" class="btn sm" @click="promptNote(h)">✍️ 更新进度备注</button>
+              <!-- 发送人：退回后重新指派/撤单 -->
+              <div v-if="isSenderOf(h) && h.status === 'returned'" class="h-actions">
+                <button class="btn sm" @click="reopenH(h)">🔄 重新派发（回到待接手）</button>
               </div>
             </div>
           </div>
           <div v-else class="empty">
-            {{ hScope === 'inbox' ? '还没有人交接给你' : '你还没发起过交接' }}，点右上「发起交接」把未完成的事交给下一个人
+            {{ hScope === 'inbox' ? '没有符合条件的交接' : '你还没发起过符合条件的交接' }}，点右上「发起交接」把未完成的事交给下一个人
+          </div>
+
+          <!-- 分页 -->
+          <div v-if="hTotal > hLimit" class="pager">
+            <button class="btn ghost sm" :disabled="hOffset === 0" @click="hPage(-1)">← 上一页</button>
+            <span class="dim">第 {{ Math.floor(hOffset / hLimit) + 1 }} / {{ Math.ceil(hTotal / hLimit) }} 页 · 共 {{ hTotal }} 条</span>
+            <button class="btn ghost sm" :disabled="hOffset + hLimit >= hTotal" @click="hPage(1)">下一页 →</button>
           </div>
         </template>
       </section>
@@ -642,6 +895,8 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
+// 直取 axios 实例：交接列表需要读 X-Total-Count 响应头做分页（api.get 只返回 body）
+import http from '@/api/http'
 import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
@@ -689,6 +944,19 @@ const knowledge = ref([])
 const categories = ref([])
 const allTags = ref([])
 const kbView = ref('list') // list | stats | trash
+const exportMenu = ref(false) // 导出下拉菜单开关
+// 视图切换（替代原先散落的 toggleStats/openTrash，避免语义与状态不一致）
+function kbGo(v) {
+  if (kbView.value === v) return
+  kbView.value = v
+  exportMenu.value = false
+  if (v === 'stats') loadStats()
+  else if (v === 'trash') loadTrash()
+}
+function closeExportMenu() { exportMenu.value = false }
+// 导出下拉：选中后先收起菜单再执行，避免菜单浮在下载提示之上
+function pickExport(fn) { exportMenu.value = false; fn() }
+function onKbDocClick() { if (exportMenu.value) exportMenu.value = false }
 const kQuery = ref('')
 const kCategory = ref('')
 const kTag = ref('')
@@ -1167,23 +1435,66 @@ function exportBundle() {
 
 // ================= 工作日志 =================
 const logs = ref([])
-const viewDate = ref(todayStr())
+// 筛选：日期区间 + 关键词 + 按人 + 可见范围；默认落在"今天"
+const logFrom = ref(todayStr())
+const logTo = ref(todayStr())
+const logKw = ref('')
+const logOwner = ref('')
 const logScope = ref('mine')
+// 分页
+const logLimit = ref(20)
+const logOffset = ref(0)
+const logTotal = ref(0)
+// 统计
+const logStats = ref(null)
+const logStatsOpen = ref(false)
+const logMissingOpen = ref(false)
+// 附件（展开式）
+const logAttachOpen = ref(0)
+const logAttachList = ref([])
+// 上传中标志复用知识库那一个（uploading，见上方）
 const editingLog = ref(false)
 const savingLog = ref(false)
 const logForm = reactive({ id: 0, log_date: '', title: '', done: '', pending: '', scope: 'private' })
 
+// 日志筛选参数（withPage=false 用于统计接口，避免把 limit 带进去）
+function logParams(withPage = true) {
+  const p = {}
+  if (logFrom.value) p.from = logFrom.value
+  if (logTo.value) p.to = logTo.value
+  if (logKw.value.trim()) p.q = logKw.value.trim()
+  if (logOwner.value) p.owner_id = logOwner.value
+  if (logScope.value === 'mine') p.mine = 1
+  if (withPage) { p.limit = logLimit.value; p.offset = logOffset.value }
+  return p
+}
+async function loadLogStats() {
+  try { logStats.value = await api.get('/workspace/logs/stats', logParams(false)) } catch { /* 统计失败不阻断列表 */ }
+}
 async function loadLogs() {
   try {
-    const params = { date: viewDate.value }
-    if (logScope.value === 'dept') { /* 部门共享：mine 缺省看全部可见(共享) */ }
-    else params.mine = 1
-    logs.value = await api.get('/workspace/logs', params)
+    logs.value = await api.get('/workspace/logs', logParams(true))
+    await loadLogStats()
+    // 统计接口返回的 total 与列表过滤器口径一致，直接用于分页
+    logTotal.value = logStats.value?.total ?? logs.value.length
   } catch (e) { toast(e.response?.data?.error || '加载失败', 'error') }
 }
-function setLogScope(s) { logScope.value = s; loadLogs() }
+function applyLogFilter() { logOffset.value = 0; logAttachOpen.value = 0; loadLogs() }
+function logPage(d) {
+  const next = logOffset.value + d * logLimit.value
+  if (next < 0) return
+  logOffset.value = next
+  logAttachOpen.value = 0
+  loadLogs()
+}
+function resetLogFilters() {
+  logFrom.value = todayStr(); logTo.value = todayStr()
+  logKw.value = ''; logOwner.value = ''; logScope.value = 'mine'
+  applyLogFilter()
+}
+function setLogScope(s) { logScope.value = s; applyLogFilter() }
 function openNewLog() {
-  Object.assign(logForm, { id: 0, log_date: viewDate.value, title: '', done: '', pending: '', scope: 'private' })
+  Object.assign(logForm, { id: 0, log_date: logFrom.value || todayStr(), title: '', done: '', pending: '', scope: 'private' })
   editingLog.value = true
 }
 function openEditLog(l) {
@@ -1202,23 +1513,137 @@ async function saveLog() {
   finally { savingLog.value = false }
 }
 async function removeLog(l) {
-  if (!confirm('删除这篇日志？')) return
+  if (!confirm('删除这篇日志？相关附件也会一并清除。')) return
   try { await api.del('/workspace/logs/' + l.id); toast('已删除'); loadLogs() }
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+function exportLogs() {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(logParams(false))) q.append(k, v)
+  downloadFile('/workspace/logs/export', q.toString(), '工作日志_' + todayStr() + '.csv')
+}
+
+// ---- 日志附件 ----
+async function loadLogAtts(id) {
+  try { logAttachList.value = await api.get('/workspace/attachments', { module: 'log', ref_id: id }) }
+  catch { logAttachList.value = [] }
+}
+async function toggleLogAttach(l) {
+  if (logAttachOpen.value === l.id) { logAttachOpen.value = 0; return }
+  logAttachOpen.value = l.id
+  await loadLogAtts(l.id)
+}
+
+// ---- 日志 -> 交接单（打通原本割裂的两件事） ----
+const logHvTarget = ref(null)
+const logHvPicker = ref(false)
+const savingLogHv = ref(false)
+const logHvForm = reactive({ title: '', todo: '', assignee_ids: [], priority: 'normal', due_at: '', note: '' })
+function openLogHandover(l) {
+  logHvTarget.value = l
+  Object.assign(logHvForm, {
+    title: l.title || (l.log_date + ' 待办交接'),
+    todo: l.pending || '',
+    assignee_ids: [], priority: 'normal', due_at: '', note: '',
+  })
+  logHvPicker.value = false
+  loadUsers()
+}
+function cancelLogHandover() { logHvTarget.value = null; logHvPicker.value = false }
+async function saveLogHandover() {
+  if (!logHvForm.assignee_ids.length) { toast('请至少选择一名接收人', 'error'); return }
+  savingLogHv.value = true
+  try {
+    await api.post('/workspace/logs/' + logHvTarget.value.id + '/handover', {
+      title: logHvForm.title, todo: logHvForm.todo, assignee_ids: logHvForm.assignee_ids,
+      priority: logHvForm.priority, due_at: logHvForm.due_at, note: logHvForm.note,
+    })
+    toast('已转成交接单，接收人会收到通知')
+    logHvTarget.value = null
+    loadLogs()
+  } catch (e) { toast(e.response?.data?.error || '转交接失败', 'error') }
+  finally { savingLogHv.value = false }
+}
+
+// ---- 工作台通用附件（日志 / 交接共用） ----
+async function loadHAtts(id) {
+  try { hAttachList.value = await api.get('/workspace/attachments', { module: 'handover', ref_id: id }) }
+  catch { hAttachList.value = [] }
+}
+async function uploadWSAtt(e, module, refId) {
+  const f = e.target?.files?.[0]
+  if (e.target) e.target.value = '' // 允许重复选择同一文件
+  if (!f) return
+  uploading.value = true
+  try {
+    await api.upload('/workspace/attachments', f, 'file', { module, ref_id: refId })
+    toast('已上传')
+    if (module === 'log') { await loadLogAtts(refId); await loadLogs() }
+    else { await loadHAtts(refId); await loadHandovers() }
+  } catch (err) { toast(err.response?.data?.error || '上传失败', 'error') }
+  finally { uploading.value = false }
+}
+async function removeWSAtt(a, module, refId) {
+  if (!confirm('删除附件「' + a.file_name + '」？')) return
+  try {
+    await api.del('/workspace/attachments/' + a.id)
+    toast('已删除')
+    if (module === 'log') { await loadLogAtts(refId); await loadLogs() }
+    else { await loadHAtts(refId); await loadHandovers() }
+  } catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+function wsAttUrl(a) {
+  return baseUrl + '/workspace/attachments/' + encodeURIComponent(a.stored_name || a.id) + '/download'
+}
+function downloadWSAtt(a) {
+  const tok = localStorage.getItem('sw_token')
+  fetch(wsAttUrl(a), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
+    .then((r) => { if (!r.ok) throw new Error('下载失败'); return r.blob() })
+    .then((b) => {
+      const u = URL.createObjectURL(b)
+      const el = document.createElement('a')
+      el.href = u; el.download = a.file_name
+      document.body.appendChild(el); el.click(); el.remove()
+      URL.revokeObjectURL(u)
+    })
+    .catch(() => toast('下载失败', 'error'))
 }
 
 // ================= 交接接力 =================
 const users = ref([])
 const handovers = ref([])
 const hScope = ref('inbox')
+// 筛选
+const hStatus = ref('all')
+const hPriority = ref('')
+const hOverdueOnly = ref(false)
+const hKw = ref('')
+// 分页
+const hLimit = ref(20)
+const hOffset = ref(0)
+const hTotal = ref(0)
+// 统计 / 时间线 / 附件
+const hStats = ref(null)
+const hTimelineOpen = ref(0)
+const hTimeline = ref([])
+const hAttachOpen = ref(0)
+const hAttachList = ref([])
+const pendingInbox = ref(0) // 未筛选的「我收到的待接手」数量，用于 Tab 角标
 const editingH = ref(false)
 const savingH = ref(false)
 const showPicker = ref(false)
-const hForm = reactive({ title: '', assignee_ids: [], from_progress: '', todo: '' })
-const inboxUnread = computed(() => handovers.value.filter((h) => h.status === 'pending').length)
+const hForm = reactive({ title: '', assignee_ids: [], from_progress: '', todo: '', priority: 'normal', due_at: '' })
 
-const statusLabel = (s) => ({ pending: '待接手', in_progress: '处理中', done: '已完成' }[s] || s)
-const statusChip = (s) => ({ pending: 'warn', in_progress: 'accent', done: 'ok' }[s] || '')
+// Tab 角标：优先用专门统计的未筛选数字，回退到当前列表
+const inboxUnread = computed(() => pendingInbox.value || handovers.value.filter((h) => h.status === 'pending').length)
+
+const statusLabel = (s) => ({ pending: '待接手', in_progress: '处理中', done: '已完成', returned: '已退回' }[s] || s)
+const statusChip = (s) => ({ pending: 'warn', in_progress: 'accent', done: 'ok', returned: 'danger' }[s] || '')
+// 处理轨迹的动作 → 中文
+const handoverActionLabel = (a) => ({
+  create: '发起交接', accept: '接手处理', done: '标记完成',
+  return: '退回', reopen: '重新派发', urge: '催办', note: '更新备注',
+}[a] || a)
 
 function parseAssigneeNames(h) {
   if (h.assignee_names) {
@@ -1240,17 +1665,19 @@ function isAssigneeOf(h) {
   }
   return false
 }
+const isSenderOf = (h) => !!h && h.sender_id === auth.user?.id
 function userNameOf(uid) {
   const u = users.value.find((x) => x.id === uid)
   return u ? u.name : ('#' + uid)
 }
 const pickableUsers = computed(() => users.value.filter((u) => !u.frozen && u.id !== auth.user?.id))
-function toggleAssignee(uid) {
-  const arr = hForm.assignee_ids
+// 通用多选切换（交接表单与"日志转交接"弹窗共用）
+function toggleAssigneeIn(arr, uid) {
   const i = arr.indexOf(uid)
   if (i >= 0) arr.splice(i, 1)
   else arr.push(uid)
 }
+function toggleAssignee(uid) { toggleAssigneeIn(hForm.assignee_ids, uid) }
 
 async function loadUsers() {
   try {
@@ -1258,13 +1685,60 @@ async function loadUsers() {
     users.value = all.filter((u) => !u.frozen)
   } catch {}
 }
-async function loadHandovers() {
-  try { handovers.value = await api.get('/workspace/handovers', { role: hScope.value, status: 'all' }) }
-  catch (e) { toast(e.response?.data?.error || '加载失败', 'error') }
+// 交接筛选参数（带分页）
+function hParams() {
+  const p = { role: hScope.value, status: hStatus.value === 'all' ? 'all' : hStatus.value }
+  if (hPriority.value) p.priority = hPriority.value
+  if (hKw.value.trim()) p.q = hKw.value.trim()
+  if (hOverdueOnly.value) p.overdue = 1
+  p.limit = hLimit.value
+  p.offset = hOffset.value
+  return p
 }
-function setHScope(s) { hScope.value = s; loadHandovers() }
+// 统计卡片只按「可见范围 + 是否只看逾期」聚合，不受状态/优先级/关键词影响，
+// 否则点一个卡片后其它卡片的数字会一起塌缩，失去导航意义。
+async function loadHandoverStats() {
+  try {
+    const p = { role: hScope.value }
+    if (hOverdueOnly.value) p.overdue = 1
+    hStats.value = await api.get('/workspace/handovers/stats', p)
+  } catch { /* 统计失败不阻断列表 */ }
+}
+async function loadPendingInbox() {
+  try {
+    const s = await api.get('/workspace/handovers/stats', { role: 'inbox' })
+    pendingInbox.value = s?.pending || 0
+  } catch {}
+}
+async function loadHandovers() {
+  try {
+    // 用 http 直取以读取 X-Total-Count（后端为此专门加的响应头，供分页使用）
+    const r = await http.get('/workspace/handovers', { params: hParams() })
+    handovers.value = r.data
+    hTotal.value = Number(r.headers['x-total-count'] || (r.data?.length ?? 0))
+    await Promise.all([loadHandoverStats(), loadPendingInbox()])
+  } catch (e) { toast(e.response?.data?.error || '加载失败', 'error') }
+}
+function applyHFilter() { hOffset.value = 0; hTimelineOpen.value = 0; hAttachOpen.value = 0; loadHandovers() }
+function setHFilter(kind, val) {
+  if (kind === 'status') hStatus.value = val
+  if (kind === 'priority') hPriority.value = val
+  applyHFilter()
+}
+function resetHFilters() {
+  hStatus.value = 'all'; hPriority.value = ''; hOverdueOnly.value = false; hKw.value = ''
+  applyHFilter()
+}
+function hPage(d) {
+  const next = hOffset.value + d * hLimit.value
+  if (next < 0) return
+  hOffset.value = next
+  hTimelineOpen.value = 0; hAttachOpen.value = 0
+  loadHandovers()
+}
+function setHScope(s) { hScope.value = s; applyHFilter() }
 function openNewH() {
-  Object.assign(hForm, { title: '', assignee_ids: [], from_progress: '', todo: '' })
+  Object.assign(hForm, { title: '', assignee_ids: [], from_progress: '', todo: '', priority: 'normal', due_at: '' })
   showPicker.value = false
   editingH.value = true
   loadUsers()
@@ -1274,7 +1748,10 @@ async function saveH() {
   if (hForm.assignee_ids.length === 0) { toast('请至少选择一名接收人', 'error'); return }
   savingH.value = true
   try {
-    await api.post('/workspace/handovers', { title: hForm.title, from_progress: hForm.from_progress, todo: hForm.todo, assignee_ids: hForm.assignee_ids })
+    await api.post('/workspace/handovers', {
+      title: hForm.title, from_progress: hForm.from_progress, todo: hForm.todo,
+      assignee_ids: hForm.assignee_ids, priority: hForm.priority, due_at: hForm.due_at,
+    })
     toast(hForm.assignee_ids.length > 1 ? `已发出，${hForm.assignee_ids.length} 位接收人会收到通知` : '交接已发出，接收人会收到通知')
     editingH.value = false
     showPicker.value = false
@@ -1298,8 +1775,38 @@ async function promptNote(h) {
   try { await api.post('/workspace/handovers/' + h.id + '/status', { status: 'in_progress', note }); toast('已更新'); loadHandovers() }
   catch (e) { toast(e.response?.data?.error || '操作失败', 'error') }
 }
+// 退回：必须说明原因（后端也做了校验，这里给出更友好的提示）
+async function promptReturn(h) {
+  const reason = prompt(`退回交接「${h.title}」，请说明原因（必填）：`, '')
+  if (reason === null) return
+  if (!reason.trim()) { toast('退回必须填写原因', 'error'); return }
+  try { await api.post('/workspace/handovers/' + h.id + '/status', { status: 'returned', note: reason.trim() }); toast('已退回给发送人'); loadHandovers() }
+  catch (e) { toast(e.response?.data?.error || '操作失败', 'error') }
+}
+// 发送人把被退回的交接重新派发
+async function reopenH(h) {
+  try { await api.post('/workspace/handovers/' + h.id + '/status', { status: 'pending' }); toast('已重新派发'); loadHandovers() }
+  catch (e) { toast(e.response?.data?.error || '操作失败', 'error') }
+}
+async function urgeH(h) {
+  const note = prompt(`催办交接「${h.title}」，可附一句留言（可留空）：`, '')
+  if (note === null) return
+  try { await api.post('/workspace/handovers/' + h.id + '/urge', { note: note || '' }); toast('已催办，接收人会收到通知'); loadHandovers() }
+  catch (e) { toast(e.response?.data?.error || '催办失败', 'error') }
+}
+async function toggleHTimeline(h) {
+  if (hTimelineOpen.value === h.id) { hTimelineOpen.value = 0; return }
+  hTimelineOpen.value = h.id
+  try { hTimeline.value = await api.get('/workspace/handovers/' + h.id + '/events') }
+  catch (e) { hTimeline.value = []; toast(e.response?.data?.error || '轨迹加载失败', 'error') }
+}
+async function toggleHAttach(h) {
+  if (hAttachOpen.value === h.id) { hAttachOpen.value = 0; return }
+  hAttachOpen.value = h.id
+  await loadHAtts(h.id)
+}
 async function removeH(h) {
-  if (!confirm('删除这条交接？')) return
+  if (!confirm('删除这条交接？处理轨迹与附件会一并清除。')) return
   try { await api.del('/workspace/handovers/' + h.id); toast('已删除'); loadHandovers() }
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
 }
@@ -1327,10 +1834,15 @@ onMounted(() => {
   loadHandovers()
   if (auth.isSuper || auth.canManage) loadUsers()
   useAutoRefresh(loadK, true)
+  document.addEventListener('click', onKbDocClick)
 })
-onUnmounted(() => useAutoRefresh(loadK, false))
+onUnmounted(() => {
+  useAutoRefresh(loadK, false)
+  document.removeEventListener('click', onKbDocClick)
+})
 
-watch(viewDate, loadLogs)
+// 关键词/按人筛选需要显式触发（applyLogFilter）；日期用 @change 触发，
+// 所以这里不再需要单独的 watch（原 watch(viewDate) 已随筛选栏重构移除）
 watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loadLogs(); if (t === 'knowledge') refreshKnowledge() })
 </script>
 
@@ -1362,6 +1874,29 @@ watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loa
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn.ghost.sm.on, .kb-actions .btn.ghost.sm.on { background: var(--accent-soft); color: var(--accent); border-color: rgba(79,70,229,0.3); }
 .kb-actions { gap: 6px; }
+/* 视图切换分段控件容器（分段按钮本体复用全局 .seg 样式） */
+.seg-group { display: inline-flex; border: 1px solid var(--glass-border); border-radius: 10px; overflow: hidden; }
+/* 组与组之间的细竖分隔线，比纯空白更能表达分组关系 */
+.kb-div { width: 1px; align-self: stretch; margin: 2px 5px; background: var(--glass-border); }
+/* 导出下拉：把 TXT/MD/Word 三种格式收纳起来 */
+.kb-menu-wrap { position: relative; display: inline-flex; }
+.kb-menu-wrap .caret { font-style: normal; font-size: 10px; opacity: 0.7; }
+.kb-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  min-width: 180px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--glass-strong, rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--glass-border); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.kb-menu .menu-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border: 0; background: transparent; border-radius: 8px; cursor: pointer;
+  font-size: 13px; color: var(--text); text-align: left; font-family: inherit;
+}
+.kb-menu .menu-item:hover { background: var(--overlay); }
+.kb-menu .mi-ico { font-size: 14px; line-height: 1; opacity: 0.85; }
+.pop-enter-active, .pop-leave-active { transition: opacity 0.12s ease, transform 0.12s ease; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: translateY(-4px); }
 .edit-form { border: 1px dashed var(--glass-border-strong); border-radius: 14px; padding: 16px; margin: 4px 0 16px; background: var(--overlay); display: flex; flex-direction: column; gap: 12px; }
 .fld { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
 .glass-input { width: 100%; padding: 9px 12px; border-radius: 11px; background: var(--bg-1); border: 1px solid var(--glass-border); color: var(--text); font-size: 13.5px; outline: none; }
@@ -1615,5 +2150,84 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .hist-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .hist-act { font-size: 11px; padding: 1px 7px; }
 .hist-detail { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12.5px; color: var(--text-dim, rgba(255,255,255,0.65)); line-height: 1.6; }
-.hist-empty { padding: 10px 0; }
+/* ===== v0.16.0 工作日志 / 交接接力 补齐 ===== */
+
+/* 筛选栏 */
+.ws-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+.ws-filters .ff { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-faint); }
+.ws-filters .glass-input { padding: 6px 9px; font-size: 12.5px; }
+.ws-filters .ff-grow { flex: 1 1 180px; min-width: 150px; }
+.ws-filters .ff-owner { width: auto; min-width: 110px; }
+.ws-filters .ff.chk { cursor: pointer; user-select: none; }
+.ws-filters .ff.chk input { cursor: pointer; }
+.ws-filters .sub-tabs { margin-left: auto; }
+
+/* 统计看板 */
+.ws-stats { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; margin: 12px 0 2px; }
+.ws-stat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 92px; padding: 9px 14px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--bg-1); }
+.ws-stat b { font-size: 20px; font-weight: 800; color: var(--accent); line-height: 1.15; }
+.ws-stat span { font-size: 11.5px; color: var(--text-faint); }
+.ws-stat.warn b { color: #b45309; }
+.ws-missing { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; font-size: 12.5px; }
+
+/* 小徽标补充 */
+.chip.tiny { font-size: 10.5px; padding: 1px 7px; }
+.chip.ok { background: rgba(22,163,74,0.14); color: #15803d; }
+.chip.danger { background: rgba(220,38,38,0.14); color: #b91c1c; }
+.chip.miss { background: rgba(217,119,6,0.12); color: #b45309; margin-right: 4px; }
+
+/* 附件区（日志 / 交接共用） */
+.attach-box { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--hairline); }
+.attach-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.attach-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; padding: 4px 2px; }
+.attach-row .attach-name { cursor: pointer; }
+.attach-row .dim { font-size: 11.5px; }
+.attach-row .del { margin-left: auto; }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* 分页 */
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; font-size: 12.5px; }
+
+/* 交接统计卡片（可点击筛选） */
+.stat-cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 2px; }
+.stat-card { border: 1px solid var(--glass-border); border-radius: 12px; padding: 10px 16px; background: var(--bg-1); display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; min-width: 86px; }
+.stat-card b { font-size: 19px; font-weight: 800; line-height: 1.15; }
+.stat-card span { font-size: 11.5px; color: var(--text-faint); }
+.stat-card:hover { border-color: var(--accent); }
+.stat-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.stat-card.warn b { color: #b45309; }
+.stat-card.accent b { color: var(--accent); }
+.stat-card.ok b { color: #15803d; }
+.stat-card.danger b { color: #b91c1c; }
+
+/* 处理轨迹时间线 */
+.timeline { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--hairline); }
+.tl-list { display: flex; flex-direction: column; gap: 7px; }
+.tl-item { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.tl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; align-self: center; }
+.tl-urgent .tl-dot, .tl-urge .tl-dot { background: #d97706; }
+.tl-done .tl-dot { background: #16a34a; }
+.tl-return .tl-dot { background: #dc2626; }
+.tl-act { font-weight: 600; }
+.tl-who { color: var(--accent); }
+.tl-time { font-size: 11.5px; }
+.tl-note { flex-basis: 100%; padding-left: 15px; color: var(--text-dim); }
+
+/* 退回原因 */
+.h-note.ret-note { background: rgba(220,38,38,0.08); border-left: 3px solid #dc2626; padding-left: 8px; border-radius: 4px; }
+
+/* 优先级与截止时间并排 */
+.pri-row { display: flex; gap: 8px; }
+.pri-row .glass-input { flex: 1 1 0; min-width: 0; }
+
+/* 转交接弹窗内部表单 */
+.hv-form { display: flex; flex-direction: column; gap: 12px; padding-bottom: 4px; }
+
+@media (max-width: 640px) {
+  .ws-filters .sub-tabs { margin-left: 0; }
+  .stat-card { min-width: 72px; padding: 8px 12px; }
+  .ws-stat { min-width: 78px; padding: 8px 10px; }
+  .pri-row { flex-direction: column; }
+}
 </style>

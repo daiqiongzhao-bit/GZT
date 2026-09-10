@@ -438,15 +438,22 @@
         <button class="btn ghost" @click="logPage = 0; loadLogs()">筛选</button>
         <button class="btn ghost" @click="resetLogFilter">重置</button>
       </div>
-      <div class="log-list">
-        <div v-for="l in logs" :key="l.id" class="log">
-          <span class="log-time">{{ fmt(l.created_at) }}</span>
-          <span class="log-user">{{ l.user_name }}</span>
-          <span class="log-src" v-if="l.client">{{ clientName(l.client) }}</span>
-          <span class="log-ip" v-if="l.ip">{{ l.ip }}</span>
-          <span class="log-action">{{ l.action }}</span>
+      <div class="log-table">
+        <div class="log-head log-row">
+          <span>时间</span><span>操作人</span><span>来源</span><span>IP</span><span>操作内容</span>
         </div>
-        <div v-if="!logs.length" class="empty">暂无日志</div>
+        <div class="log-list">
+          <div v-for="l in logs" :key="l.id" class="log log-row">
+            <span class="log-time">{{ fmt(l.created_at) }}</span>
+            <span class="log-user" :title="l.user_name || ''">{{ l.user_name || '—' }}</span>
+            <span class="log-src">
+              <em :class="clientName(l.client) ? 'src-badge' : 'src-none'">{{ clientName(l.client) || '—' }}</em>
+            </span>
+            <span class="log-ip">{{ l.ip || '—' }}</span>
+            <span class="log-action" :title="l.action">{{ l.action }}</span>
+          </div>
+          <div v-if="!logs.length" class="empty">暂无日志</div>
+        </div>
       </div>
       <div class="pager" v-if="logs.length">
         <button class="btn ghost" :disabled="logPage === 0" @click="logPage > 0 && (logPage--, loadLogs())">上一页</button>
@@ -481,14 +488,19 @@
         <button class="btn ghost" @click="sysPage = 0; loadSysLogs()">筛选</button>
         <button class="btn ghost" @click="resetSysFilter">重置</button>
       </div>
-      <div class="log-list">
-        <div v-for="l in sysLogs" :key="l.id" class="log syslog">
-          <span class="log-time">{{ fmt(l.created_at) }}</span>
-          <span class="log-level" :style="sysLevelStyle(l.level)">{{ l.level }}</span>
-          <span class="log-src">{{ l.source }}</span>
-          <span class="log-action" :title="l.detail">{{ l.message }}</span>
+      <div class="log-table sys">
+        <div class="log-head log-row">
+          <span>时间</span><span>级别</span><span>来源</span><span>信息</span>
         </div>
-        <div v-if="!sysLogs.length" class="empty">暂无运行日志（系统正常运行时不会自动写入，仅在发生 panic / 5xx / 调度异常时记录）</div>
+        <div class="log-list">
+          <div v-for="l in sysLogs" :key="l.id" class="log log-row">
+            <span class="log-time">{{ fmt(l.created_at) }}</span>
+            <span class="log-level" :style="sysLevelStyle(l.level)">{{ l.level }}</span>
+            <span class="log-src"><em class="src-none">{{ l.source || '—' }}</em></span>
+            <span class="log-action" :title="l.detail || l.message">{{ l.message }}</span>
+          </div>
+          <div v-if="!sysLogs.length" class="empty">暂无运行日志（系统正常运行时不会自动写入，仅在发生 panic / 5xx / 调度异常时记录）</div>
+        </div>
       </div>
       <div class="pager" v-if="sysLogs.length">
         <button class="btn ghost" :disabled="sysPage === 0" @click="sysPage > 0 && (sysPage--, loadSysLogs())">上一页</button>
@@ -1319,13 +1331,27 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .hook-title .rn { font-size: 13.5px; }
 .hook-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hook-card-actions { display: flex; gap: 8px; margin-top: auto; }
+/* 审计 / 运行日志：表头与数据行共用同一套栅格模板，逐列对齐。
+   要点：列宽固定，缺失值渲染占位符（而不是 v-if 移除元素），否则整行会错位。 */
+.log-table { overflow-x: auto; }
+.log-row {
+  display: grid; align-items: baseline; gap: 12px; min-width: 760px;
+  grid-template-columns: 152px 112px 76px 132px minmax(240px, 1fr);
+}
+.log-table.sys .log-row { min-width: 600px; grid-template-columns: 152px 64px 130px minmax(240px, 1fr); }
+.log-head {
+  padding: 8px 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--text-faint); border-bottom: 1px solid var(--glass-border-strong, var(--glass-border));
+}
 .log-list { display: flex; flex-direction: column; gap: 2px; }
-.log { display: flex; gap: 12px; padding: 10px 4px; font-size: 13px; border-bottom: 1px solid var(--hairline); }
+.log { padding: 10px 4px; font-size: 13px; border-bottom: 1px solid var(--hairline); }
 .log-time { color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
-.log-user { color: var(--accent); white-space: nowrap; }
+.log-user { color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .log-ip { color: var(--text-faint); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
-.log-src { color: var(--text-faint); font-size: 12px; white-space: nowrap; border: 1px solid var(--glass-border); border-radius: 6px; padding: 0 5px; line-height: 16px; }
-.log-action { color: var(--text-dim); }
+.log-src { min-width: 0; }
+.log-src .src-badge { font-style: normal; color: var(--text-faint); font-size: 12px; white-space: nowrap; border: 1px solid var(--glass-border); border-radius: 6px; padding: 0 5px; line-height: 16px; }
+.log-src .src-none { font-style: normal; color: var(--text-faint); font-size: 12px; }
+.log-action { color: var(--text-dim); min-width: 0; overflow-wrap: anywhere; }
 .retention-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .retention-hint { font-size: 12px; color: var(--text-faint); }
 .pager { display: flex; align-items: center; gap: 14px; justify-content: center; margin-top: 14px; }

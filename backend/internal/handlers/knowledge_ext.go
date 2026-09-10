@@ -163,6 +163,24 @@ func normTags(arr []string) string {
 	return string(b)
 }
 
+// normKbScope 归一化知识条目可见范围（v0.16.0）。
+// 合法值：private（仅自己）/ department（同部门）/ public（全公司）。
+// public 仅超级管理员可设置，普通用户即便传 public 也会降级为 department；
+// 空串或非法值一律按 department（与历史默认行为一致）。
+func normKbScope(cl *models.Claims, v string) string {
+	switch strings.TrimSpace(v) {
+	case string(models.ScopePrivate):
+		return string(models.ScopePrivate)
+	case string(models.ScopePublic):
+		if cl != nil && cl.Role == models.RoleSuperAdmin {
+			return string(models.ScopePublic)
+		}
+		return string(models.ScopeDepartment)
+	default:
+		return string(models.ScopeDepartment)
+	}
+}
+
 // ListKnowledgeTags 当前可见范围内的全部标签（去重，用于筛选）
 func ListKnowledgeTags(c *gin.Context) {
 	q := db.DB.Model(&models.KnowledgeEntry{})

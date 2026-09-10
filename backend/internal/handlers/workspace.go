@@ -39,9 +39,9 @@ func scopeVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 	if cl.Role == models.RoleSuperAdmin {
 		return q // 超管可见全部
 	}
-	// 本人(含所有 scope) 或 同部门共享
-	return q.Where("(owner_id = ?) OR (scope = ? AND dept_id = ?)",
-		cl.UserID, models.ScopeDepartment, cl.DeptID)
+	// 本人(含所有 scope) 或 全公司共享 或 同部门共享
+	return q.Where("(owner_id = ?) OR (scope = ?) OR (scope = ? AND dept_id = ?)",
+		cl.UserID, models.ScopePublic, models.ScopeDepartment, cl.DeptID)
 }
 
 // ============================ 迷你知识库 ============================
@@ -206,9 +206,8 @@ func CreateKnowledge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "标题不能为空"})
 		return
 	}
-	if req.Scope != string(models.ScopePrivate) {
-		req.Scope = string(models.ScopeDepartment) // 默认同部门共享
-	}
+	// v0.16.0：可见范围白名单 private / department / public；public（全公司）仅超管可设
+	req.Scope = normKbScope(cl, req.Scope)
 	if req.Status != "draft" {
 		req.Status = "published"
 	}
@@ -303,8 +302,9 @@ func UpdateKnowledge(c *gin.Context) {
 	}
 	entry.Tags = normTags(req.Tags)
 	entry.ParentID = req.ParentID
-	if req.Scope == string(models.ScopePrivate) || req.Scope == string(models.ScopeDepartment) {
-		entry.Scope = models.WorkspaceScope(req.Scope)
+	// 可见范围：未传（空）视为不修改；传了则走白名单（public 仅超管可设）
+	if req.Scope != "" {
+		entry.Scope = models.WorkspaceScope(normKbScope(middleware.GetClaims(c), req.Scope))
 	}
 	if err := db.DB.Save(entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -372,26 +372,16 @@ func DeleteKnowledge(c *gin.Context) {
 // ListWorkLogs 指定日期/月的工作日志。个人日志默认仅自己可见（private）；共享可见同部门。
 // 查询：?date=YYYY-MM-DD 精确某天，或 ?month=YYYY-MM 按月取（供日历高亮）。
 func ListWorkLogs(c *gin.Context) {
-	cl := middleware.GetClaims(c)
-	q := db.DB.Model(&models.WorkLog{})
-	if date := strings.TrimSpace(c.Query("date")); date != "" {
-		q = q.Where("log_date = ?", date)
-	}
-	if month := strings.TrimSpace(c.Query("month")); month != "" {
-		q = q.Where("log_date LIKE ?", month+"-%")
-	}
-	if onlyMine := c.Query("mine") == "1"; onlyMine {
-		// 我写的日志：可能我自己看（含共享给我的？日志定位偏个人，mine=1 只取自己）
-		q = q.Where("owner_id = ?", cl.UserID)
-	} else {
-		// 共享视图：本人 + 同部门共享（部门日志本）
-		q = scopeVisibleQ(c, q)
+	q := buildWorkLogQuery(c).Order("log_date desc, id desc")
+	if lim := parseLimitParam(c.Query("limit")); lim > 0 {
+		q = q.Limit(lim).Offset(parseOffsetParam(c.Query("offset")))
 	}
 	var list []models.WorkLog
-	if err := q.Order("log_date desc, id desc").Find(&list).Error; err != nil {
+	if err := q.Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	hydrateWorkLogs(list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -450,30 +440,61 @@ func loadOwnedLog(c *gin.Context) (*models.WorkLog, bool) {
 }
 
 // UpdateWorkLog 更新日志（仅本人）
+//
+// v0.16.0：改用「按字段存在性更新」（PATCH 语义）。
+// 此前是整体覆盖：请求里没带的字段会被当成空字符串写回，任何只想改一个字段的调用
+// （如只更新「还没做完的」）都会把 title / done 静默清空 —— 这是实打实的数据丢失。
+// 现在用指针区分「未提交该字段」与「提交了空值」：nil 跳过，非 nil 才写（含清空）。
 func UpdateWorkLog(c *gin.Context) {
 	log, ok := loadOwnedLog(c)
 	if !ok {
 		return
 	}
 	var req struct {
-		LogDate string `json:"log_date"`
-		Title   string `json:"title"`
-		Done    string `json:"done"`
-		Pending string `json:"pending"`
-		Scope   string `json:"scope"`
+		LogDate *string `json:"log_date"`
+		Title   *string `json:"title"`
+		Done    *string `json:"done"`
+		Pending *string `json:"pending"`
+		Scope   *string `json:"scope"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
 		return
 	}
-	if strings.TrimSpace(req.LogDate) != "" {
-		log.LogDate = strings.TrimSpace(req.LogDate)
+	// 记录修改前的快照，用于判断「是否真的改动了内容」
+	before := struct {
+		Date, Title, Done, Pending string
+		Scope                      models.WorkspaceScope
+	}{log.LogDate, log.Title, log.Done, log.Pending, log.Scope}
+
+	if req.LogDate != nil {
+		if d := strings.TrimSpace(*req.LogDate); d != "" {
+			log.LogDate = d
+		}
 	}
-	log.Title = strings.TrimSpace(req.Title)
-	log.Done = req.Done
-	log.Pending = req.Pending
-	if req.Scope == string(models.ScopePrivate) || req.Scope == string(models.ScopeDepartment) {
-		log.Scope = models.WorkspaceScope(req.Scope)
+	if req.Title != nil {
+		log.Title = strings.TrimSpace(*req.Title)
+	}
+	if req.Done != nil {
+		log.Done = *req.Done
+	}
+	if req.Pending != nil {
+		log.Pending = *req.Pending
+	}
+	if req.Scope != nil {
+		if *req.Scope == string(models.ScopePrivate) || *req.Scope == string(models.ScopeDepartment) {
+			log.Scope = models.WorkspaceScope(*req.Scope)
+		}
+	}
+	// v0.16.0：编辑留痕（日志是记录类数据，需能看出"被改过"）。
+	// 仅在内容确有变化时计数，避免"打开即保存"这类无改动请求误标「已编辑」。
+	changed := before.Date != log.LogDate || before.Title != log.Title ||
+		before.Done != log.Done || before.Pending != log.Pending || before.Scope != log.Scope
+	if changed {
+		if cl := middleware.GetClaims(c); cl != nil {
+			log.EditCount++
+			log.LastEditorName = cl.Username
+		}
 	}
 	if err := db.DB.Save(log).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -492,6 +513,8 @@ func DeleteWorkLog(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// v0.16.0：级联清理附件（含磁盘文件）
+	removeWSAttachments("log", log.ID)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -518,31 +541,23 @@ func handoverVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 
 // ListHandovers 交接列表。?role=inbox(我收到的) / outbox(我发出的) / 默认全部相关
 func ListHandovers(c *gin.Context) {
-	cl := middleware.GetClaims(c)
-	q := db.DB.Model(&models.WorkHandover{})
-	q = handoverVisibleQ(c, q)
-	switch c.Query("role") {
-	case "inbox":
-		// 多接收人兼容：主接收人 OR JSON 数组里有当前用户 ID（SQLite 用 LIKE 匹配 "id":<UID> 形式）
-		uidStr := fmt.Sprintf("%d", cl.UserID)
-		q = q.Where("assignee_id = ? OR assignee_ids LIKE ? OR assignee_ids LIKE ? OR assignee_ids LIKE ?",
-			cl.UserID,
-			"%"+uidStr+",%",  // 数组中间：...,X,...
-			"["+uidStr+",%",  // 数组开头：[X, ...
-			"%"+uidStr+"]%")  // 数组结尾：... ,X]
-	case "outbox":
-		q = q.Where("sender_id = ?", cl.UserID)
-	}
-	if st := strings.TrimSpace(c.Query("status")); st != "" && st != "all" {
-		q = q.Where("status = ?", st)
+	// 总数写响应头：调用方按需读取；响应体仍是数组，老调用方不受影响
+	var total int64
+	_ = buildHandoverQuery(c).Count(&total).Error
+	c.Header("X-Total-Count", strconv.FormatInt(total, 10))
+
+	// 紧急未完成件排前，其余按新→旧（SQLite 支持 ORDER BY 中的 CASE）
+	q := buildHandoverQuery(c).Order("CASE WHEN priority = 'urgent' AND status <> 'done' THEN 0 ELSE 1 END, id desc")
+	if lim := parseLimitParam(c.Query("limit")); lim > 0 {
+		q = q.Limit(lim).Offset(parseOffsetParam(c.Query("offset")))
 	}
 	var list []models.WorkHandover
-	if err := q.Order("id desc").Find(&list).Error; err != nil {
+	if err := q.Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 给前端回填 AssigneeNames（如果数据库里只填了 ID，没填姓名）
-	hydrateHandoverNames(&list)
+	// 回填接收人姓名 + 瞬态字段（附件数 / 时间线条数 / 是否逾期）
+	hydrateHandovers(list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -600,6 +615,8 @@ func CreateHandover(c *gin.Context) {
 		Todo         string `json:"todo"`          // 需要接收人继续做的
 		AssigneeID   uint   `json:"assignee_id"`   // 单接收人（兼容旧版/单选）
 		AssigneeIDs  []uint `json:"assignee_ids"`  // 多接收人：系统人员 ID 数组
+		Priority     string `json:"priority"`      // v0.16.0：normal / urgent
+		DueAt        string `json:"due_at"`        // v0.16.0：期望完成时间（RFC3339 或 YYYY-MM-DD）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
@@ -658,6 +675,17 @@ func CreateHandover(c *gin.Context) {
 	}
 	idsJSON, _ := json.Marshal(cleaned)
 	namesJSON, _ := json.Marshal(orderedNames)
+	// v0.16.0：优先级与期望完成时间（缺省为普通、无截止）
+	pri := models.HandoverNormal
+	if req.Priority == models.HandoverUrgent {
+		pri = models.HandoverUrgent
+	}
+	var due *time.Time
+	if s := strings.TrimSpace(req.DueAt); s != "" {
+		if t, ok := parseFlexibleTime(s); ok {
+			due = &t
+		}
+	}
 	hv := models.WorkHandover{
 		Title:         req.Title,
 		FromProgress:  req.FromProgress,
@@ -670,16 +698,35 @@ func CreateHandover(c *gin.Context) {
 		AssigneeNames: string(namesJSON),// 全员姓名（JSON 数组）
 		DeptID:        cl.DeptID,
 		Status:        models.HandoverPending,
+		Priority:      pri,
+		DueAt:         due,
 	}
 	if err := db.DB.Create(&hv).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// v0.16.0：写下第一条时间线事件（此后接手/备注/完成/退回/催办都会追加）
+	createNote := "发起交接给 " + strings.Join(orderedNames, "、")
+	if pri == models.HandoverUrgent {
+		createNote = "【紧急】" + createNote
+	}
+	if due != nil {
+		createNote += "，期望 " + due.Format("2006-01-02 15:04") + " 前完成"
+	}
+	recordHandoverEvent(hv.ID, "create", cl.UserID, cl.Username, createNote)
 	// 给每个接收人写一条站内通知
 	for _, u := range us {
+		title := "你收到一份新的工作交接"
+		if pri == models.HandoverUrgent {
+			title = "【紧急】你收到一份新的工作交接"
+		}
+		content := "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。"
+		if due != nil {
+			content += "期望完成时间：" + due.Format("2006-01-02 15:04") + "。"
+		}
 		db.DB.Create(&models.Notification{
-			UserID: u.ID, Kind: "user", Title: "你收到一份新的工作交接",
-			Content: "来自 " + cl.Username + "：「" + hv.Title + "」请到「工作台-交接接力」查看并继续处理。",
+			UserID: u.ID, Kind: "user", Title: title,
+			Content: content,
 			ActorID: cl.UserID, ActorName: cl.Username,
 		})
 	}
@@ -709,20 +756,60 @@ func UpdateHandoverStatus(c *gin.Context) {
 		return
 	}
 	switch req.Status {
-	case models.HandoverInProgress, models.HandoverDone, models.HandoverPending:
+	case models.HandoverInProgress, models.HandoverDone, models.HandoverPending, models.HandoverReturned:
 		hv.Status = req.Status
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效状态"})
 		return
 	}
+	// v0.16.0：退回必须说明原因（否则接收人只把单子丢回去，发送人无从下手）
+	if req.Status == models.HandoverReturned && strings.TrimSpace(req.Note) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "退回请填写原因"})
+		return
+	}
 	hv.Note = req.Note
-	if req.Status == models.HandoverDone {
+	action := ""
+	switch req.Status {
+	case models.HandoverInProgress:
+		action = "accept"
+		// 仅首次接手时记录接手人与时间（后续推进备注不覆盖）
+		if hv.AcceptedAt == nil {
+			now := time.Now()
+			hv.AcceptedAt = &now
+			hv.AcceptedBy = cl.UserID
+			hv.AcceptedByName = cl.Username
+		}
+	case models.HandoverDone:
+		action = "done"
 		now := time.Now()
 		hv.CompletedAt = &now
+	case models.HandoverReturned:
+		action = "return"
+		hv.ReturnReason = strings.TrimSpace(req.Note)
+		hv.CompletedAt = nil
+	case models.HandoverPending:
+		action = "reopen" // 发送人撤回/重新指派：回到待处理
+		hv.CompletedAt = nil
+		hv.ReturnReason = ""
 	}
 	if err := db.DB.Save(&hv).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// v0.16.0：每次流转都追加一条时间线事件，形成可追溯的处理轨迹
+	recordHandoverEvent(hv.ID, action, cl.UserID, cl.Username, hv.Note)
+	// v0.16.0：完成 / 退回时反向通知发送人（此前只在创建时通知接收人，发送人不知进展）
+	if (req.Status == models.HandoverDone || req.Status == models.HandoverReturned) && hv.SenderID != cl.UserID {
+		title := "交接已完成：「" + hv.Title + "」"
+		content := cl.Username + " 已完成你发起的交接。"
+		if req.Status == models.HandoverReturned {
+			title = "交接被退回：「" + hv.Title + "」"
+			content = cl.Username + " 退回了这份交接，原因：" + strings.TrimSpace(req.Note)
+		}
+		db.DB.Create(&models.Notification{
+			UserID: hv.SenderID, Kind: "user", Title: title, Content: content,
+			ActorID: cl.UserID, ActorName: cl.Username,
+		})
 	}
 	addLog(c, cl.UserID, cl.Username, "交接["+hv.Title+"]状态→"+hv.Status)
 	c.JSON(http.StatusOK, hv)
@@ -744,6 +831,9 @@ func DeleteHandover(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// v0.16.0：级联清理时间线与附件（含磁盘文件），避免留下孤儿数据
+	db.DB.Where("handover_id = ?", hv.ID).Delete(&models.WorkHandoverEvent{})
+	removeWSAttachments("handover", hv.ID)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -807,6 +897,9 @@ func kCanRead(cl *models.Claims, e *models.KnowledgeEntry) bool {
 	}
 	if e.OwnerID == cl.UserID {
 		return true
+	}
+	if e.Scope == models.ScopePublic {
+		return true // 全公司共享（v0.16.0）
 	}
 	return e.Scope == models.ScopeDepartment && e.DeptID == cl.DeptID
 }

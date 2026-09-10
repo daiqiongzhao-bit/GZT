@@ -65,6 +65,8 @@ func Init() error {
 		&models.KnowledgeLink{},
 		&models.WorkLog{},
 		&models.WorkHandover{},
+		&models.WorkHandoverEvent{},
+		&models.WSFileAttachment{},
 		&models.SystemLog{},
 	)
 }

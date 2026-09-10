@@ -175,6 +175,9 @@ type Setting struct {
 	DailySummaryEnabled bool `json:"daily_summary_enabled" gorm:"default:true"`
 	// 逾期宽限期（分钟）：每日/月度定时任务的「开始时间」+ 宽限后才算逾期；0=到点即逾期（默认 30）
 	OverdueGraceMinutes int `json:"overdue_grace_minutes" gorm:"default:30"`
+	// 手册已种入知识库的 App 版本（v0.16.0）：等于当前 AppVersion 时不再重复种入，
+	// 于是管理员删除该知识条目后不会在同一版本内被自动重建，升级到新版本时才会重新补齐。
+	ManualSeededVersion string `json:"manual_seeded_version" gorm:"size:16"`
 }
 
 // Log 系统操作日志
@@ -246,6 +249,7 @@ type WorkspaceScope string
 const (
 	ScopePrivate    WorkspaceScope = "private"    // 仅创建者本人可见
 	ScopeDepartment WorkspaceScope = "department" // 同部门用户共享可见
+	ScopePublic     WorkspaceScope = "public"     // 全公司可见（仅超级管理员可设置，v0.16.0）
 )
 
 // WorkItem 工作台通用条目（知识库 / 工作日志 / 交接单共用基础字段）
@@ -261,6 +265,13 @@ const (
 	HandoverPending    = "pending"     // 已发出，等待接收人处理
 	HandoverInProgress = "in_progress" // 接收人已接手处理中
 	HandoverDone       = "done"        // 已完成
+	HandoverReturned   = "returned"    // v0.16.0：接收人退回（附原因），由发送人重新指派或撤单
+)
+
+// HandoverPriority 交接优先级（v0.16.0）
+const (
+	HandoverNormal = "normal" // 普通
+	HandoverUrgent = "urgent" // 紧急
 )
 
 // KnowledgeEntry 迷你知识库条目：方法/流程/制度等长期内容
@@ -386,6 +397,12 @@ type WorkLog struct {
 	DeptID    uint           `json:"dept_id" gorm:"index"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	CreatedAt time.Time      `json:"created_at"`
+	// v0.16.0 补齐：编辑留痕。日志是可追溯记录，"被谁在什么时候改过"是必要信息。
+	EditCount      int    `json:"edit_count" gorm:"default:0"`     // 被编辑次数（>0 时前端显示「已编辑」）
+	LastEditorName string `json:"last_editor_name" gorm:"size:64"` // 最后一次编辑人
+	// 瞬态字段（不入库，查询时回填）
+	AttachCount   int `json:"attach_count" gorm:"-"`
+	HandoverCount int `json:"handover_count" gorm:"-"` // 由本篇日志转出的交接单数量（>0 时前端显示「已转交接」）
 }
 
 // WorkHandover 交接接力：把"做到哪 + 还没做完"转给接收人继续
@@ -404,9 +421,52 @@ type WorkHandover struct {
 	AssigneeNames string     `json:"assignee_names" gorm:"type:text"`// 全部接收人姓名（JSON 数组，给前端直接展示）
 	DeptID        uint       `json:"dept_id" gorm:"index"`          // 发出人所属部门
 	Status        string     `json:"status" gorm:"size:16;default:pending"`
-	Note          string     `json:"note" gorm:"type:text"`         // 接收人完成时的备注
+	Note          string     `json:"note" gorm:"type:text"`         // 接收人完成时的备注（最新一条，历史见 WorkHandoverEvent）
 	CompletedAt   *time.Time `json:"completed_at"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// ===== v0.16.0 补齐：优先级 / 截止 / 接手与退回 / 催办 =====
+	Priority       string     `json:"priority" gorm:"size:8;default:normal"` // normal 普通 / urgent 紧急
+	DueAt          *time.Time `json:"due_at"`                                // 期望完成时间（逾期判定基准）
+	AcceptedAt     *time.Time `json:"accepted_at"`                           // 首次被接手时间
+	AcceptedBy     uint       `json:"accepted_by"`                           // 首次接手人 ID
+	AcceptedByName string     `json:"accepted_by_name" gorm:"size:64"`       // 首次接手人姓名
+	ReturnReason   string     `json:"return_reason" gorm:"type:text"`        // 退回原因（status=returned 时）
+	UrgeCount      int        `json:"urge_count" gorm:"default:0"`           // 被催办次数
+	LastUrgeAt     *time.Time `json:"last_urge_at"`                          // 最近一次催办时间
+	// v0.16.0：来源日志（由某篇工作日志的"还没做完的"一键转出时记录，便于双向追溯）
+	SourceLogID uint `json:"source_log_id" gorm:"index;default:0"`
+	// 瞬态字段（不入库，查询时回填）
+	AttachCount int  `json:"attach_count" gorm:"-"`
+	EventCount  int  `json:"event_count" gorm:"-"`
+	Overdue     bool `json:"overdue" gorm:"-"` // 未完成且已过 DueAt
+}
+
+// WorkHandoverEvent 交接处理时间线（v0.16.0 新增）。
+// 修复的缺口：此前只有覆盖式的 Note 单字段，无法回答"这件事经过谁的手、什么时候接手、
+// 为什么被退回"。每次状态流转都追加一条事件，形成不可篡改的处理轨迹。
+type WorkHandoverEvent struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	HandoverID uint      `json:"handover_id" gorm:"index;not null"` // 所属交接单
+	Action     string    `json:"action" gorm:"size:24"`             // create/accept/note/done/return/reopen/urge
+	ActorID    uint      `json:"actor_id" gorm:"index"`             // 操作人
+	ActorName  string    `json:"actor_name" gorm:"size:64"`
+	Note       string    `json:"note" gorm:"type:text"` // 本次说明（进度备注 / 完成说明 / 退回原因）
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// WSFileAttachment 工作台通用附件（工作日志 / 交接接力共用，以 Module 区分归属，v0.16.0 新增）。
+// 知识库另有独立的 KnowledgeAttachment，此处刻意不复用，避免改动既有表结构影响存量数据。
+type WSFileAttachment struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	Module     string    `json:"module" gorm:"size:16;index;not null"` // log / handover
+	RefID      uint      `json:"ref_id" gorm:"index;not null"`         // 所属日志 / 交接 ID
+	FileName   string    `json:"file_name" gorm:"size:255"`            // 原始文件名（展示与下载用）
+	StoredName string    `json:"stored_name" gorm:"size:128"`          // 磁盘存储名（含纳秒串，同时作为下载 key，杜绝枚举）
+	Mime       string    `json:"mime" gorm:"size:64"`
+	Size       int64     `json:"size"`
+	OwnerID    uint      `json:"owner_id" gorm:"index"`
+	OwnerName  string    `json:"owner_name" gorm:"size:64"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ============ 通知增强：定时广播 / 浏览器推送（v0.13.0） ============
