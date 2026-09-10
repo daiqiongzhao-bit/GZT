@@ -309,21 +309,20 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 	return segs
 }
 
-// splitDrift 为某人的休息段起点生成一组确定性偏移量（错峰）。
+// splitSlotOffsets 为某人的每个休息段生成「槽内偏移量」。
 //
-// 目的：避免同部门所有人都在同一天休息。偏移量按 userID 派生，
-// 因此同一人同一月结果稳定；不同人之间互不相同。
-// 偏移幅度限制在单段平均间距的 ±1/3 以内，防止把休息段挤到一起。
-func splitDrift(userID uint, year, month, segCount, freeLen int) []int {
-	drift := make([]int, segCount)
-	if segCount == 0 {
-		return drift
+// 每个休息段被约束在长度为 slot 的独立槽位内，
+// 偏移量决定它在槽内的具体位置。偏移幅度限制在槽长的一半以内，
+// 既能错开不同人的休息日，又不会越槽影响相邻段。
+//
+// 按 userID 派生，同一人同一月结果稳定；不同人之间分布不同。
+func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
+	offs := make([]int, segCount)
+	if segCount == 0 || slot <= 1 {
+		return offs
 	}
-	avgGap := freeLen / segCount
-	if avgGap < 2 {
-		return drift // 空间太紧，不扰动，优先保证能放下
-	}
-	ampl := avgGap / 3
+	// 允许的偏移上限：槽长的一半，至少 1
+	ampl := slot / 2
 	if ampl < 1 {
 		ampl = 1
 	}
@@ -335,15 +334,10 @@ func splitDrift(userID uint, year, month, segCount, freeLen int) []int {
 		seed ^= seed << 17
 		return int(seed % uint64(2*ampl+1))
 	}
-	for i := range drift {
-		// 首段不扰动（保持月初锚点），其余段在 ±ampl 内浮动
-		if i == 0 {
-			drift[i] = 0
-			continue
-		}
-		drift[i] = next() - ampl
+	for i := range offs {
+		offs[i] = next() - ampl
 	}
-	return drift
+	return offs
 }
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
@@ -447,34 +441,52 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				}
 			}
 			if needSlots <= len(free) {
-				// 均匀铺开 + 每人错位扰动。
+				// 「等分槽位 + 环状错峰」放置。
 				//
-				// 若不扰动，所有人的休息段起点都落在相同的等分位置，
-				// 结果就是"全员同一天休息"——既不真实，也会让当天在岗
-				// 人数骤降触发每班人数违规。这里给每个人一个稳定的
-				// 起始偏移，把休息日错峰打散。
+				// 为什么不用简单的等分起点：
+				//   若所有人起点都取 i*gap，多个人的休息段会落在同一天，
+				//   导致该天在岗人数骤降触发 min_per_shift 违规；
+				//   而相邻几天又人满为患——人力被浪费，且连上上限也易破。
+				//
+				// 做法：把 free 序列切成 segCount 个等长「槽」，
+				//   第 i 段只能落在第 i 个槽内，槽内位置由用户种子决定。
+				//   同时把每个人的槽序列整体旋转一个相位，
+				//   使不同人的休息段在月内互相错开（有人月初休，有人月中休）。
 				segCount := len(segLens)
-				gap := float64(len(free)) / float64(segCount)
+				slot := len(free) / segCount
+				if slot < 1 {
+					slot = 1
+				}
 
-				// 确定性漂移：同一人同一月固定，不同人之间分布不同
-				drift := splitDrift(p.UserID, pi.Year, pi.Month, segCount, len(free))
+				// 相位：按用户错开整段位置，范围 0 ~ segCount-1
+				phase := int(p.UserID+uint(pi.Year)+uint(pi.Month)) % segCount
+				if phase < 0 {
+					phase = 0
+				}
+				// 槽内偏移：确定性，限制在槽内可容纳范围内
+				offs := splitSlotOffsets(p.UserID, pi.Year, pi.Month, segCount, slot)
 
-				cursor := 0
 				for i, n := range segLens {
-					start := int(float64(i)*gap) + drift[i]
-					if start < cursor {
-						start = cursor
+					// 环状取槽，让相位真正改变段在月内的位置
+					si := (i + phase) % segCount
+					start := si*slot + offs[i]
+					if start < 0 {
+						start = 0
 					}
+					// 段尾越界则前移，但不得越过本槽起点太多
 					if start+n > len(free) {
 						start = len(free) - n
 					}
-					if start < cursor {
-						start = cursor
+					if start < 0 {
+						start = 0
 					}
-					for j := 0; j < n && start+j < len(free); j++ {
-						rest[dateKey(free[start+j])] = true
+					// 仅在冲突时顺延，避免破坏已放置的段
+					for k := 0; k < n; k++ {
+						idx := start + k
+						if idx >= 0 && idx < len(free) {
+							rest[dateKey(free[idx])] = true
+						}
 					}
-					cursor = start + n + 1
 				}
 			} else {
 				// 空间不足：尽力铺（后续校验会报告违规）

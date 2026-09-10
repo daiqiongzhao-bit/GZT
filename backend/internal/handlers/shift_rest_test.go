@@ -158,22 +158,19 @@ func TestSplitRestStreaksEdgeCases(t *testing.T) {
 	}
 }
 
-// TestSplitDriftBounded 错峰偏移必须在 ±ampl 内且首段为 0，
-// 否则会把休息段推到一起或推出月外。
-func TestSplitDriftBounded(t *testing.T) {
-	freeLen := 22
+// TestSplitSlotOffsetsBounded 槽内偏移必须在 ±slot/2 内，
+// 否则休息段会越出本槽、破坏错峰效果。
+func TestSplitSlotOffsetsBounded(t *testing.T) {
+	slot := 5
 	segCount := 4
-	ampl := freeLen / segCount / 3
+	ampl := slot / 2
 	if ampl < 1 {
 		ampl = 1
 	}
 	for uid := uint(1); uid <= 50; uid++ {
-		d := splitDrift(uid, 2026, 11, segCount, freeLen)
+		d := splitSlotOffsets(uid, 2026, 11, segCount, slot)
 		if len(d) != segCount {
 			t.Fatalf("偏移长度 %d != %d", len(d), segCount)
-		}
-		if d[0] != 0 {
-			t.Errorf("uid=%d 首段偏移应为 0，实际 %d", uid, d[0])
 		}
 		for i, v := range d {
 			if v > ampl || v < -ampl {
@@ -181,13 +178,21 @@ func TestSplitDriftBounded(t *testing.T) {
 			}
 		}
 	}
+
+	// slot <= 1 时应全为 0（没有错峰空间）
+	for _, v := range splitSlotOffsets(1, 2026, 11, 4, 1) {
+		if v != 0 {
+			t.Errorf("slot=1 时偏移应为 0，实际 %d", v)
+		}
+	}
 }
 
-// TestSplitDriftVariesByUser 不同用户的偏移应当不同（真正起到错峰作用）。
-func TestSplitDriftVariesByUser(t *testing.T) {
+// TestSplitSlotOffsetsVariesByUser 不同用户的槽内偏移应当不同，
+// 这是「错峰休息、避免同一天集体休假」的关键。
+func TestSplitSlotOffsetsVariesByUser(t *testing.T) {
 	seen := map[string]int{}
 	for uid := uint(1); uid <= 10; uid++ {
-		d := splitDrift(uid, 2026, 11, 4, 22)
+		d := splitSlotOffsets(uid, 2026, 11, 4, 5)
 		key := ""
 		for _, v := range d {
 			key += string(rune('a' + v + 5))
