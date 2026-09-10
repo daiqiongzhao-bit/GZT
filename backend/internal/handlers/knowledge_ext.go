@@ -245,18 +245,10 @@ func RestoreKnowledge(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// PurgeKnowledge DELETE /workspace/knowledge/:id/purge 从回收站彻底删除（含附件/评论/版本/链接）
-func PurgeKnowledge(c *gin.Context) {
-	cl := middleware.GetClaims(c)
-	var entry models.KnowledgeEntry
-	if err := db.DB.Unscoped().First(&entry, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "条目不存在"})
-		return
-	}
-	if entry.OwnerID != cl.UserID && cl.Role != models.RoleSuperAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅创建者可彻底删除"})
-		return
-	}
+// purgeKnowledgeEntry 彻底删除一条知识条目及其全部附属数据：
+// 附件文件、附件记录、评论、历史版本、双向链接、FTS 索引，最后删条目本身。
+// 权限判断由调用方负责。
+func purgeKnowledgeEntry(entry models.KnowledgeEntry) {
 	// 物理删除附件文件
 	var atts []models.KnowledgeAttachment
 	db.DB.Unscoped().Where("entry_id = ?", entry.ID).Find(&atts)
@@ -271,6 +263,21 @@ func PurgeKnowledge(c *gin.Context) {
 	db.DB.Unscoped().Where("source_id = ? OR target_id = ?", entry.ID, entry.ID).Delete(&models.KnowledgeLink{})
 	ftsDelete(entry.ID)
 	db.DB.Unscoped().Delete(&entry)
+}
+
+// PurgeKnowledge DELETE /workspace/knowledge/:id/purge 从回收站彻底删除（含附件/评论/版本/链接）
+func PurgeKnowledge(c *gin.Context) {
+	cl := middleware.GetClaims(c)
+	var entry models.KnowledgeEntry
+	if err := db.DB.Unscoped().First(&entry, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "条目不存在"})
+		return
+	}
+	if entry.OwnerID != cl.UserID && cl.Role != models.RoleSuperAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅创建者可彻底删除"})
+		return
+	}
+	purgeKnowledgeEntry(entry)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -284,19 +291,7 @@ func EmptyKnowledgeTrash(c *gin.Context) {
 	var list []models.KnowledgeEntry
 	q.Find(&list)
 	for _, entry := range list {
-		var atts []models.KnowledgeAttachment
-		db.DB.Unscoped().Where("entry_id = ?", entry.ID).Find(&atts)
-		for _, a := range atts {
-			if a.StoredName != "" {
-				_ = removeFileSafe(filepathJoin(kAttachmentDir(), a.StoredName))
-			}
-		}
-		db.DB.Unscoped().Where("entry_id = ?", entry.ID).Delete(&models.KnowledgeAttachment{})
-		db.DB.Unscoped().Where("entry_id = ?", entry.ID).Delete(&models.KnowledgeComment{})
-		db.DB.Unscoped().Where("entry_id = ?", entry.ID).Delete(&models.KnowledgeVersion{})
-		db.DB.Unscoped().Where("source_id = ? OR target_id = ?", entry.ID, entry.ID).Delete(&models.KnowledgeLink{})
-		ftsDelete(entry.ID)
-		db.DB.Unscoped().Delete(&entry)
+		purgeKnowledgeEntry(entry)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "purged": len(list)})
 }

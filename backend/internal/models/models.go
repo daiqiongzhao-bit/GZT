@@ -292,7 +292,11 @@ type KnowledgeEntry struct {
 	Starred   int            `json:"starred" gorm:"default:0"`        // 收藏（1=已收藏）
 	ViewCount int            `json:"view_count" gorm:"default:0"`      // 阅读量
 	Summary   string         `json:"summary" gorm:"type:text"`        // AI 摘要（可选，P3 预留）
-	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`                  // 软删除（回收站）
+	// SeedKey 系统自动种入标记（如 "manual"）；空 = 用户自行创建。
+	// 用显式、持久且客户端不可注入的标记来识别自动种入条目，
+	// 避免按 title/category/owner 等可变属性推断带来的误删（误判为用户条目）与漏删（漏判为孤儿）。
+	SeedKey   string         `json:"seed_key,omitempty" gorm:"index"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"` // 软删除（回收站）
 	UpdatedAt time.Time      `json:"updated_at"`
 	CreatedAt time.Time      `json:"created_at"`
 }

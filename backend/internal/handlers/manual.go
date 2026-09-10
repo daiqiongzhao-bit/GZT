@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,17 @@ import (
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
 )
+
+// seedKeyManual 系统自动种入手册的持久标记（写入 KnowledgeEntry.SeedKey）。
+// 用显式标记而非 title/category/owner 推断来识别自动种入条目：
+//   - 误删（false-positive）：标题前缀相同的人工条目不会被牵连（见 B1）；
+//   - 漏删（false-negative）：不再依赖「当前最低 id 的超管」，换超管/降权也不会漏掉孤儿（见 B2）。
+const seedKeyManual = "manual"
+
+// reLegacyManualTitle 匹配旧版本（v0.16.0/v0.16.1，无 seed_key）自动种入手册的标题：
+// 严格锚定为「GZT 操作使用手册 v<主>.<次>.<修订>」，用于一次性回填 seed_key。
+// 刻意要求以版本号结尾，从而排除诸如「GZT 操作使用手册 我的补充笔记」这类人工条目。
+var reLegacyManualTitle = regexp.MustCompile(`^GZT 操作使用手册 v\d+\.\d+\.\d+$`)
 
 // 手册种入知识库（v0.16.0）
 //
@@ -64,6 +76,15 @@ func SeedManualToKnowledge(pdf []byte) SeedManualResult {
 		return SeedManualResult{Reason: "未找到超级管理员账号，跳过"}
 	}
 
+	// 0) 先把旧版本遗留（无 seed_key）的自动种入手册打上标记，再统一清理历史版本种入的手册
+	//    （含回收站中的），保证全库最多只有一条自动种入的手册。
+	//    清理放在新建之前：若清理成功而后续新建失败，则版本标记不会写入，下次启动仍会重试，
+	//    永远不会退化为「多份手册并存」的状态；若先建后清，清理一旦失败重复条目就会一直留着。
+	backfillLegacySeededManuals()
+	for _, old := range findSeededManuals() {
+		purgeKnowledgeEntry(old)
+	}
+
 	// 1) 手册落盘到附件目录
 	dir := kAttachmentDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -89,6 +110,7 @@ func SeedManualToKnowledge(pdf []byte) SeedManualResult {
 		Status:    "published",
 		Tags:      `["手册","操作指南","帮助"]`,
 		Summary:   "系统操作与运维手册（随版本自动更新），支持在线阅读与 PDF 下载。",
+		SeedKey:   seedKeyManual,
 	}
 	if err := db.DB.Create(&entry).Error; err != nil {
 		_ = os.Remove(dst)
@@ -128,6 +150,46 @@ func SeedManualToKnowledge(pdf []byte) SeedManualResult {
 	}
 
 	return SeedManualResult{Seeded: true, EntryID: entry.ID, Title: title, Size: int64(len(pdf))}
+}
+
+// findSeededManuals 返回所有「系统自动种入的手册」条目（含回收站中的），按 id 升序。
+// 回收站条目同样占用一份附件文件，必须一并清理，否则会留下 3.45 MB 的孤儿文件。
+// 仅以持久标记 SeedKey 判定身份——不依赖 title / category / owner 等可变属性，
+// 因此换超管、降权、改标题都不会造成误删或漏删。
+func findSeededManuals() []models.KnowledgeEntry {
+	var list []models.KnowledgeEntry
+	db.DB.Unscoped().
+		Where("seed_key = ?", seedKeyManual).
+		Order("id asc").
+		Find(&list)
+	return list
+}
+
+// backfillLegacySeededManuals 一次性回填：把由旧版本（v0.16.0/v0.16.1，建表时尚无 seed_key 列）
+// 种入、因而没有标记的手册补上 seed_key，否则它们会被当成人工条目而永远留在库里。
+// 选取口径（两处刻意选择，防止误伤人工条目）：
+//   - 仅取 seed_key 为空或 NULL 且标题以「GZT 操作使用手册 v」开头的候选；
+//   - 再在 Go 侧用严格锚定正则 ^GZT 操作使用手册 v\d+\.\d+\.\d+$ 二次筛选，
+//     从而排除像「GZT 操作使用手册 我的补充笔记」这类同前缀的人工条目（B1）；
+//   - **不加 owner 过滤**：按 owner 过滤正是 B2 的成因（换超管后老行匹配不上）。
+// 幂等：打完标记后下次调用不再命中候选。
+func backfillLegacySeededManuals() {
+	var candidates []models.KnowledgeEntry
+	db.DB.Unscoped().
+		Where("(seed_key = '' OR seed_key IS NULL) AND title LIKE ?", "GZT 操作使用手册 v%").
+		Find(&candidates)
+	ids := make([]uint, 0, len(candidates))
+	for _, e := range candidates {
+		if reLegacyManualTitle.MatchString(strings.TrimSpace(e.Title)) {
+			ids = append(ids, e.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	db.DB.Unscoped().Model(&models.KnowledgeEntry{}).
+		Where("id IN ?", ids).
+		Update("seed_key", seedKeyManual)
 }
 
 // buildManualIntro 生成手册条目的正文（在线阅读入口 + 说明）。
