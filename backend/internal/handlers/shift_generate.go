@@ -162,8 +162,8 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	// 这里维护「当天已安排多少人休息」，后续人员选休息段位置时
 	// 优先挑当天休息人数最少的位置，从而压平在岗人数曲线。
 	restPerDay := map[string]int{}
-	for _, p := range rotating {
-		pi.assignRestDays(plan, p, days, targetRest, forcedWork, restPerDay)
+	for ri, p := range rotating {
+		pi.assignRestDays(plan, p, days, targetRest, forcedWork, restPerDay, ri, len(rotating))
 		// 连续上班超上限时，拆一个双休成单休来打断长班次。
 		//
 		// 用户原话：「那些连续上7天的你可以把某个双休改成单休啊，
@@ -388,11 +388,25 @@ func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
 // segLens: 各休息段的长度
 // load:    长度应 >= freeLen 的每日负载数组（可为 nil，表示不做负载感知）
 func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int) []int {
-	return restSegmentIndicesLoad(freeLen, segLens, userID, year, month, nil, 0)
+	return restSegmentIndicesLoad(freeLen, segLens, userID, year, month, nil, 0, 0, 0)
 }
 
-// restSegmentIndicesLoad 是 restSegmentIndices 的完整版，额外接受每日负载。
-func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month int, load []int, maxWork int) []int {
+// restSegmentIndicesLoad 是 restSegmentIndices 的完整版，额外接受每日负载，
+// 以及本人在倒班队列中的序号 phaseIdx 与队列总人数 phaseTotal。
+//
+// 相位为什么必须由「人数」决定（v0.20.0 的核心改动）：
+//
+//	早期版本用 hash(uid) % segCount 做整段旋转，再叠一个 [0,room] 的小偏移。
+//	问题是这两者的取值域都远小于人数：5 段 → 相位只有 5 档，room=2 → 偏移只有 3 档。
+//	6 个人挤进这么少的档位，必然大量撞车——表现为「全员几乎同一天休息」，
+//	当天在岗人数骤降触发每班人数违规（线上实测 21/30 天不足）。
+//
+//	正确做法是让 N 个人的相位【均匀铺满整个槽长】：
+//	  第 u 个人的段起点 = 槽起点 + u * slotLen / N
+//	这样 N 个人的休息段首尾相接、每天恰好覆盖固定人数，
+//	在岗人数曲线是平的（6 人 10 休 / 30 天 → 每天恒定 2 人休、4 人上班）。
+//	相邻两人的相位差 1 天，正好形成「休休中中早早」的轮转带。
+func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month int, load []int, maxWork int, phaseIdx, phaseTotal int) []int {
 	if freeLen <= 0 || len(segLens) == 0 {
 		return nil
 	}
@@ -418,103 +432,107 @@ func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month
 		cursor += slotLen[i]
 	}
 
-	// 统一的浮动上限：取最严格的段（最短段）推导，见下方 roomCap 使用处说明。
-	roomCap := -1 // -1 表示不限制
-	if maxWork > 0 {
-		minN, minSlot := segLens[0], slotLen[0]
-		for _, n := range segLens {
-			if n < minN {
-				minN = n
-			}
+	// —— 全局统一偏移模型（v0.20.0）——
+	//
+	// 同一个人的所有休息段共用【同一个偏移量 off】。这一点是硬要求：
+	//   段 i 的末尾   = slotStart[i] + off + n_i - 1
+	//   段 i+1 的起点 = slotStart[i] + slotLen[i] + off
+	//   两者间隔 = slotLen[i] - n_i，与 off 无关 → 恒 >= 1，天然隔离。
+	// 若每段各用各的偏移，相邻两段可能首尾相接粘成一条，
+	// 突破连续休息上限（实测出现过 [11 12 13 14] 的 4 连休）。
+	useSpread := phaseTotal > 0 && phaseIdx >= 0 && phaseIdx < phaseTotal
+	wrap := useSpread // 环形回绕仅用于精确铺开
+
+	// 偏移上限：保证每段起点都还在序列内。
+	//   wrap 时末段允许溢出（溢出部分回绕到月初），故放宽到 slotLen-1；
+	//   不 wrap 时必须完整容纳，故取 slotLen[i]-n_i 的最小值。
+	offMax := slotLen[0] - 1
+	for i, n := range segLens {
+		lim := slotLen[i] - 1
+		if !wrap {
+			lim = slotLen[i] - n
 		}
-		for _, sl := range slotLen {
-			if sl < minSlot {
-				minSlot = sl
-			}
+		if lim < offMax {
+			offMax = lim
 		}
-		roomCap = maxWork - minSlot + minN
-		if roomCap < 0 {
-			roomCap = 0
-		}
+	}
+	if offMax < 0 {
+		offMax = 0
 	}
 
-	// 相位：按用户错开整段位置，范围 0 ~ segCount-1。
-	//
-	// 不能用 (userID+year+month)%segCount：连续 uid 会得到连续相位，
-	// 当人多于槽数时相位会重复，导致「几个人同一天开始休息」，
-	// 当天在岗人数骤降。这里用乘法散列 + 黄金比，让相邻 uid 的
-	// 相位分散到不同槽位。
-	phase := int((uint64(userID)*2654435761 + uint64(year)*40503 + uint64(month)*97) % uint64(segCount))
-	if phase < 0 {
-		phase = 0
+	// 理想偏移：把 N 个人均匀铺在 [0, offMax] 上，相邻人差 1 天，
+	// 正好形成「休休中中早早」首尾相接的轮转带。
+	ideal := 0
+	if useSpread {
+		ideal = phaseIdx * (offMax + 1) / phaseTotal
+	} else {
+		// 兜底（调用方未传人数）：沿用旧的种子偏移
+		offs := splitSlotOffsets(userID, year, month, segCount, baseSlot)
+		if len(offs) > 0 {
+			ideal = offs[0] % (offMax + 1)
+		}
 	}
-	// 槽内偏移：按槽位下标派生（不是段序号），随槽走
-	offs := splitSlotOffsets(userID, year, month, segCount, baseSlot)
+	if ideal > offMax {
+		ideal = offMax
+	}
+	if ideal < 0 {
+		ideal = 0
+	}
 
 	hasLoad := len(load) >= freeLen
 
-	var idxs []int
-	for i, n := range segLens {
-		si := (i + phase) % segCount
-		// 段可浮动空间 = 槽长 - 段长 - 1 天隔离日。
-		// 槽长不足以容纳「段 + 隔离日」时退化为不允许浮动（room=0），
-		// 此时靠相位错峰仍能实现人与人之间的分散。
-		room := slotLen[si] - n - 1
-		//
-		// 还要受「连续上班上限」约束。
-		//   段 i 之后那个工作块的长度 = 槽长 + 下段偏移 - 本段偏移 - 段 i 长度，
-		//   最坏情况（本段偏移取 0、下段偏移取满）为 槽长 + room - 段长。
-		//   令其 ≤ maxWork 得 room ≤ maxWork - 槽长 + 段长。
-		//   由于下一段的偏移也参与，必须取所有段中最严格的那个（最短段），
-		//   否则不同段长混排时仍会漏出 7 天长班次。
-		if roomCap >= 0 && room > roomCap {
-			room = roomCap
+	// 在 [ideal-1, ideal, ideal+1] 里挑「覆盖日期负载之和」最小的偏移。
+	// 微调幅度限制在 ±1：偏移离理想值越远，人与人之间的错峰越乱。
+	best := ideal
+	bestScore := -1
+	for _, cand := range []int{ideal, ideal - 1, ideal + 1} {
+		if cand < 0 || cand > offMax {
+			continue
 		}
-		if room < 0 {
-			room = 0
-		}
-
-		// 候选起点：以种子偏移为中心，向两侧扩展，覆盖整个可浮动范围。
-		// 这样既能保留确定性（同一人同一月稳定），又能在候选里挑负载最低的。
-		bestStart := slotStart[si]
-		bestScore := -1
-		for d := 0; d <= room; d++ {
-			for _, cand := range []int{offs[i] + d, offs[i] - d} {
-				if cand < 0 || cand > room {
-					continue
+		score := 0
+		for i, n := range segLens {
+			s0 := slotStart[i] + cand
+			for k := 0; k < n; k++ {
+				pos := s0 + k
+				if wrap && pos >= freeLen {
+					pos -= freeLen
 				}
-				start := slotStart[si] + cand
-				if start+n > freeLen || start < 0 {
-					continue
-				}
-				// 打分：该段覆盖日期的负载之和，越小越好
-				score := 0
-				if hasLoad {
-					for k := 0; k < n; k++ {
-						score += load[start+k]
-					}
-				} else {
-					score = abs(cand - offs[i]) // 无负载时退回「离种子偏移最近」
-				}
-				if bestScore < 0 || score < bestScore {
-					bestScore = score
-					bestStart = start
+				if hasLoad && pos >= 0 && pos < len(load) {
+					score += load[pos]
 				}
 			}
-			// 有负载时无需穷举全部候选，找到零负载即可停止
-			if hasLoad && bestScore == 0 {
-				break
-			}
 		}
-
-		for k := 0; k < n; k++ {
-			if p := bestStart + k; p >= 0 && p < freeLen {
-				idxs = append(idxs, p)
-			}
+		if !hasLoad {
+			score = abs(cand - ideal) // 无负载时退回「离理想偏移最近」
+		}
+		if bestScore < 0 || score < bestScore {
+			bestScore = score
+			best = cand
 		}
 	}
-	sort.Ints(idxs)
-	return idxs
+
+	// 落位：越界部分环形回绕到月初（形成跨月双休，避免白丢休息天数）。
+	seen := map[int]bool{}
+	for i, n := range segLens {
+		s0 := slotStart[i] + best
+		for k := 0; k < n; k++ {
+			pos := s0 + k
+			if wrap && pos >= freeLen {
+				pos -= freeLen
+			}
+			if pos < 0 || pos >= freeLen {
+				continue
+			}
+			seen[pos] = true
+		}
+	}
+
+	sorted := make([]int, 0, len(seen))
+	for i := range seen {
+		sorted = append(sorted, i)
+	}
+	sort.Ints(sorted)
+	return sorted
 }
 
 // abs 返回整数绝对值。
@@ -613,7 +631,7 @@ func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
 // 段与段之间至少间隔 1 个工作日；同时避开已锁定的上班需求。
 // 休息段的起始日尽量均匀分布，避免全挤在月初/月末。
 // restPerDay 为跨人员共享的「每日休息人数」计数器，用于压平在岗人数曲线。
-func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string, restPerDay map[string]int) {
+func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string, restPerDay map[string]int, phaseIdx, phaseTotal int) {
 	maxRest := pi.Rule.MaxRestStreak
 	if maxRest <= 0 {
 		maxRest = 3
@@ -729,7 +747,7 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				for j, d := range free {
 					load[j] = restPerDay[dateKey(d)]
 				}
-				for _, idx := range restSegmentIndicesLoad(len(free), segLens, p.UserID, pi.Year, pi.Month, load, maxWork) {
+				for _, idx := range restSegmentIndicesLoad(len(free), segLens, p.UserID, pi.Year, pi.Month, load, maxWork, phaseIdx, phaseTotal) {
 					if idx < 0 || idx >= len(free) {
 						continue
 					}

@@ -339,3 +339,69 @@ func TestSplitRestStreaksNoTriple(t *testing.T) {
 		}
 	}
 }
+
+// TestRestSegmentIndicesSpreadByHeadcount 锁住 v0.20.0 的核心不变量：
+// 给定 N 个倒班人员，N 个人的休息段必须【均匀铺开】，
+// 使每天的休息人数基本恒定，而不是全员挤在同一天休息。
+//
+// 背景：旧版用 hash(uid)%段数 做相位，取值域远小于人数，
+// 6 个人挤进 5 个相位档 → 全员几乎同步休息 → 当天在岗人数骤降，
+// 触发每班最少人数违规（线上实测 21/30 天不足）。
+//
+// 当「每人休息天数 × 人数」能被月天数整除时（6 人 × 10 休 / 30 天 = 每天 2 人），
+// 必须做到【每天休息人数完全恒定】。
+func TestRestSegmentIndicesSpreadByHeadcount(t *testing.T) {
+	const (
+		freeLen = 30
+		people  = 6
+	)
+	segLens := []int{2, 2, 2, 2, 2} // 10 天休息，全双休
+	occ := make([]int, freeLen)
+	for u := 0; u < people; u++ {
+		idxs := restSegmentIndicesLoad(freeLen, segLens, uint(12+u), 2026, 10, nil, 6, u, people)
+		if len(idxs) != 10 {
+			t.Fatalf("第 %d 人应休 10 天，实际 %d：%v", u, len(idxs), idxs)
+		}
+		for _, d := range idxs {
+			occ[d]++
+		}
+	}
+	// 每天恰好 2 人休息 → 每天 4 人上班 = 2 早 + 2 中
+	for d, c := range occ {
+		if c != 2 {
+			t.Errorf("第 %d 天有 %d 人休息，期望恒为 2（全天分布 %v）", d, c, occ)
+		}
+	}
+}
+
+// TestRestSegmentIndicesUniformOffset 同一人的所有休息段必须共用同一偏移量，
+// 否则相邻两段会首尾相接粘成一条，突破连续休息上限。
+func TestRestSegmentIndicesUniformOffset(t *testing.T) {
+	for _, segLens := range [][]int{{2, 2, 2, 2, 2}, {2, 2, 2, 2}, {1, 2, 2, 2, 1}, {2, 3, 2}} {
+		for u := 0; u < 8; u++ {
+			idxs := restSegmentIndicesLoad(30, segLens, uint(20+u), 2026, 11, nil, 6, u, 8)
+			occ := map[int]bool{}
+			for _, d := range idxs {
+				occ[d] = true
+			}
+			// 段数应与 segLens 一致（每段的起点间隔恒定）
+			segs := 0
+			prev := -10
+			for i := 0; i < 30; i++ {
+				if occ[i] {
+					if i != prev+1 {
+						segs++
+					}
+					prev = i
+				}
+			}
+			// 允许比段数多 1：末段溢出回绕到月初时，一个双休会跨月显示成
+			// 「月初 1 天 + 月末 1 天」两段，这是环形铺开的必然产物，不是缺陷。
+			// 但绝不能【少于】段数——那意味着相邻两段粘成了一条。
+			if segs < len(segLens) || segs > len(segLens)+1 {
+				t.Errorf("segs=%v u=%d：合并出 %d 段，期望 %d~%d 段（下标 %v）——段被粘连了",
+					segLens, u, segs, len(segLens), len(segLens)+1, idxs)
+			}
+		}
+	}
+}
