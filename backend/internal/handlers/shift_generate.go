@@ -309,11 +309,14 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 	return segs
 }
 
-// splitSlotOffsets 为某人的每个休息段生成「槽内偏移量」。
+// splitSlotOffsets 为某人的每个槽位生成「槽内偏移量」。
 //
 // 每个休息段被约束在长度为 slot 的独立槽位内，
 // 偏移量决定它在槽内的具体位置。偏移幅度限制在槽长的一半以内，
 // 既能错开不同人的休息日，又不会越槽影响相邻段。
+//
+// 偏移量按【槽位下标】派生（而非段序号），这样当相位把段旋转到
+// 别的槽位时，偏移量会跟着槽位走，不会出现「A 槽的偏移被用到 B 槽」。
 //
 // 按 userID 派生，同一人同一月结果稳定；不同人之间分布不同。
 func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
@@ -338,6 +341,96 @@ func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
 		offs[i] = next() - ampl
 	}
 	return offs
+}
+
+// restSegmentIndices 计算某人各休息段在 free 序列中的具体下标。
+//
+// 这是「等分槽位 + 环状相位错峰」的核心，抽成纯函数便于单测。
+//
+// 做法：
+//  1. 把 free 序列切成 segCount 个「槽」，每段占一个槽。槽长取均值，
+//     余数分给靠前的槽（否则末尾槽可能装不下段）。
+//  2. 段在槽内浮动，但浮动空间受限：不仅要满足「槽长 - 段长」，
+//     还要在段之后预留 1 天「隔离日」，否则本槽的段漂到槽尾、
+//     下一槽的段漂到槽头时，两段会贴在一起连成一片，
+//     造出超过 maxRest 的超长连休（线上实测出现过 5 连休）。
+//  3. 每个人的槽序列整体旋转一个相位（按 userID/年/月派生），
+//     使不同人的休息段在月内互相错开，避免同一天集体休息。
+//
+// freeLen: 可自由安排的「天」的数量
+// segLens: 各休息段的长度
+func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int) []int {
+	if freeLen <= 0 || len(segLens) == 0 {
+		return nil
+	}
+	segCount := len(segLens)
+
+	baseSlot := freeLen / segCount
+	extra := freeLen % segCount
+	if baseSlot < 1 {
+		baseSlot = 1
+		extra = 0
+	}
+
+	// 各槽的 [起点, 长度]，前 extra 个槽各多 1 天
+	slotStart := make([]int, segCount)
+	slotLen := make([]int, segCount)
+	cursor := 0
+	for i := 0; i < segCount; i++ {
+		slotStart[i] = cursor
+		slotLen[i] = baseSlot
+		if i < extra {
+			slotLen[i]++
+		}
+		cursor += slotLen[i]
+	}
+
+	// 相位：按用户错开整段位置，范围 0 ~ segCount-1。
+	//
+	// 不能用 (userID+year+month)%segCount：连续 uid 会得到连续相位，
+	// 当人多于槽数时相位会重复，导致「几个人同一天开始休息」，
+	// 当天在岗人数骤降。这里用乘法散列 + 黄金比，让相邻 uid 的
+	// 相位分散到不同槽位。
+	phase := int((uint64(userID)*2654435761 + uint64(year)*40503 + uint64(month)*97) % uint64(segCount))
+	if phase < 0 {
+		phase = 0
+	}
+	// 槽内偏移：按槽位下标派生（不是段序号），随槽走
+	offs := splitSlotOffsets(userID, year, month, segCount, baseSlot)
+
+	var idxs []int
+	for i, n := range segLens {
+		si := (i + phase) % segCount
+		// 段可浮动空间 = 槽长 - 段长 - 1 天隔离日。
+		// 槽长不足以容纳「段 + 隔离日」时退化为不允许浮动（room=0），
+		// 此时靠相位错峰仍能实现人与人之间的分散。
+		room := slotLen[si] - n - 1
+		if room < 0 {
+			room = 0
+		}
+		off := offs[i]
+		if off > room {
+			off = room
+		}
+		if off < 0 {
+			off = 0
+		}
+		start := slotStart[si] + off
+		// 全局边界兜底：槽本身已在 [0, freeLen) 内，这里只防御性收口
+		if start+n > freeLen {
+			start = freeLen - n
+		}
+		if start < 0 {
+			start = 0
+		}
+		for k := 0; k < n; k++ {
+			if p := start + k; p >= 0 && p < freeLen {
+				idxs = append(idxs, p)
+			}
+		}
+	}
+	sort.Ints(idxs)
+	return idxs
 }
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
@@ -448,45 +541,9 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				//   导致该天在岗人数骤降触发 min_per_shift 违规；
 				//   而相邻几天又人满为患——人力被浪费，且连上上限也易破。
 				//
-				// 做法：把 free 序列切成 segCount 个等长「槽」，
-				//   第 i 段只能落在第 i 个槽内，槽内位置由用户种子决定。
-				//   同时把每个人的槽序列整体旋转一个相位，
-				//   使不同人的休息段在月内互相错开（有人月初休，有人月中休）。
-				segCount := len(segLens)
-				slot := len(free) / segCount
-				if slot < 1 {
-					slot = 1
-				}
-
-				// 相位：按用户错开整段位置，范围 0 ~ segCount-1
-				phase := int(p.UserID+uint(pi.Year)+uint(pi.Month)) % segCount
-				if phase < 0 {
-					phase = 0
-				}
-				// 槽内偏移：确定性，限制在槽内可容纳范围内
-				offs := splitSlotOffsets(p.UserID, pi.Year, pi.Month, segCount, slot)
-
-				for i, n := range segLens {
-					// 环状取槽，让相位真正改变段在月内的位置
-					si := (i + phase) % segCount
-					start := si*slot + offs[i]
-					if start < 0 {
-						start = 0
-					}
-					// 段尾越界则前移，但不得越过本槽起点太多
-					if start+n > len(free) {
-						start = len(free) - n
-					}
-					if start < 0 {
-						start = 0
-					}
-					// 仅在冲突时顺延，避免破坏已放置的段
-					for k := 0; k < n; k++ {
-						idx := start + k
-						if idx >= 0 && idx < len(free) {
-							rest[dateKey(free[idx])] = true
-						}
-					}
+				// 做法见 restSegmentIndices 的注释。
+				for _, idx := range restSegmentIndices(len(free), segLens, p.UserID, pi.Year, pi.Month) {
+					rest[dateKey(free[idx])] = true
 				}
 			} else {
 				// 空间不足：尽力铺（后续校验会报告违规）

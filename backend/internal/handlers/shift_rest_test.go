@@ -204,3 +204,106 @@ func TestSplitSlotOffsetsVariesByUser(t *testing.T) {
 			len(seen), seen)
 	}
 }
+
+// TestRestSegmentIndicesNoOverlap 验证休息段互不重叠、且不超出序列范围。
+//
+// 这是 v0.18.3 修掉的一个真实缺陷：原先用 start = len(free) - n 兜底，
+// 会把多个段挤到序列末尾连成一片，造出超过 maxRest 的超长连休
+// （线上实测出现过「3连休 + 5连休」，而规则上限是 3）。
+func TestRestSegmentIndicesNoOverlap(t *testing.T) {
+	for uid := uint(1); uid <= 40; uid++ {
+		for _, segLens := range [][]int{{2, 2, 2, 2}, {2, 3, 3}, {3, 3, 2}, {2, 2, 3, 1}, {1, 1, 2, 2, 2}} {
+			freeLen := 19
+			idxs := restSegmentIndices(freeLen, segLens, uid, 2026, 9)
+
+			want := 0
+			for _, n := range segLens {
+				want += n
+			}
+			if len(idxs) != want {
+				t.Fatalf("uid=%d segLens=%v：应产生 %d 个休息日，实际 %d",
+					uid, segLens, want, len(idxs))
+			}
+			seen := map[int]bool{}
+			for _, p := range idxs {
+				if p < 0 || p >= freeLen {
+					t.Fatalf("uid=%d segLens=%v：下标 %d 越界 [0,%d)",
+						uid, segLens, p, freeLen)
+				}
+				if seen[p] {
+					t.Fatalf("uid=%d segLens=%v：下标 %d 重复（休息段重叠）",
+						uid, segLens, p)
+				}
+				seen[p] = true
+			}
+		}
+	}
+}
+
+// TestRestSegmentIndicesNoOverStreak 验证最重要的不变量：
+// 落点合并后，任何连续休息长度都不得超过 maxRest。
+//
+// 这正是线上「员工009 出现 5 连休」的回归防线。
+func TestRestSegmentIndicesNoOverStreak(t *testing.T) {
+	maxRest := 3
+	for uid := uint(1); uid <= 60; uid++ {
+		segLens := splitRestStreaks(8, maxRest, uid, 2026, 9)
+		freeLen := 19
+		idxs := restSegmentIndices(freeLen, segLens, uid, 2026, 9)
+
+		occupied := map[int]bool{}
+		for _, p := range idxs {
+			occupied[p] = true
+		}
+		// 扫描整条序列，统计最长连续休息
+		streak, longest := 0, 0
+		for i := 0; i < freeLen; i++ {
+			if occupied[i] {
+				streak++
+				if streak > longest {
+					longest = streak
+				}
+			} else {
+				streak = 0
+			}
+		}
+		if longest > maxRest {
+			t.Fatalf("uid=%d segLens=%v：出现 %d 连休，超过上限 %d（下标 %v）",
+				uid, segLens, longest, maxRest, idxs)
+		}
+	}
+}
+
+// TestRestSegmentIndicesDeterministic 同一(人,月)必须可复现，
+// 否则「重新生成」会得到不同结果，用户无法信任。
+func TestRestSegmentIndicesDeterministic(t *testing.T) {
+	a := restSegmentIndices(19, []int{2, 2, 2, 2}, 7, 2026, 9)
+	b := restSegmentIndices(19, []int{2, 2, 2, 2}, 7, 2026, 9)
+	if len(a) != len(b) {
+		t.Fatalf("长度不一致：%d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("第 %d 位不一致：%d vs %d", i, a[i], b[i])
+		}
+	}
+}
+
+// TestRestSegmentIndicesSpreadAcrossUsers 验证错峰有效：
+// 不同用户的休息日不应雷同。
+func TestRestSegmentIndicesSpreadAcrossUsers(t *testing.T) {
+	segLens := []int{2, 2, 2, 2}
+	patterns := map[string]int{}
+	for uid := uint(12); uid <= 17; uid++ {
+		idxs := restSegmentIndices(26, segLens, uid, 2026, 9)
+		key := ""
+		for _, p := range idxs {
+			key += string(rune('A' + p))
+		}
+		patterns[key]++
+	}
+	if len(patterns) < 4 {
+		t.Errorf("6 名员工只产生 %d 种休息模式，错峰不足：%v",
+			len(patterns), patterns)
+	}
+}
