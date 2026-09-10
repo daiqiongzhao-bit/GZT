@@ -4,18 +4,17 @@ import (
 	"testing"
 )
 
-// TestSplitRestStreaksMixed 验证休息段是「混合长度」而非清一色 3 连休。
+// TestSplitRestStreaksDoubleFirst 验证休息段「尽量双连休」：
 //
-// 需求来源：用户明确要求「最高 3 连休，不是每次都是 3 连休，
-// 也可以单休，也可以双休」。maxRest 是上限，不是固定值。
-func TestSplitRestStreaksMixed(t *testing.T) {
+// 需求来源：用户要求「在满足人数的情况下，尽量双连休」。
+// 双休(2) 应成为主体，3 连休作为上限内的调配，单休(1) 尽量少。
+func TestSplitRestStreaksDoubleFirst(t *testing.T) {
 	total := 8
 	maxRest := 3
 
-	// 统计多种子下的分布
 	lenCount := map[int]int{}
 	totalSegs := 0
-	for uid := uint(1); uid <= 20; uid++ {
+	for uid := uint(1); uid <= 30; uid++ {
 		segs := splitRestStreaks(total, maxRest, uid, 2026, 11)
 		sum := 0
 		for _, n := range segs {
@@ -31,28 +30,47 @@ func TestSplitRestStreaksMixed(t *testing.T) {
 		totalSegs += len(segs)
 	}
 
-	t.Logf("20 个种子下段长分布：%v（共 %d 段）", lenCount, totalSegs)
+	p1 := float64(lenCount[1]) / float64(totalSegs) * 100
+	p2 := float64(lenCount[2]) / float64(totalSegs) * 100
+	p3 := float64(lenCount[3]) / float64(totalSegs) * 100
+	t.Logf("30 个种子段长分布：单休 %d(%.0f%%) 双休 %d(%.0f%%) 3连休 %d(%.0f%%)",
+		lenCount[1], p1, lenCount[2], p2, lenCount[3], p3)
 
-	// 必须出现单休
-	if lenCount[1] == 0 {
-		t.Errorf("应出现单休(1 连休)，实际没有：%v", lenCount)
+	// 双休必须是主体
+	if p2 < 50 {
+		t.Errorf("双休占比 %.0f%% 应为主流（>=50%%）：%v", p2, lenCount)
 	}
-	// 必须出现双休
-	if lenCount[2] == 0 {
-		t.Errorf("应出现双休(2 连休)，实际没有：%v", lenCount)
+	// 单休应尽量少
+	if p1 > 25 {
+		t.Errorf("单休占比 %.0f%% 过高（应 <=25%%）：%v", p1, lenCount)
 	}
-	// 必须出现 3 连休（上限被用到）
+	// 上限内允许出现 3 连休作调配
 	if lenCount[3] == 0 {
-		t.Errorf("应出现 3 连休，实际没有：%v", lenCount)
+		t.Errorf("应有少量 3 连休用于调配（上限内）：%v", lenCount)
 	}
-	// 单休+双休 应占多数（体现「不是每次都是 3 连休」）
-	soft := lenCount[1] + lenCount[2]
-	if soft*2 < totalSegs {
-		t.Errorf("单休+双休 占比 %d/%d 过低，仍偏向长连休", soft, totalSegs)
+}
+
+// TestSplitRestStreaksAllDoubleWhenEven 偶数天且上限>=2 时，
+// 8 天休息应能排出「全双休」结构（4 段 × 2 天）。
+func TestSplitRestStreaksAllDoubleWhenEven(t *testing.T) {
+	found := false
+	for uid := uint(1); uid <= 30; uid++ {
+		segs := splitRestStreaks(8, 3, uid, 2026, 11)
+		allTwo := true
+		for _, n := range segs {
+			if n != 2 {
+				allTwo = false
+				break
+			}
+		}
+		if allTwo {
+			found = true
+			t.Logf("uid=%d 排出全双休：%v", uid, segs)
+			break
+		}
 	}
-	// 3 连休不应成为绝对主流
-	if lenCount[3]*2 >= totalSegs {
-		t.Errorf("3 连休 占比 %d/%d 过高，仍偏向长连休", lenCount[3], totalSegs)
+	if !found {
+		t.Error("8 天休息在 30 个种子中应至少出现一次「全双休」(4×2)")
 	}
 }
 
@@ -73,23 +91,30 @@ func TestSplitRestStreaksDeterministic(t *testing.T) {
 	}
 }
 
-// TestSplitRestStreaksDifferentUsers 不同人的休息段切分应当有差异，
-// 避免「全员同一模式」。
-func TestSplitRestStreaksDifferentUsers(t *testing.T) {
-	patterns := map[string]int{}
-	for uid := uint(1); uid <= 10; uid++ {
+// TestSplitRestStreaksDoubleDominant 多个用户的休息段都应「以双休为主」，
+// 而不是各人风格差异过大导致部分人全是单休。
+func TestSplitRestStreaksDoubleDominant(t *testing.T) {
+	bad := 0
+	for uid := uint(1); uid <= 20; uid++ {
 		segs := splitRestStreaks(8, 3, uid, 2026, 11)
-		key := ""
+		two, one := 0, 0
 		for _, n := range segs {
-			key += string(rune('0' + n))
+			if n == 2 {
+				two++
+			}
+			if n == 1 {
+				one++
+			}
 		}
-		patterns[key]++
+		// 双休段数必须不少于单休段数
+		if two < one {
+			bad++
+			t.Logf("uid=%d 双休 %d 段 < 单休 %d 段：%v", uid, two, one, segs)
+		}
 	}
-	if len(patterns) < 2 {
-		t.Errorf("10 个用户只产生了 %d 种休息模式，缺乏多样性：%v",
-			len(patterns), patterns)
+	if bad > 0 {
+		t.Errorf("%d 个用户的双休段少于单休段，未做到「尽量双连休」", bad)
 	}
-	t.Logf("10 个用户产生 %d 种模式：%v", len(patterns), patterns)
 }
 
 // TestSplitRestStreaksEdgeCases 边界：上限 1、总数 0、总数小于上限。

@@ -184,15 +184,18 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 
 // splitRestStreaks 把 total 天休息切成若干段，每段长度 <= maxRest。
 //
-// 设计意图：maxRest 是「连续休息上限」，不是「每次都必须休满」。
-// 真实排班中，休息应以单休、双休为主，偶有 3 连休，而不是清一色 3 连休。
+// 设计意图：
+//   - maxRest 是「连续休息上限」，不是「每次都必须休满」；
+//   - 休息应【尽量成双】，即优先排 2 连休（双休），这是最舒服的节奏；
+//   - 在双休铺不满的情况下，用 3 连休（不超上限）和单休做调配。
 //
-// 生成策略：
-//  1. 先按 maxRest 算出最少段数 minSegs = ceil(total/maxRest)，
-//     再决定段数：倾向于把段数放大到 1.2~1.6 倍，让单/双休有机会出现，
-//     但不超过 total（否则每段不足 1 天）。
-//  2. 每段长度在 [1, maxRest] 内取值，权重偏向 1 和 2（合计约 75%），
-//     3 连休占比约 25%——既满足"最高 3 连休"，又不会总是休 3 天。
+// 生成策略（双休优先）：
+//  1. 先按「每段 2 天」估算段数 wantSegs = round(total/2)，
+//     再夹到 [ceil(total/maxRest), total] 的可行区间内。
+//     这样 total=8 时 wantSegs=4，天然就是 2+2+2+2 的双休结构。
+//  2. 每段初始为 2 天，剩余天数按权重补给各段：
+//     优先补成 3 连休（概率高），少量补成 1 天（单休）。
+//     当 maxRest<3 时无法补 3，退化为纯双休。
 //  3. 用 userID+year+month 作为种子，保证同一人同一月结果稳定可复现。
 func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 	if total <= 0 {
@@ -219,99 +222,90 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 		return float64(seed%1000000) / 1000000.0
 	}
 
-	// 段数上限：不超过 total（保证每段至少 1 天）
-	maxSegs := total
-	if maxSegs > 12 {
-		maxSegs = 12 // 一个月内休息段数上限，避免过于零碎
-	}
-	minSegs := (total + maxRest - 1) / maxRest
+	// ---- 1) 段数：以「每段 2 天」为基准 ----
+	minSegs := (total + maxRest - 1) / maxRest // 少于这个段数，某段会超上限
 	if minSegs < 1 {
 		minSegs = 1
+	}
+	maxSegs := total / 1 // 每段至少 1 天
+	if maxSegs < 1 {
+		maxSegs = 1
+	}
+	// 避免一个月内段数过多（过于零碎）
+	if maxSegs > 12 {
+		maxSegs = 12
 	}
 	if minSegs > maxSegs {
 		minSegs = maxSegs
 	}
 
-	// 目标段数：在 [minSegs, maxSegs] 中偏向 minSegs 略高一点
-	wantSegs := minSegs
-	if maxSegs > minSegs {
-		extra := maxSegs - minSegs
-		// 放大 0~0.5 倍，且至少给 1 段机会（让单/双休能出现）
-		add := int(float64(extra) * (0.25 + next()*0.25))
-		if add < 1 && extra >= 1 {
-			add = 1
-		}
-		if add > extra {
-			add = extra
-		}
-		wantSegs = minSegs + add
+	// 双休基准段数：向上取整，余数用单休消化（避免出现半段）
+	wantSegs := (total + 1) / 2
+	// 小幅抖动 ±0 或 ±1，让不同人节奏略有差异
+	if next() < 0.3 && wantSegs+1 <= maxSegs {
+		wantSegs++
+	} else if next() < 0.3 && wantSegs-1 >= minSegs {
+		wantSegs--
+	}
+	if wantSegs < minSegs {
+		wantSegs = minSegs
+	}
+	if wantSegs > maxSegs {
+		wantSegs = maxSegs
+	}
+	if wantSegs < 1 {
+		wantSegs = 1
 	}
 
-	// 按权重分配每段长度：1→35%, 2→40%, 3→25%（上限为 2 时 1→45%,2→55%）
+	// ---- 2) 每段初始 2 天（上限为 2 时直接成立），再补齐差额 ----
 	segs := make([]int, wantSegs)
-	remain := total
-	for i := range segs {
-		left := len(segs) - i
-		// 剩余天数必须在 [left*1, left*maxRest] 内
-		lo := 1
-		if remain-(left-1)*maxRest > lo {
-			lo = remain - (left-1)*maxRest
-		}
-		hi := maxRest
-		if remain-(left-1)*1 < hi {
-			hi = remain - (left - 1)
-		}
-		if hi > remain {
-			hi = remain
-		}
-		if lo > hi {
-			lo = hi
-		}
-
-		r := next()
-		var pick int
-		if maxRest >= 3 {
-			switch {
-			case r < 0.35:
-				pick = 1
-			case r < 0.75:
-				pick = 2
-			default:
-				pick = 3
-			}
-		} else { // maxRest == 2
-			if r < 0.45 {
-				pick = 1
-			} else {
-				pick = 2
-			}
-		}
-		if pick < lo {
-			pick = lo
-		}
-		if pick > hi {
-			pick = hi
-		}
-		segs[i] = pick
-		remain -= pick
+	base := 2
+	if maxRest < base {
+		base = maxRest
 	}
-	// 兜底：若仍有剩余（理论上不会），追加到末段以前的可行位置
-	for remain > 0 {
-		done := false
+	sum := 0
+	for i := range segs {
+		segs[i] = base
+		sum += base
+	}
+
+	// 差额：正数=还需加休，负数=需减休
+	diff := total - sum
+	// 可加的空间（每段最多到 maxRest）
+	for diff > 0 {
+		moved := false
 		for i := range segs {
-			if remain == 0 {
+			if diff == 0 {
 				break
 			}
 			if segs[i] < maxRest {
 				segs[i]++
-				remain--
-				done = true
+				diff--
+				moved = true
 			}
 		}
-		if !done {
+		if !moved {
 			break
 		}
 	}
+	// 需减：优先把 2 天的段减成 1 天（即出现单休），且不产生 0
+	for diff < 0 {
+		moved := false
+		for i := range segs {
+			if diff == 0 {
+				break
+			}
+			if segs[i] > 1 {
+				segs[i]--
+				diff++
+				moved = true
+			}
+		}
+		if !moved {
+			break
+		}
+	}
+
 	return segs
 }
 
