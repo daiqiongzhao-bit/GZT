@@ -75,6 +75,7 @@ func Dashboard(c *gin.Context) {
 	})
 	todayTaskCount := 0
 	overdueCount := 0
+	runningCount := 0
 	monthTaskCount := 0
 	monthlyCount := 0
 	var todayTasks []models.Task
@@ -84,6 +85,11 @@ func Dashboard(c *gin.Context) {
 		ov := isOverdue(t)
 		due := isDueToday(t)
 		mt := isDueThisMonth(t)
+		// v0.14.0：已到点且仍在宽限期内 = 正在执行（供插件角标与前端标记使用）
+		run := isRunning(t)
+		if run {
+			runningCount++
+		}
 		// 当月任务 = 月度任务（type=monthly），展示全量含已完成，便于查看当月整月进度
 		if t.Type == models.TaskTypeMonthly {
 			t.Overdue = ov
@@ -95,6 +101,10 @@ func Dashboard(c *gin.Context) {
 		if due {
 			t.Overdue = ov
 			t.DueToday = due
+			t.Running = run
+			if run {
+				t.RunningLeft = runningLeftMinutes(t)
+			}
 			todayTasks = append(todayTasks, t)
 			todayTaskCount++
 		}
@@ -138,6 +148,7 @@ func Dashboard(c *gin.Context) {
 		"on_duty_count":   onDutyCount,
 		"today_tasks":     todayTaskCount,
 		"overdue_count":   overdueCount,
+		"running_count":   runningCount,
 		"month_tasks":       monthTaskCount,
 		"monthly_tasks":     monthlyCount,
 		"on_duty":           onDuty,

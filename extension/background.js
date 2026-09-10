@@ -34,17 +34,22 @@ async function refreshBadge() {
     const d = await r.json()
     const overdue = d.overdue_count || 0
     const today = d.today_tasks || 0
+    const running = d.running_count || 0
     let text = ''
     let color = '#4f46e5'
     if (overdue > 0) {
       text = String(overdue)
       color = '#ef4444' // 逾期红
+    } else if (running > 0) {
+      // v0.14.0：已到点、仍在宽限期内 —— 蓝色角标提示「有活正在执行」
+      text = String(running)
+      color = '#2563eb' // 执行中蓝
     } else if (today > 0) {
       text = String(today)
     }
     chrome.action.setBadgeText({ text })
     chrome.action.setBadgeBackgroundColor({ color })
-    chrome.storage.local.set({ swb_badge: { overdue, today, ts: Date.now() } })
+    chrome.storage.local.set({ swb_badge: { overdue, today, running, ts: Date.now() } })
   } catch (e) {
     // 网络异常不打扰用户，仅清除角标
     chrome.action.setBadgeText({ text: '' })

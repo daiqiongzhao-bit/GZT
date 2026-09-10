@@ -109,6 +109,8 @@ type Task struct {
 	DueToday     bool      `json:"due_today" gorm:"-"`      // 瞬态：今日是否应处理
 	DueThisMonth bool      `json:"due_this_month" gorm:"-"` // 瞬态：本月是否应处理
 	SoonOverdue  bool      `json:"soon_overdue" gorm:"-"`   // v0.9.2 瞬态：30 分钟内将逾期（橙色提醒）
+	Running      bool      `json:"running" gorm:"-"`        // v0.14.0 瞬态：已到点且处于宽限期内，正在执行中（蓝色提醒）
+	RunningLeft  int       `json:"running_left" gorm:"-"`   // v0.14.0 瞬态：正在执行时距逾期还剩多少分钟（0 = 无宽限期或未在执行）
 	CreatedAt    time.Time `json:"created_at"`
 }
 

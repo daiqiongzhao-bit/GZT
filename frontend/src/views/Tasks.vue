@@ -219,6 +219,7 @@
                 <div class="t-title-row">
                   <span class="t-title">{{ t.title }}</span>
                   <span v-if="t.soon_overdue && t.status !== 'done'" class="chip soon" title="距截止 30 分钟内，请尽快处理">即将逾期</span>
+                  <span v-if="t.running && t.status !== 'done'" class="chip running" :title="runningTitle(t)">正在执行</span>
                   <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                 </div>
                 <div v-if="t.note" class="t-note">{{ t.note }}</div>
@@ -544,6 +545,14 @@ function typeText(t) { return { daily: '每周', monthly: '每月', once: '单�
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高', medium: '中', low: '低' }[p] || '中' }
+// v0.14.0 正在执行：悬浮提示还剩多少分钟进入逾期，让执行人知道还剩多少缓冲
+function runningTitle(t) {
+  const left = Number(t?.running_left)
+  if (Number.isFinite(left) && left > 0) {
+    return `已到点，正在执行中；还剩约 ${left} 分钟，超时将记为逾期`
+  }
+  return '已到点，正在执行中'
+}
 // 截止日显示：月度任务只显示日期。
 // deadline 里的 09:00 是晨间推送提醒时点，不是完成期限（实际期限是截止日当天 23:59 前），
 // 把时刻显示出来会让人误以为「早上 9 点之前必须做完」

@@ -39,6 +39,93 @@ func timeOf(deadline string) string {
 	return ""
 }
 
+// taskStartTime 返回任务本期应当开始执行的时点（每日=今天的 HH:MM，一次/月度=截止时刻）。
+// 解析失败返回零值，调用方需用 IsZero 判断。
+func taskStartTime(t models.Task) time.Time {
+	switch t.Type {
+	case models.TaskTypeOnce:
+		if t.Deadline == "" {
+			return time.Time{}
+		}
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local)
+		if err != nil {
+			return time.Time{}
+		}
+		return dl
+	case models.TaskTypeDaily:
+		if t.Time == "" {
+			return time.Time{}
+		}
+		dt, err := time.ParseInLocation("2006-01-02T15:04", time.Now().Format("2006-01-02")+"T"+t.Time, time.Local)
+		if err != nil {
+			return time.Time{}
+		}
+		return dt
+	case models.TaskTypeMonthly:
+		if len(t.Deadline) < 16 {
+			return time.Time{}
+		}
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline[:16], time.Local)
+		if err != nil {
+			return time.Time{}
+		}
+		return dl
+	}
+	return time.Time{}
+}
+
+// isRunning v0.14.0：任务已到点、但仍在宽限期内 —— 也就是「正在执行」窗口。
+//
+// 典型场景：每日 9:00 的任务，宽限期 30 分钟。系统 9:00 推送提醒后，
+// 9:00~9:30 这段正是执行人干活的时间，应显示「正在执行」；
+// 9:30 之后仍未完成才转「逾期」。此前这段窗口三个状态全为 false，
+// 界面上没有任何提示，执行中的任务看起来像「没开始」。
+//
+// 注意：宽限期配置为 0（到点即逾期）时不存在执行窗口，恒为 false。
+func isRunning(t models.Task) bool {
+	if t.Status == models.TaskStatusDone {
+		return false
+	}
+	start := taskStartTime(t)
+	if start.IsZero() {
+		return false
+	}
+	grace := overdueGraceMinutes()
+	if grace <= 0 {
+		return false // 0 = 到点即逾期，没有「正在执行」的缓冲
+	}
+	now := time.Now()
+	if now.Before(start) {
+		return false // 还没到点（此时属于 soon_overdue 或尚未到期）
+	}
+	return now.Before(start.Add(time.Duration(grace) * time.Minute))
+}
+
+// runningLeftMinutes v0.14.0：正在执行的任务距离逾期还剩多少分钟（向上取整，最少 1 分钟）。
+// 供前端提示「还剩约 N 分钟」，避免用户以为可以无限期拖着。
+func runningLeftMinutes(t models.Task) int {
+	start := taskStartTime(t)
+	if start.IsZero() {
+		return 0
+	}
+	now := time.Now()
+	if now.Before(start) {
+		return 0 // 还没到点，不存在「剩余执行时间」
+	}
+	left := start.Add(time.Duration(overdueGraceMinutes()) * time.Minute).Sub(now)
+	if left <= 0 {
+		return 0
+	}
+	m := int(left / time.Minute)
+	if left%time.Minute > 0 {
+		m++
+	}
+	if m < 1 {
+		m = 1
+	}
+	return m
+}
+
 // isSoonOverdue v0.9.2：距截止 ≤ soonOverdueMinutes 分钟（默认 30）但尚未逾期
 // —— 比如 11:00 截单、当前 10:35，距离 25 分钟，需要橙色「即将逾期」提示
 // 让使用者知道这个任务马上就要逾期了，比单纯标红更早介入
@@ -61,17 +148,19 @@ func isSoonOverdue(t models.Task) bool {
 		}
 		return dl.Sub(now) <= time.Duration(soonOverdueMinutes())*time.Minute
 	case models.TaskTypeDaily:
-		if t.Time == "" {
-			return false
-		}
-		dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, time.Local)
-		if err != nil {
-			return false
-		}
-		if !dt.After(now) {
-			return false
-		}
-		return dt.Sub(now) <= time.Duration(soonOverdueMinutes())*time.Minute
+		// v0.14.0：每日任务到点前不再显示「即将逾期」，保持状态正常。
+		//
+		// 原因：每日任务的 09:00 是「开始执行时间」而非「截止时间」。
+		// 此前以 09:00 为基准往前推 30 分钟（08:30~09:00）就标橙色「即将逾期」，
+		// 但此刻任务压根还没开始，执行人看到橙色预警会误以为要出事了，
+		// 实际上这段时间是正常的「尚未到点」。
+		//
+		// 现在的状态机（以 09:00 任务、宽限 30 分钟为例）：
+		//   ~08:59  正常（无标记）
+		//   09:00~09:30 正在执行（蓝色，v0.14.0 新增）
+		//   09:30 之后  逾期（红色）
+		// 单次任务仍保留提前预警（其 deadline 是真实截止时刻，预警有意义）。
+		return false
 	}
 	return false
 }
@@ -429,6 +518,10 @@ func ListTasks(c *gin.Context) {
 		list[i].DueToday = isDueToday(list[i])
 		list[i].DueThisMonth = isDueThisMonth(list[i])
 		list[i].SoonOverdue = isSoonOverdue(list[i])
+		list[i].Running = isRunning(list[i])
+		if list[i].Running {
+			list[i].RunningLeft = runningLeftMinutes(list[i])
+		}
 	}
 	now := time.Now()
 	nowStr := now.Format("2006-01-02T15:04")
@@ -441,8 +534,8 @@ func ListTasks(c *gin.Context) {
 		if doneA && doneB {
 			return ta.CompletedAt.After(tb.CompletedAt) // 已完成的按完成时间新→旧
 		}
-		// 未完成：优先「需要马上处理」的（逾期 / 即将逾期），再按截止时间正序
-		actA, actB := ta.Overdue || ta.SoonOverdue, tb.Overdue || tb.SoonOverdue
+		// 未完成：优先「需要马上处理」的（正在执行 / 逾期 / 即将逾期），再按截止时间正序
+		actA, actB := ta.Running || ta.Overdue || ta.SoonOverdue, tb.Running || tb.Overdue || tb.SoonOverdue
 		if actA != actB {
 			return actA
 		}

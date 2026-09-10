@@ -274,6 +274,8 @@ label.fld { display: block; font-size: 12px; color: var(--text-dim); margin: 0 0
 .chip.warn { background: rgba(217, 119, 6, 0.12); border-color: rgba(217, 119, 6, 0.30); color: var(--warn); }
 .chip.danger { background: rgba(225, 29, 72, 0.10); border-color: rgba(225, 29, 72, 0.30); color: var(--danger); }
 .chip.soon { background: rgba(234, 88, 12, 0.12); border-color: rgba(234, 88, 12, 0.35); color: #ea580c; font-weight: 600; }
+/* v0.14.0 正在执行：已到点且仍在宽限期内（蓝色，区别于橙色「即将逾期」与红色「逾期」） */
+.chip.running { background: rgba(37, 99, 235, 0.12); border-color: rgba(37, 99, 235, 0.35); color: #2563eb; font-weight: 600; }
 .chip.ok { background: rgba(5, 150, 105, 0.10); border-color: rgba(5, 150, 105, 0.30); color: var(--ok); }
 
 .empty { text-align: center; color: var(--text-faint); padding: 40px 0; font-size: 13px; }
