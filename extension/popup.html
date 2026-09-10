@@ -43,9 +43,11 @@
   <section id="dash" class="box hidden">
     <!-- 今日班次 + 更新时间 -->
     <div class="meta">
-      <span id="my-shift" class="shift-chip">—</span>
+      <span id="me-line" class="me-line"></span>
       <span id="updated" class="upd"></span>
     </div>
+    <!-- 今日班次卡片：姓名（工号）+ 班次 + 时间段；无排班时给出可执行提示 -->
+    <div id="shift-card" class="shift-card"></div>
 
     <!-- 概览网格：今日待办 / 即将开始 / 执行中 / 逾期 / 本月，共 5 栏。
          标题栏的版本角标（id="plugin-ver"）由 popup.js 在运行时用

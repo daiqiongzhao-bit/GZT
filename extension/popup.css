@@ -69,13 +69,28 @@ body {
 .btn.danger.sm { width: auto; padding: 7px 12px; margin-top: 0; }
 
 /* 今日班次 + 更新时间 */
-.meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-.shift-chip {
-  font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
-  background: #eef0fe; color: #4f46e5;
+.meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.me-line { font-size: 12px; font-weight: 600; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upd { font-size: 11px; color: #9aa3b2; flex: none; }
+
+/* v0.17.0 今日班次卡片：一眼看到「我是谁 + 什么班 + 几点到几点」 */
+.shift-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px; margin-bottom: 12px; border-radius: 10px;
+  font-size: 12.5px;
 }
-.shift-chip.none { background: #f1f3f8; color: #9aa3b2; }
-.upd { font-size: 11px; color: #9aa3b2; }
+.shift-card.on { background: #eef2ff; border: 1px solid #d8dcf0; color: #3730a3; }
+.shift-card.off { background: #f6f7fa; border: 1px dashed #dfe3ec; color: #9aa3b2; justify-content: center; }
+.shift-card .sc-label { font-size: 11px; color: #6b7280; flex: none; }
+.shift-card .sc-shift { font-weight: 700; font-size: 13.5px; color: #4f46e5; flex: none; }
+.shift-card .sc-time { font-size: 11.5px; color: #6b7280; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* v0.17.0 顶部错误横幅：地址不通 / 登录过期等必须显式提示 */
+.err-banner {
+  margin: 8px 12px 0; padding: 8px 10px; border-radius: 9px;
+  background: #fdeef0; border: 1px solid #f6ccd2; color: #b91c1c;
+  font-size: 11.5px; line-height: 1.5;
+}
 
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
 .stats-5 { grid-template-columns: repeat(5, 1fr); padding: 0 2px; }
@@ -105,7 +120,18 @@ h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
 .ck.busy { border-color: #4f46e5; border-top-color: transparent; animation: sp .7s linear infinite; }
 .t { flex: 1; min-width: 0; }
 .t .n { font-size: 12.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t .m { font-size: 11px; color: #9aa3b2; }
+.t .m { font-size: 11px; color: #9aa3b2; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* v0.17.0 班次小标签：待办每条都能看出属于哪个班 */
+.sh {
+  flex: none; font-size: 10px; padding: 1px 6px; border-radius: 5px;
+  background: #eef0fe; color: #4f46e5; white-space: nowrap; font-weight: 600;
+}
+.sh.s-early { background: #fef3e2; color: #b45309; }
+.sh.s-mid   { background: #e3f9f0; color: #047857; }
+.sh.s-late  { background: #e6efff; color: #1d4ed8; }
+.sh.s-night { background: #f1ebfd; color: #6d28d9; }
+.sh.s-both  { background: #eef0fe; color: #4f46e5; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #fdeef0; color: #ef4444; flex: none; }
 .badge.run { background: #e8f0fe; color: #2563eb; }
 .badge.start { background: #e0f2f1; color: #0d9488; }
@@ -135,6 +161,20 @@ h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
   .btn.danger:hover { background: #2a1418; }
   .shift-chip { background: #1b2742; color: #93b4ff; }
   .shift-chip.none { background: #161d2e; color: #6b7689; }
+  /* v0.17.0 深色模式：班次卡片 / 错误横幅 / 班次标签 */
+  .me-line { color: #c6cede; }
+  .shift-card.on { background: #1b2742; border-color: #2a3550; color: #a5b4fc; }
+  .shift-card.off { background: #161d2e; border-color: #2a3550; color: #6b7689; }
+  .shift-card .sc-label { color: #8b96ac; }
+  .shift-card .sc-shift { color: #93b4ff; }
+  .shift-card .sc-time { color: #8b96ac; }
+  .err-banner { background: #2a1418; border-color: #50202a; color: #fca5a5; }
+  .sh { background: #1b2742; color: #93b4ff; }
+  .sh.s-early { background: #33240f; color: #fbbf24; }
+  .sh.s-mid   { background: #0f2e28; color: #34d399; }
+  .sh.s-late  { background: #152442; color: #60a5fa; }
+  .sh.s-night { background: #241a42; color: #a78bfa; }
+  .sh.s-both  { background: #1b2742; color: #93b4ff; }
   .stat { background: #141b2e; border-color: #233048; }
   .stat b { color: #e6ebf5; }
   .stat span { color: #8b96ac; }

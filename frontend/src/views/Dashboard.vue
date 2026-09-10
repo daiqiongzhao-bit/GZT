@@ -73,7 +73,7 @@
               <tbody>
                 <tr v-for="(r, i) in dutyRows" :key="i">
                   <td class="col-dept"><span class="dept-tag">{{ r.dept_name || '未分配' }}</span></td>
-                  <td class="col-name">{{ r.name }}</td>
+                  <td class="col-name">{{ r.name }}<em v-if="r.emp_no" class="emp-no">{{ r.emp_no }}</em></td>
                   <td class="col-shift"><span class="chip" :class="shiftClass(r.shift)">{{ r.shift }}</span></td>
                 </tr>
               </tbody>
@@ -111,7 +111,7 @@
                     <div v-if="t.note" class="t-note">{{ t.note }}</div>
                   </td>
                   <td class="col-when"><span class="when">{{ t.time || (t.deadline ? dlText(t.deadline) : '—') }}</span></td>
-                  <td class="col-who">{{ t.assignee || '—' }}</td>
+                  <td class="col-who">{{ whoText(t) }}</td>
                   <td class="col-prio"><span class="chip" :class="prioClass(t.priority)">{{ prioText(t.priority) }}</span></td>
                 </tr>
               </tbody>
@@ -161,7 +161,7 @@
                     <span v-else-if="t.deadline" class="when">{{ dlText(t.deadline) }}</span>
                     <span v-else class="when faint">—</span>
                   </td>
-                  <td class="col-who">{{ t.assignee || '—' }}</td>
+                  <td class="col-who">{{ whoText(t) }}</td>
                   <td class="col-prio"><span class="chip" :class="prioClass(t.priority)">{{ prioText(t.priority) }}</span></td>
                 </tr>
               </tbody>
@@ -206,7 +206,7 @@
                     <div v-if="t.note" class="t-note">{{ t.note }}</div>
                   </td>
                   <td class="col-when"><span class="when">{{ t.deadline ? dayText(t.deadline) : '—' }}</span></td>
-                  <td class="col-who">{{ t.assignee || '—' }}</td>
+                  <td class="col-who">{{ whoText(t) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -352,6 +352,14 @@ function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t]
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高优', medium: '中优', low: '低优' }[p] || '中优' }
 function dlText(s) { return s.replace('T', ' ').slice(0, 16) }
+// 负责人展示：后端已下发带工号的 assignee_text（如「张伟（YY001）、李娜（YY002）」），
+// 老数据回退到 assignee / assignees，避免升级瞬间列表变空。
+function whoText(t) {
+  if (t.assignee_text) return t.assignee_text
+  if (Array.isArray(t.assignee_names) && t.assignee_names.length) return t.assignee_names.join('、')
+  if (t.assignees) { try { const a = JSON.parse(t.assignees); if (Array.isArray(a) && a.length) return a.join('、') } catch (e) { /* 忽略 */ } }
+  return t.assignee || '—'
+}
 
 async function toggle(t) {
   const toDone = t.status !== 'done'
@@ -419,6 +427,8 @@ onUnmounted(() => useAutoRefresh(refreshDash, false))
 .duty-table .col-dept { width: 96px; }
 .duty-table .col-name { font-weight: 600; }
 .duty-table .col-shift { width: 84px; }
+/* 姓名后的工号：小字灰色，不抢姓名的视觉重心 */
+.duty-table .emp-no { font-style: normal; font-weight: 400; font-size: 12px; color: var(--text-faint); margin-left: 6px; }
 .dept-tag { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }
 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }

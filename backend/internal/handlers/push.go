@@ -13,8 +13,8 @@ import (
 	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/models"
 
-	"github.com/gin-gonic/gin"
 	webpush "github.com/SherClockHolmes/webpush-go"
+	"github.com/gin-gonic/gin"
 )
 
 // ===================== 浏览器 Web Push（v0.13.0） =====================
@@ -29,10 +29,17 @@ var (
 )
 
 // pushKeyFile VAPID 密钥文件（与数据库同目录，随数据卷持久化；权限 0600）
+// config.C 为 nil（如单测直接构造 gin 引擎、未走 config.Init）时回退到当前目录，
+// 避免空指针 panic —— 推送属于可选能力，配置缺失时不应拖垮业务主流程。
 func pushKeyFile() string {
-	dir := filepath.Dir(config.C.DBPath)
+	dir := "."
+	if config.C != nil && config.C.DBPath != "" {
+		if d := filepath.Dir(config.C.DBPath); d != "." {
+			dir = d
+		}
+	}
 	if dir == "." {
-		dir = ""
+		return "vapid.json"
 	}
 	return filepath.Join(dir, "vapid.json")
 }
@@ -145,7 +152,14 @@ type pushPayload struct {
 
 // pushToUser 向某用户的全部订阅设备推送站内提醒。无订阅/非 HTTPS 环境自动跳过。
 // 404/410 表示订阅失效，顺手清理，避免后续每次都尝试。
+// v0.17.0：整体加 recover 兜底 —— 推送是可选的增强能力，
+// 任何内部异常都不允许向上冒泡影响发通知/广播等业务主流程。
 func pushToUser(userID uint, title, body string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("push", "推送任务异常（已忽略，不影响主流程）: %v", r)
+		}
+	}()
 	if userID == 0 {
 		return
 	}

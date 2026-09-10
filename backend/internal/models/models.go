@@ -114,7 +114,11 @@ type Task struct {
 	RunningLeft  int       `json:"running_left" gorm:"-"`   // v0.14.0 瞬态：正在执行时距逾期还剩多少分钟（0 = 无宽限期或未在执行）
 	Starting     bool      `json:"starting" gorm:"-"`       // v0.14.1 瞬态：距开始 ≤ 30 分钟但尚未到点（青色「即将开始」提醒）
 	StartingIn   int       `json:"starting_in" gorm:"-"`    // v0.14.1 瞬态：距开始还有多少分钟（0 = 已到点或无开始时间）
-	CreatedAt    time.Time `json:"created_at"`
+	// v0.17.0 瞬态：供插件/前端直接展示，避免各端重复解析负责人与班次时间段
+	AssigneeNames []string  `json:"assignee_names,omitempty" gorm:"-"` // 负责人姓名数组
+	AssigneeText  string    `json:"assignee_text,omitempty" gorm:"-"`  // 「张三（YY001）、李四（YY002）」
+	ShiftTime     string    `json:"shift_time,omitempty" gorm:"-"`     // 班次时间段，如 "09:00-17:00"
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // Webhook 部门机器人推送地址（AES 加密存储）
@@ -213,21 +217,21 @@ type NotifAttachment struct {
 
 // Notification 站内通知：管理员修改与用户相关信息时推送给当事人
 type Notification struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	UserID      uint      `json:"user_id" gorm:"index"` // 接收人
-	Kind        string    `json:"kind" gorm:"size:16"`  // schedule / user / password / broadcast
-	Title       string    `json:"title" gorm:"size:128"` // 短标题
-	Content     string    `json:"content" gorm:"size:512"` // 详情：谁、何时、改了啥
-	Link        string    `json:"link" gorm:"size:512"`     // 附带的超链接（广播/定向发送可选）
-	Attachments string    `json:"attachments" gorm:"type:text"` // JSON 数组：[]NotifAttachment（广播附件）
-	ActorID     uint      `json:"actor_id"`                  // 操作人
-	ActorName   string    `json:"actor_name" gorm:"size:64"` // 操作人姓名
+	ID          uint       `json:"id" gorm:"primaryKey"`
+	UserID      uint       `json:"user_id" gorm:"index"`              // 接收人
+	Kind        string     `json:"kind" gorm:"size:16"`               // schedule / user / password / broadcast
+	Title       string     `json:"title" gorm:"size:128"`             // 短标题
+	Content     string     `json:"content" gorm:"size:512"`           // 详情：谁、何时、改了啥
+	Link        string     `json:"link" gorm:"size:512"`              // 附带的超链接（广播/定向发送可选）
+	Attachments string     `json:"attachments" gorm:"type:text"`      // JSON 数组：[]NotifAttachment（广播附件）
+	ActorID     uint       `json:"actor_id"`                          // 操作人
+	ActorName   string     `json:"actor_name" gorm:"size:64"`         // 操作人姓名
 	BroadcastID string     `json:"broadcast_id" gorm:"size:32;index"` // 同一次广播聚合键；空=非广播通知
 	RequireAck  bool       `json:"require_ack" gorm:"default:false"`  // 广播要求接收人「确认收到」
 	Ack         bool       `json:"ack" gorm:"default:false"`          // 接收人是否已确认收到
 	AckedAt     *time.Time `json:"acked_at"`                          // 确认时间
-	Read        bool      `json:"read" gorm:"default:false"` // 是否已读
-	CreatedAt   time.Time `json:"created_at"`
+	Read        bool       `json:"read" gorm:"default:false"`         // 是否已读
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 // Claims JWT 载荷
@@ -285,13 +289,13 @@ type KnowledgeEntry struct {
 	OwnerName string         `json:"owner_name" gorm:"size:64"` // 创建者姓名（展示用）
 	DeptID    uint           `json:"dept_id" gorm:"index"`      // 所属部门（隔离范围）
 	// —— 知识库升级字段（v0.15.0，全部可空/有默认，向后兼容） ——
-	Tags      string         `json:"tags" gorm:"type:text"`            // 多维标签：JSON 数组字符串，如 ["SOP","排班"]
-	ParentID  uint           `json:"parent_id" gorm:"index;default:0"` // 目录树父节点，0=根
-	Status    string         `json:"status" gorm:"size:16;default:published"` // draft / published
-	Pinned    int            `json:"pinned" gorm:"default:0"`         // 置顶（1=置顶）
-	Starred   int            `json:"starred" gorm:"default:0"`        // 收藏（1=已收藏）
-	ViewCount int            `json:"view_count" gorm:"default:0"`      // 阅读量
-	Summary   string         `json:"summary" gorm:"type:text"`        // AI 摘要（可选，P3 预留）
+	Tags      string `json:"tags" gorm:"type:text"`                   // 多维标签：JSON 数组字符串，如 ["SOP","排班"]
+	ParentID  uint   `json:"parent_id" gorm:"index;default:0"`        // 目录树父节点，0=根
+	Status    string `json:"status" gorm:"size:16;default:published"` // draft / published
+	Pinned    int    `json:"pinned" gorm:"default:0"`                 // 置顶（1=置顶）
+	Starred   int    `json:"starred" gorm:"default:0"`                // 收藏（1=已收藏）
+	ViewCount int    `json:"view_count" gorm:"default:0"`             // 阅读量
+	Summary   string `json:"summary" gorm:"type:text"`                // AI 摘要（可选，P3 预留）
 	// SeedKey 系统自动种入标记（如 "manual"）；空 = 用户自行创建。
 	// 用显式、持久且客户端不可注入的标记来识别自动种入条目，
 	// 避免按 title/category/owner 等可变属性推断带来的误删（误判为用户条目）与漏删（漏判为孤儿）。
@@ -357,7 +361,7 @@ type KnowledgeComment struct {
 type KnowledgeVersion struct {
 	ID           uint      `json:"id" gorm:"primaryKey"`
 	EntryID      uint      `json:"entry_id" gorm:"index;not null"`
-	Version      int       `json:"version"`                     // 快照序号，从 1 递增
+	Version      int       `json:"version"` // 快照序号，从 1 递增
 	Title        string    `json:"title" gorm:"size:255"`
 	Content      string    `json:"content" gorm:"type:text"`
 	Tags         string    `json:"tags" gorm:"type:text"`
@@ -373,9 +377,9 @@ type KnowledgeTemplate struct {
 	Title     string    `json:"title" gorm:"size:255;not null"`
 	Category  string    `json:"category" gorm:"size:64"`  // 模板归类（如：SOP/排班/交接）
 	Content   string    `json:"content" gorm:"type:text"` // 模板正文（HTML）
-	Tags      string    `json:"tags" gorm:"type:text"`     // 应用模板时默认带上的标签
-	Builtin   int       `json:"builtin" gorm:"default:0"`  // 1=系统预置（不可删）
-	OwnerID   uint      `json:"owner_id" gorm:"index"`     // 自建模板的创建者
+	Tags      string    `json:"tags" gorm:"type:text"`    // 应用模板时默认带上的标签
+	Builtin   int       `json:"builtin" gorm:"default:0"` // 1=系统预置（不可删）
+	OwnerID   uint      `json:"owner_id" gorm:"index"`    // 自建模板的创建者
 	OwnerName string    `json:"owner_name" gorm:"size:64"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -412,22 +416,22 @@ type WorkLog struct {
 // WorkHandover 交接接力：把"做到哪 + 还没做完"转给接收人继续
 // 支持多人接收：AssigneeIDs 存全部接收人 ID（JSON 数组），AssigneeID 保留为第一个接收人（兼容旧数据/旧版接口）
 type WorkHandover struct {
-	ID            uint       `json:"id" gorm:"primaryKey"`
-	Title         string     `json:"title" gorm:"size:255;not null"`
-	FromProgress  string     `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
-	Todo          string     `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
+	ID            uint           `json:"id" gorm:"primaryKey"`
+	Title         string         `json:"title" gorm:"size:255;not null"`
+	FromProgress  string         `json:"from_progress" gorm:"type:text"` // 当前进展（已完成 / 进行到哪）
+	Todo          string         `json:"todo" gorm:"type:text"`          // 需要接收人继续做的事
 	Scope         WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
-	SenderID      uint       `json:"sender_id" gorm:"index"`        // 发出人
-	SenderName    string     `json:"sender_name" gorm:"size:64"`
-	AssigneeID    uint       `json:"assignee_id" gorm:"index"`      // 主接收人（第一个，兼容）
-	AssigneeName  string     `json:"assignee_name" gorm:"size:64"`   // 主接收人姓名
-	AssigneeIDs   string     `json:"assignee_ids" gorm:"type:text"`  // 全部接收人 ID（JSON 数组）
-	AssigneeNames string     `json:"assignee_names" gorm:"type:text"`// 全部接收人姓名（JSON 数组，给前端直接展示）
-	DeptID        uint       `json:"dept_id" gorm:"index"`          // 发出人所属部门
-	Status        string     `json:"status" gorm:"size:16;default:pending"`
-	Note          string     `json:"note" gorm:"type:text"`         // 接收人完成时的备注（最新一条，历史见 WorkHandoverEvent）
-	CompletedAt   *time.Time `json:"completed_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	SenderID      uint           `json:"sender_id" gorm:"index"` // 发出人
+	SenderName    string         `json:"sender_name" gorm:"size:64"`
+	AssigneeID    uint           `json:"assignee_id" gorm:"index"`        // 主接收人（第一个，兼容）
+	AssigneeName  string         `json:"assignee_name" gorm:"size:64"`    // 主接收人姓名
+	AssigneeIDs   string         `json:"assignee_ids" gorm:"type:text"`   // 全部接收人 ID（JSON 数组）
+	AssigneeNames string         `json:"assignee_names" gorm:"type:text"` // 全部接收人姓名（JSON 数组，给前端直接展示）
+	DeptID        uint           `json:"dept_id" gorm:"index"`            // 发出人所属部门
+	Status        string         `json:"status" gorm:"size:16;default:pending"`
+	Note          string         `json:"note" gorm:"type:text"` // 接收人完成时的备注（最新一条，历史见 WorkHandoverEvent）
+	CompletedAt   *time.Time     `json:"completed_at"`
+	CreatedAt     time.Time      `json:"created_at"`
 	// ===== v0.16.0 补齐：优先级 / 截止 / 接手与退回 / 催办 =====
 	Priority       string     `json:"priority" gorm:"size:8;default:normal"` // normal 普通 / urgent 紧急
 	DueAt          *time.Time `json:"due_at"`                                // 期望完成时间（逾期判定基准）
@@ -483,11 +487,11 @@ type ScheduledBroadcast struct {
 	Content     string    `json:"content" gorm:"size:512;not null"`
 	Link        string    `json:"link" gorm:"size:512"`
 	RequireAck  bool      `json:"require_ack" gorm:"default:false"`
-	AllDepts    bool      `json:"all_depts" gorm:"default:false"` // 全部部门
-	DeptIDs     string    `json:"dept_ids" gorm:"type:text"`      // JSON []uint：目标部门（顶层/用户所选，发送时含子孙）
+	AllDepts    bool      `json:"all_depts" gorm:"default:false"`    // 全部部门
+	DeptIDs     string    `json:"dept_ids" gorm:"type:text"`         // JSON []uint：目标部门（顶层/用户所选，发送时含子孙）
 	Repeat      string    `json:"repeat" gorm:"size:8;default:once"` // once|daily|weekly
-	WeekDays    string    `json:"week_days" gorm:"size:32"`       // weekly：逗号分隔 1-7（1=周一…7=周日）
-	SendAt      time.Time `json:"send_at"`                        // 下次触发时间（发送成功后按 repeat 前移到下一次）
+	WeekDays    string    `json:"week_days" gorm:"size:32"`          // weekly：逗号分隔 1-7（1=周一…7=周日）
+	SendAt      time.Time `json:"send_at"`                           // 下次触发时间（发送成功后按 repeat 前移到下一次）
 	CreatorID   uint      `json:"creator_id"`
 	CreatorName string    `json:"creator_name" gorm:"size:64"`
 	Active      bool      `json:"active" gorm:"default:true"`

@@ -21,3 +21,4 @@ runtime.log
 __pycache__/
 *.pyc
 *.pyo
+vapid.json
