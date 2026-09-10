@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 )
 
 // Role 角色：super_admin 超级管理员 / dept_admin 部门管理员 / executor 执行者
@@ -272,6 +273,15 @@ type KnowledgeEntry struct {
 	OwnerID   uint           `json:"owner_id" gorm:"index"`     // 创建者
 	OwnerName string         `json:"owner_name" gorm:"size:64"` // 创建者姓名（展示用）
 	DeptID    uint           `json:"dept_id" gorm:"index"`      // 所属部门（隔离范围）
+	// —— 知识库升级字段（v0.15.0，全部可空/有默认，向后兼容） ——
+	Tags      string         `json:"tags" gorm:"type:text"`            // 多维标签：JSON 数组字符串，如 ["SOP","排班"]
+	ParentID  uint           `json:"parent_id" gorm:"index;default:0"` // 目录树父节点，0=根
+	Status    string         `json:"status" gorm:"size:16;default:published"` // draft / published
+	Pinned    int            `json:"pinned" gorm:"default:0"`         // 置顶（1=置顶）
+	Starred   int            `json:"starred" gorm:"default:0"`        // 收藏（1=已收藏）
+	ViewCount int            `json:"view_count" gorm:"default:0"`      // 阅读量
+	Summary   string         `json:"summary" gorm:"type:text"`        // AI 摘要（可选，P3 预留）
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`                  // 软删除（回收站）
 	UpdatedAt time.Time      `json:"updated_at"`
 	CreatedAt time.Time      `json:"created_at"`
 }
@@ -314,6 +324,53 @@ type KnowledgeChangeLog struct {
 	DeptID       uint      `json:"dept_id" gorm:"index"`    // 操作人所属部门
 	Detail       string    `json:"detail" gorm:"type:text"` // 变更说明：修改了哪些字段、修改前/修改后内容
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// KnowledgeComment 知识条目协作评论（支持 @成员触发通知、楼中楼回复）
+type KnowledgeComment struct {
+	ID        uint           `json:"id" gorm:"primaryKey"`
+	EntryID   uint           `json:"entry_id" gorm:"index;not null"` // 所属知识条目
+	ParentID  uint           `json:"parent_id" gorm:"default:0"`     // 0=顶层评论；非0=对某条评论的回复
+	UserID    uint           `json:"user_id" gorm:"index"`           // 评论人
+	UserName  string         `json:"user_name" gorm:"size:64"`
+	Content   string         `json:"content" gorm:"type:text"` // 评论内容（纯文本，@成员以 @姓名 形式）
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// KnowledgeVersion 知识条目版本快照（每次保存存一份，可回滚）
+type KnowledgeVersion struct {
+	ID           uint      `json:"id" gorm:"primaryKey"`
+	EntryID      uint      `json:"entry_id" gorm:"index;not null"`
+	Version      int       `json:"version"`                     // 快照序号，从 1 递增
+	Title        string    `json:"title" gorm:"size:255"`
+	Content      string    `json:"content" gorm:"type:text"`
+	Tags         string    `json:"tags" gorm:"type:text"`
+	Category     string    `json:"category" gorm:"size:64"`
+	OperatorID   uint      `json:"operator_id"`
+	OperatorName string    `json:"operator_name" gorm:"size:64"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// KnowledgeTemplate 知识模板：预置 SOP/排班规则/交接模板 + 用户自建
+type KnowledgeTemplate struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Title     string    `json:"title" gorm:"size:255;not null"`
+	Category  string    `json:"category" gorm:"size:64"`  // 模板归类（如：SOP/排班/交接）
+	Content   string    `json:"content" gorm:"type:text"` // 模板正文（HTML）
+	Tags      string    `json:"tags" gorm:"type:text"`     // 应用模板时默认带上的标签
+	Builtin   int       `json:"builtin" gorm:"default:0"`  // 1=系统预置（不可删）
+	OwnerID   uint      `json:"owner_id" gorm:"index"`     // 自建模板的创建者
+	OwnerName string    `json:"owner_name" gorm:"size:64"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// KnowledgeLink 知识条目间引用关系（双向链接）：source 在正文以 [[target 标题]] 引用 target
+type KnowledgeLink struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	SourceID  uint      `json:"source_id" gorm:"index;not null"`
+	TargetID  uint      `json:"target_id" gorm:"index;not null"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // WorkLog 工作日志：某日记录当天做了什么 / 还没做完的（一天可多篇）

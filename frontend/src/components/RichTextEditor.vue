@@ -16,6 +16,10 @@
       <button type="button" class="t-btn" @mousedown.prevent="exec('justifyLeft')" title="左对齐">⇤</button>
       <button type="button" class="t-btn" @mousedown.prevent="exec('justifyCenter')" title="居中">≡</button>
       <span class="t-sep"></span>
+      <button type="button" class="t-btn" @mousedown.prevent="insertTable" title="插入表格（3×3，可扩展）">▦ 表格</button>
+      <button type="button" class="t-btn" @mousedown.prevent="insertInlineCode" title="行内代码">⟨⟩ 代码</button>
+      <button type="button" class="t-btn" @mousedown.prevent="insertCodeBlock" title="代码块">▤ 代码块</button>
+      <span class="t-sep"></span>
       <button type="button" class="t-btn" @mousedown.prevent="insertLink" title="插入超链接">🔗 链接</button>
       <button type="button" class="t-btn" :disabled="!canInsertImage" @mousedown.prevent="pickImage" :title="canInsertImage ? '插入图片' : imageBtnHint">🖼 图片</button>
       <button type="button" class="t-btn" @mousedown.prevent="insertHr" title="分割线">―</button>
@@ -146,6 +150,31 @@ function insertLink() {
   exec('insertHTML', html)
 }
 function insertHr() { exec('insertHTML', '<hr/>') }
+
+// ---------- 表格 / 代码 ----------
+// 表格用 border 属性（行内 style 会被后端净化收敛），具体视觉由 CSS 控制
+function insertTable() {
+  let t = '<table border="1"><tbody>'
+  for (let r = 0; r < 3; r++) {
+    t += '<tr>'
+    for (let c = 0; c < 3; c++) t += '<td>&nbsp;</td>'
+    t += '</tr>'
+  }
+  t += '</tbody></table>'
+  exec('insertHTML', t)
+}
+// 行内代码：优先用当前选区文本包裹，否则插入占位
+function insertInlineCode() {
+  const sel = window.getSelection()
+  const text = sel && sel.toString() ? sel.toString() : '代码'
+  exec('insertHTML', '<code>' + escapeHtml(text) + '</code>')
+}
+// 代码块
+function insertCodeBlock() {
+  const sel = window.getSelection()
+  const text = sel && sel.toString() ? sel.toString() : '在此输入代码'
+  exec('insertHTML', '<pre><code>' + escapeHtml(text) + '</code></pre>')
+}
 
 // ---------- 图片：粘贴 / 选择 ----------
 function pickImage() {
@@ -384,6 +413,8 @@ defineExpose({ focus: () => editable.value && editable.value.focus(), clear: () 
 .rte-body :deep(hr) { border: 0; border-top: 1px dashed var(--glass-border); margin: 12px 0; }
 .rte-body :deep(pre) { background: var(--overlay-2); padding: 8px 10px; border-radius: 8px; font-size: 12.5px; overflow-x: auto; }
 .rte-body :deep(code) { background: var(--overlay-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.rte-body :deep(table) { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+.rte-body :deep(th), .rte-body :deep(td) { border: 1px solid var(--glass-border); padding: 5px 9px; vertical-align: top; text-align: left; }
 .rte-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--hairline); font-size: 11.5px; color: var(--text-faint); }
 .rte-tip { flex: 1; min-width: 0; }
 .rte-warn { color: #b45309; white-space: normal; max-width: 60%; }

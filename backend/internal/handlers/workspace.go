@@ -83,26 +83,91 @@ func ListKnowledgeHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
-// ListKnowledge 知识库列表（可见范围内），支持 ?kw 全文搜索、?category 分类、?mine 只看自己
+// ListKnowledge 知识库列表（可见范围内），支持全文检索(FTS5)/分类/标签/目录/状态/收藏筛选/排序
 func ListKnowledge(c *gin.Context) {
 	cl := middleware.GetClaims(c)
 	q := db.DB.Model(&models.KnowledgeEntry{})
 	q = scopeVisibleQ(c, q)
+
+	// —— 全文检索：优先 FTS5（中文按字分词 + bm25 相关性）；未命中降级 LIKE ——
+	var ftsRank map[uint]float64
 	if kw := strings.TrimSpace(c.Query("kw")); kw != "" {
-		like := "%" + kw + "%"
-		q = q.Where("title LIKE ? OR content LIKE ? OR category LIKE ?", like, like, like)
+		if mq := ftsMatchQuery(kw); mq != "" {
+			type ftsRow struct {
+				Rowid int64   `json:"rowid"`
+				Rank  float64 `json:"rank"`
+			}
+			var rows []ftsRow
+			db.DB.Raw("SELECT rowid, bm25(knowledge_fts) AS rank FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY rank", mq).Scan(&rows)
+			ids := make([]uint, 0, len(rows))
+			ftsRank = map[uint]float64{}
+			for _, r := range rows {
+				ids = append(ids, uint(r.Rowid))
+				ftsRank[uint(r.Rowid)] = r.Rank
+			}
+			if len(ids) == 0 {
+				like := "%" + kw + "%"
+				q = q.Where("title LIKE ? OR content LIKE ? OR tags LIKE ?", like, like, like)
+			} else {
+				q = q.Where("id IN ?", ids)
+			}
+		} else {
+			like := "%" + kw + "%"
+			q = q.Where("title LIKE ? OR content LIKE ? OR tags LIKE ?", like, like, like)
+		}
 	}
 	if cat := strings.TrimSpace(c.Query("category")); cat != "" {
 		q = q.Where("category = ?", cat)
 	}
+	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
+		q = q.Where("tags LIKE ?", "%"+tag+"%")
+	}
+	if parent := strings.TrimSpace(c.Query("parent")); parent != "" {
+		if parent == "root" {
+			q = q.Where("parent_id = 0")
+		} else if pid, err := strconv.ParseUint(parent, 10, 64); err == nil {
+			q = q.Where("parent_id = ?", pid)
+		}
+	}
+	if status := strings.TrimSpace(c.Query("status")); status != "" {
+		q = q.Where("status = ?", status)
+	} else if cl != nil && cl.Role != models.RoleSuperAdmin {
+		// 默认隐藏「他人 + 部门共享 + 草稿」
+		q = q.Where("status = ? OR owner_id = ?", "published", cl.UserID)
+	}
 	if c.Query("mine") == "1" && cl != nil {
 		q = q.Where("owner_id = ?", cl.UserID)
 	}
+	if c.Query("starred") == "1" {
+		q = q.Where("starred = 1")
+	}
+	if sortBy := strings.TrimSpace(c.Query("sort")); sortBy == "hot" {
+		q = q.Order("view_count desc, updated_at desc")
+	} else if sortBy == "recent" {
+		q = q.Order("updated_at desc")
+	} else if sortBy == "created" {
+		q = q.Order("created_at desc")
+	} else {
+		q = q.Order("updated_at desc")
+	}
 	var list []models.KnowledgeEntry
-	if err := q.Order("updated_at desc").Find(&list).Error; err != nil {
+	if err := q.Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 二次排序：置顶优先；有检索时按相关性（bm25 越小越相关）更靠前
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].Pinned != list[j].Pinned {
+			return list[i].Pinned > list[j].Pinned
+		}
+		if ftsRank != nil {
+			ri, rj := ftsRank[list[i].ID], ftsRank[list[j].ID]
+			if ri != rj {
+				return ri < rj
+			}
+		}
+		return list[i].UpdatedAt.After(list[j].UpdatedAt)
+	})
 	c.JSON(http.StatusOK, list)
 }
 
@@ -122,10 +187,13 @@ func ListKnowledgeCategories(c *gin.Context) {
 func CreateKnowledge(c *gin.Context) {
 	cl := middleware.GetClaims(c)
 	var req struct {
-		Title    string `json:"title"`
-		Category string `json:"category"`
-		Content  string `json:"content"`
-		Scope    string `json:"scope"` // private | department
+		Title    string   `json:"title"`
+		Category string   `json:"category"`
+		Content  string   `json:"content"`
+		Scope    string   `json:"scope"` // private | department
+		Tags     []string `json:"tags"`
+		ParentID uint     `json:"parent_id"`
+		Status   string   `json:"status"` // draft | published
 		// 编辑期（条目尚未保存）上传到中转缓存的附件 id：内嵌图片 + 下方「附件」列表文件
 		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
@@ -141,6 +209,9 @@ func CreateKnowledge(c *gin.Context) {
 	if req.Scope != string(models.ScopePrivate) {
 		req.Scope = string(models.ScopeDepartment) // 默认同部门共享
 	}
+	if req.Status != "draft" {
+		req.Status = "published"
+	}
 	// 服务端白名单净化，防存储型 XSS（纵深防御，绕过前端也拦得住）
 	req.Content = sanitizeRichContent(req.Content)
 	entry := models.KnowledgeEntry{
@@ -151,6 +222,9 @@ func CreateKnowledge(c *gin.Context) {
 		OwnerID:   cl.UserID,
 		OwnerName: cl.Username,
 		DeptID:    cl.DeptID,
+		Tags:      normTags(req.Tags),
+		ParentID:  req.ParentID,
+		Status:    req.Status,
 	}
 	if err := db.DB.Create(&entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -164,6 +238,10 @@ func CreateKnowledge(c *gin.Context) {
 			recordKnowledgeLog(entry.ID, cl, "attachment_adopt", "新建时转正编辑期中转缓存的附件（图片随正文保存，文件进入附件列表）")
 		}
 	}
+	// 维护检索索引 / 版本快照 / 双向链接
+	ftsUpsert(entry)
+	snapshotVersion(entry, cl)
+	refreshKnowledgeLinks(entry)
 	addLog(c, cl.UserID, cl.Username, "新增知识库: "+entry.Title)
 	recordKnowledgeLog(entry.ID, cl, "create",
 		fmt.Sprintf("创建条目：标题「%s」、分类「%s」、可见范围「%s」。正文：%s",
@@ -195,10 +273,13 @@ func UpdateKnowledge(c *gin.Context) {
 	}
 	cl := middleware.GetClaims(c)
 	var req struct {
-		Title    string `json:"title"`
-		Category string `json:"category"`
-		Content  string `json:"content"`
-		Scope    string `json:"scope"`
+		Title    string   `json:"title"`
+		Category string   `json:"category"`
+		Content  string   `json:"content"`
+		Scope    string   `json:"scope"`
+		Tags     []string `json:"tags"`
+		ParentID uint     `json:"parent_id"`
+		Status   string   `json:"status"`
 		// 编辑期（新建未保存时）上传到中转缓存的附件 id
 		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
@@ -211,12 +292,17 @@ func UpdateKnowledge(c *gin.Context) {
 		return
 	}
 	// 记录修改前的旧值（用于变更日志的「修改前/后内容」）
-	oldTitle, oldCategory, oldContent, oldScope := entry.Title, entry.Category, entry.Content, entry.Scope
+	oldTitle, oldCategory, oldContent, oldScope, oldTags := entry.Title, entry.Category, entry.Content, entry.Scope, entry.Tags
 	entry.Title = strings.TrimSpace(req.Title)
 	entry.Category = strings.TrimSpace(req.Category)
 	// 服务端白名单净化，防存储型 XSS（纵深防御）
 	req.Content = sanitizeRichContent(req.Content)
 	entry.Content = req.Content
+	if req.Status == "draft" || req.Status == "published" {
+		entry.Status = req.Status
+	}
+	entry.Tags = normTags(req.Tags)
+	entry.ParentID = req.ParentID
 	if req.Scope == string(models.ScopePrivate) || req.Scope == string(models.ScopeDepartment) {
 		entry.Scope = models.WorkspaceScope(req.Scope)
 	}
@@ -231,6 +317,10 @@ func UpdateKnowledge(c *gin.Context) {
 			db.DB.Model(&entry).Update("content", adopted)
 		}
 	}
+	// 维护检索索引 / 版本快照 / 双向链接
+	ftsUpsert(*entry)
+	snapshotVersion(*entry, cl)
+	refreshKnowledgeLinks(*entry)
 	addLog(c, cl.UserID, cl.Username, "更新知识库: "+entry.Title)
 	// 变更/协作日志：逐字段记录「修改前 → 修改后」
 	var parts []string
@@ -239,6 +329,9 @@ func UpdateKnowledge(c *gin.Context) {
 	}
 	if oldCategory != entry.Category {
 		parts = append(parts, fmt.Sprintf("分类：%q → %q", oldCategory, entry.Category))
+	}
+	if oldTags != entry.Tags {
+		parts = append(parts, fmt.Sprintf("标签：%s → %s", oldTags, entry.Tags))
 	}
 	if oldScope != entry.Scope {
 		parts = append(parts, fmt.Sprintf("可见范围：%s → %s", scopeLabelShort(oldScope), scopeLabelShort(entry.Scope)))
@@ -254,33 +347,24 @@ func UpdateKnowledge(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// DeleteKnowledge 删除知识条目（创建者本人 / 超级管理员）
+// DeleteKnowledge 删除知识条目（创建者本人 / 超级管理员）—— 软删除进入回收站，附件保留，可恢复
 func DeleteKnowledge(c *gin.Context) {
 	entry, ok := loadOwnedKnowledge(c)
 	if !ok {
 		return
 	}
-	// 先删附件：DB 记录 + 磁盘文件，避免留下孤儿
-	var atts []models.KnowledgeAttachment
-	if err := db.DB.Where("entry_id = ?", entry.ID).Find(&atts).Error; err == nil && len(atts) > 0 {
-		for _, a := range atts {
-			if a.StoredName != "" {
-				_ = os.Remove(filepath.Join(kAttachmentDir(), a.StoredName))
-			}
-		}
-		if err := db.DB.Where("entry_id = ?", entry.ID).Delete(&models.KnowledgeAttachment{}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
+	cl := middleware.GetClaims(c)
+	// 软删除：置 deleted_at，列表自动隐藏；附件与版本保留，便于回收站恢复
 	if err := db.DB.Delete(entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	cl := middleware.GetClaims(c)
-	addLog(c, cl.UserID, cl.Username, "删除知识库: "+entry.Title)
-	recordKnowledgeLog(entry.ID, cl, "delete", fmt.Sprintf("删除条目：标题「%s」（条目及其附件一并删除）", entry.Title))
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	// 同步删除检索索引与双向链接（恢复后可重新保存/重建）
+	ftsDelete(entry.ID)
+	db.DB.Where("source_id = ?", entry.ID).Delete(&models.KnowledgeLink{})
+	addLog(c, cl.UserID, cl.Username, "删除知识库(回收站): "+entry.Title)
+	recordKnowledgeLog(entry.ID, cl, "delete", fmt.Sprintf("删除条目：标题「%s」（已进入回收站，可在回收站恢复）", entry.Title))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "trashed": true})
 }
 
 // ============================ 工作日志 ============================

@@ -44,6 +44,9 @@ func main() {
 	if err := db.Init(); err != nil {
 		logger.Fatal("server", "数据库初始化失败: %v", err)
 	}
+	// 知识库升级初始化：FTS5 全文索引、系统模板预置、引用关系重建（仅知识库模块）
+	handlers.InitKnowledge()
+	logger.Info("server", "知识库升级模块初始化完成（FTS5 / 模板 / 双向链接）")
 	// 将系统日志同时落业务库（供界面「运行日志」查看）；DB 异常不影响主流程。
 	logger.RegisterDBSink(func(lvl logger.Level, source, message, detail string) {
 		if db.DB == nil {
@@ -199,6 +202,31 @@ func main() {
 			auth.POST("/workspace/knowledge", handlers.CreateKnowledge)
 			auth.PUT("/workspace/knowledge/:id", handlers.UpdateKnowledge)
 			auth.DELETE("/workspace/knowledge/:id", handlers.DeleteKnowledge)
+
+			// —— 知识库升级（v0.15.0）：检索/标签/回收站/统计/评论/版本/模板/导入导出/双向链接 ——
+			auth.GET("/workspace/knowledge/:id", handlers.GetKnowledge)
+			auth.GET("/workspace/knowledge/tags", handlers.ListKnowledgeTags)
+			auth.GET("/workspace/knowledge/stats", handlers.KnowledgeStats)
+			auth.GET("/workspace/knowledge/trash", handlers.ListKnowledgeTrash)
+			auth.POST("/workspace/knowledge/trash/empty", handlers.EmptyKnowledgeTrash)
+			auth.POST("/workspace/knowledge/:id/restore", handlers.RestoreKnowledge)
+			auth.DELETE("/workspace/knowledge/:id/purge", handlers.PurgeKnowledge)
+			auth.POST("/workspace/knowledge/:id/pin", handlers.ToggleKnowledgePin)
+			auth.POST("/workspace/knowledge/:id/star", handlers.ToggleKnowledgeStar)
+			auth.GET("/workspace/knowledge/:id/comments", handlers.ListKnowledgeComments)
+			auth.POST("/workspace/knowledge/:id/comments", handlers.CreateKnowledgeComment)
+			auth.DELETE("/workspace/knowledge/comments/:cid", handlers.DeleteKnowledgeComment)
+			auth.GET("/workspace/knowledge/:id/versions", handlers.ListKnowledgeVersions)
+			auth.POST("/workspace/knowledge/:id/version/:vid/restore", handlers.RestoreKnowledgeVersion)
+			auth.GET("/workspace/knowledge/:id/backlinks", handlers.ListKnowledgeBacklinks)
+			auth.GET("/workspace/knowledge/:id/outlinks", handlers.ListKnowledgeOutlinks)
+			auth.GET("/workspace/knowledge/templates", handlers.ListKnowledgeTemplates)
+			auth.POST("/workspace/knowledge/templates", handlers.CreateKnowledgeTemplate)
+			auth.GET("/workspace/knowledge/templates/:id", handlers.ApplyKnowledgeTemplate)
+			auth.DELETE("/workspace/knowledge/templates/:id", handlers.DeleteKnowledgeTemplate)
+			auth.POST("/workspace/knowledge/import", handlers.ImportKnowledge)
+			auth.GET("/workspace/knowledge/export/markdown", handlers.ExportKnowledgeMarkdown)
+			auth.GET("/workspace/knowledge/export/doc", handlers.ExportKnowledgeDoc)
 
 			auth.GET("/workspace/logs", handlers.ListWorkLogs)
 			auth.POST("/workspace/logs", handlers.CreateWorkLog)

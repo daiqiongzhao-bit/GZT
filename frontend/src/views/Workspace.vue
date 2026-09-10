@@ -23,117 +23,236 @@
     <template v-if="tab === 'knowledge'">
       <section class="panel">
         <div class="panel-head">
-          <h3 class="section-title">知识条目 <span class="section-sub">共 {{ knowledge.length }} 条</span></h3>
-          <div class="head-actions">
-            <button v-if="!editingK" class="btn ghost" @click="exportK" title="把当前筛选可见的知识条目导出为文本">导出知识</button>
-            <button v-if="!editingK" class="btn primary" @click="openNewK">+ 新建</button>
-            <button v-else class="btn ghost" @click="cancelEditK">返回列表</button>
+          <h3 class="section-title">知识条目 <span class="section-sub">{{ knowledge.length }} 条<template v-if="kbView==='trash'"> · 回收站 {{ trash.length }} 条</template></span></h3>
+          <div class="head-actions kb-actions">
+            <button v-if="kbView!=='stats'" class="btn ghost sm" :class="{on:kbView==='stats'}" @click="toggleStats">📊 统计</button>
+            <button v-if="kbView!=='trash'" class="btn ghost sm" :class="{on:kbView==='trash'}" @click="openTrash">🗑 回收站</button>
+            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建">📋 模板</button>
+            <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
+            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportK" title="导出为纯文本">导出TXT</button>
+            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportMarkdown" title="导出为 Markdown">导出MD</button>
+            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn ghost sm" @click="exportDoc" title="导出为 Word">导出Word</button>
+            <button v-if="kbView==='trash'" class="btn ghost sm danger" @click="emptyTrash">清空回收站</button>
+            <button v-if="kbView!=='stats'&&kbView!=='trash'" class="btn primary" @click="openNewK">+ 新建</button>
+            <button v-else class="btn ghost" @click="kbView='list'">← 返回列表</button>
           </div>
         </div>
 
-        <!-- 内联新增/编辑表单 -->
-        <form v-if="editingK" class="edit-form" @submit.prevent="saveK">
-          <div class="fg2">
+        <!-- 统计看板 -->
+        <div v-if="kbView==='stats'" class="kb-stats">
+          <div v-if="statsLoading" class="dim" style="padding:20px 0">加载统计中…</div>
+          <template v-else-if="stats">
+            <div class="stat-grid">
+              <div class="stat-card"><div class="stat-num">{{ stats.total }}</div><div class="stat-lbl">知识总数</div></div>
+              <div class="stat-card"><div class="stat-num">{{ stats.recent_30d }}</div><div class="stat-lbl">近 30 天新增</div></div>
+              <div class="stat-card"><div class="stat-num">{{ stats.my_starred }}</div><div class="stat-lbl">我的收藏</div></div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-h">分类分布</div>
+              <div class="bar-chart">
+                <div v-for="c in stats.categories" :key="c.name" class="bar-row">
+                  <span class="bar-name">{{ c.name }}</span>
+                  <span class="bar-track"><span class="bar-fill" :style="{width: barPct(c.count, stats.categories)}"></span></span>
+                  <span class="bar-cnt">{{ c.count }}</span>
+                </div>
+                <div v-if="!stats.categories.length" class="dim">暂无分类数据</div>
+              </div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-h">热门标签</div>
+              <div class="tag-cloud">
+                <span v-for="t in stats.tags" :key="t.name" class="tag-pill" :style="{fontSize: tagSize(t.count, stats.tags)+'px'}" @click="kTag=t.name;kbView='list';loadK()">#{{ t.name }} <i>{{ t.count }}</i></span>
+                <span v-if="!stats.tags.length" class="dim">暂无标签</span>
+              </div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-h">贡献者</div>
+              <div class="author-list">
+                <span v-for="a in stats.authors" :key="a.name" class="author-pill">{{ a.name }} <i>{{ a.count }}</i></span>
+                <span v-if="!stats.authors.length" class="dim">暂无</span>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 回收站 -->
+        <div v-else-if="kbView==='trash'" class="kb-trash">
+          <div v-if="!trash.length" class="empty">回收站是空的</div>
+          <div v-else class="trash-list">
+            <div v-for="t in trash" :key="t.id" class="trash-item">
+              <div class="trash-main">
+                <span class="trash-title">{{ t.title }}</span>
+                <span class="dim">{{ t.category || '未分类' }} · 删除于 {{ fmtTime(t.deleted_at) }}</span>
+              </div>
+              <div class="trash-ops">
+                <button class="btn sm ok" @click="restoreK(t.id)">恢复</button>
+                <button class="btn sm danger" @click="purgeK(t.id)">彻底删除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 列表视图 -->
+        <template v-else>
+          <!-- 内联新增/编辑表单 -->
+          <form v-if="editingK" class="edit-form" @submit.prevent="saveK">
+            <div class="fg2">
+              <div>
+                <label class="fld">标题 *</label>
+                <input v-model="kForm.title" class="glass-input" required placeholder="如：周年庆小红书发布 SOP" />
+              </div>
+              <div>
+                <label class="fld">分类</label>
+                <input v-model="kForm.category" class="glass-input" list="kCats" placeholder="如：活动SOP / 检查流程 / 话术" />
+                <datalist id="kCats">
+                  <option v-for="c in categories" :key="c" :value="c" />
+                </datalist>
+              </div>
+            </div>
+            <div class="fg2">
+              <div>
+                <label class="fld">所属父级（目录树）</label>
+                <select v-model.number="kForm.parent_id" class="glass-input">
+                  <option :value="0">（顶级，无父级）</option>
+                  <option v-for="p in parentCandidates" :key="p.id" :value="p.id">{{ p.title }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="fld">状态</label>
+                <select v-model="kForm.status" class="glass-input">
+                  <option value="published">已发布</option>
+                  <option value="draft">草稿（仅自己可见）</option>
+                </select>
+              </div>
+            </div>
             <div>
-              <label class="fld">标题 *</label>
-              <input v-model="kForm.title" class="glass-input" required placeholder="如：周年庆小红书发布 SOP" />
+              <label class="fld">标签</label>
+              <div class="tag-edit">
+                <span v-for="(t,i) in kForm.tags" :key="t" class="chip pick-chip">{{ t }}<button type="button" class="x" @click="kForm.tags.splice(i,1)" aria-label="移除">×</button></span>
+                <input v-model="kTagDraft" @keydown.enter.prevent="addKTag" class="glass-input tag-input" placeholder="输入标签后回车添加" />
+              </div>
             </div>
             <div>
-              <label class="fld">分类</label>
-              <input v-model="kForm.category" class="glass-input" list="kCats" placeholder="如：活动SOP / 检查流程 / 话术" />
-              <datalist id="kCats">
-                <option v-for="c in categories" :key="c" :value="c" />
-              </datalist>
+              <label class="fld">内容</label>
+              <RichTextEditor
+                v-model="kForm.content"
+                :entry-id="kForm.id || 0"
+                placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接 / 表格 / 代码块"
+              />
             </div>
-          </div>
-          <div>
-            <label class="fld">内容</label>
-            <RichTextEditor
-              v-model="kForm.content"
-              :entry-id="kForm.id || 0"
-              placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接"
-            />
-          </div>
-          <!-- 附件区：编辑现有条目显示正式附件；新建未保存时先进「中转缓存」，保存后转正 -->
-          <div class="edit-attach">
-            <div class="att-head">
-              <span class="att-title">附件（{{ kForm.id ? kAtts.length : pendingAtts.length }}）</span>
-              <div class="att-upload">
-                <span v-if="uploading" class="dim up-txt">上传中…</span>
-                <label class="btn sm">+ 上传文件
-                  <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
-                </label>
+            <!-- 附件区：编辑现有条目显示正式附件；新建未保存时先进「中转缓存」，保存后转正 -->
+            <div class="edit-attach">
+              <div class="att-head">
+                <span class="att-title">附件（{{ kForm.id ? kAtts.length : pendingAtts.length }}）</span>
+                <div class="att-upload">
+                  <span v-if="uploading" class="dim up-txt">上传中…</span>
+                  <label class="btn sm">+ 上传文件
+                    <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
+                  </label>
+                </div>
+              </div>
+              <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
+              <div v-if="kForm.id && kAtts.length" class="att-list">
+                <div v-for="a in kAtts" :key="a.id" class="att-item">
+                  <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                  <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                  <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                  <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                  <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
+                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                  <button class="del danger" @click="removeAtt(a)">删除</button>
+                </div>
+              </div>
+              <div v-else-if="kForm.id" class="empty att-empty">还没有附件</div>
+              <div v-else-if="pendingAtts.length" class="att-list">
+                <div v-for="a in pendingAtts" :key="a.tempId" class="att-item">
+                  <span v-if="a.mime && a.mime.startsWith('image/')" class="att-thumb">{{ fileIcon(a.fileName) }}</span>
+                  <span v-else class="att-ico">{{ fileIcon(a.fileName) }}</span>
+                  <span class="att-name">{{ a.fileName }}</span>
+                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                  <span class="dim">待保存</span>
+                  <button class="del danger" @click="removePendingAtt(a)">移除</button>
+                </div>
               </div>
             </div>
-            <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
-            <div v-if="kForm.id && kAtts.length" class="att-list">
-              <div v-for="a in kAtts" :key="a.id" class="att-item">
-                <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
-                <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
-                <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
-                <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                <button class="del danger" @click="removeAtt(a)">删除</button>
+            <div class="fg2 bot">
+              <div class="scope-switch">
+                <label class="fld">可见范围</label>
+                <select v-model="kForm.scope" class="glass-input">
+                  <option value="department">同部门共享</option>
+                  <option value="private">仅自己可见</option>
+                </select>
+              </div>
+              <div class="form-actions">
+                <button type="button" class="btn ghost" @click="cancelEditK">取消</button>
+                <button type="submit" class="btn primary" :disabled="savingK">{{ savingK ? '保存中…' : (kForm.id ? '保存修改' : '保存') }}</button>
               </div>
             </div>
-            <div v-else-if="kForm.id" class="empty att-empty">还没有附件</div>
-            <div v-else-if="pendingAtts.length" class="att-list">
-              <div v-for="a in pendingAtts" :key="a.tempId" class="att-item">
-                <span v-if="a.mime && a.mime.startsWith('image/')" class="att-thumb">{{ fileIcon(a.fileName) }}</span>
-                <span v-else class="att-ico">{{ fileIcon(a.fileName) }}</span>
-                <span class="att-name">{{ a.fileName }}</span>
-                <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                <span class="dim">待保存</span>
-                <button class="del danger" @click="removePendingAtt(a)">移除</button>
-              </div>
-            </div>
-          </div>
-          <div class="fg2 bot">
-            <div class="scope-switch">
-              <label class="fld">可见范围</label>
-              <select v-model="kForm.scope" class="glass-input">
-                <option value="department">同部门共享</option>
-                <option value="private">仅自己可见</option>
-              </select>
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn ghost" @click="cancelEditK">取消</button>
-              <button type="submit" class="btn primary" :disabled="savingK">{{ savingK ? '保存中…' : (kForm.id ? '保存修改' : '保存') }}</button>
-            </div>
-          </div>
-        </form>
+          </form>
 
-        <!-- 筛选 -->
-        <div v-else class="filter-bar">
-          <input v-model="kQuery" class="glass-input search" placeholder="🔍 搜索标题 / 内容 / 分类" @input="loadK" />
-          <select v-model="kCategory" class="glass-input" @change="loadK">
-            <option value="">全部分类</option>
-            <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
-          </select>
-          <label class="chk mine"><input type="checkbox" v-model="kMine" @change="loadK" /> 只看我写的</label>
-        </div>
+          <!-- 筛选 -->
+          <div v-else class="filter-bar">
+            <input v-model="kQuery" class="glass-input search" placeholder="🔍 搜索标题 / 内容 / 分类 / 标签" @input="loadK" />
+            <select v-model="kCategory" class="glass-input" @change="loadK">
+              <option value="">全部分类</option>
+              <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <select v-model="kTag" class="glass-input" @change="loadK">
+              <option value="">全部标签</option>
+              <option v-for="t in allTags" :key="t" :value="t">{{ t }}</option>
+            </select>
+            <select v-model="kSort" class="glass-input" @change="loadK">
+              <option value="recent">最近更新</option>
+              <option value="created">最新创建</option>
+              <option value="hot">最热（阅读量）</option>
+            </select>
+            <label class="chk mine"><input type="checkbox" v-model="kMine" @change="loadK" /> 只看我写的</label>
+            <label class="chk mine"><input type="checkbox" v-model="kStarred" @change="loadK" /> 只看收藏</label>
+            <button v-if="kParent" class="btn ghost sm" @click="kParent='';loadK()">目录：{{ parentTitle }} ✕</button>
+          </div>
 
-        <!-- 列表 -->
-        <div v-if="knowledge.length" class="k-grid">
-          <div v-for="k in knowledge" :key="k.id" class="k-card" :class="{ mine: k.owner_id === auth.user?.id }">
-            <div class="k-top">
-              <span class="chip" :class="scopeChip(k.scope)">{{ scopeLabel(k.scope) }}</span>
-              <span v-if="k.category" class="chip accent">{{ k.category }}</span>
-              <span class="k-owner">{{ k.owner_name === (auth.user && auth.user.username) ? '我' : k.owner_name }}</span>
+          <!-- 目录树（按 parent_id 组织） -->
+          <div v-if="!editingK && kTree.length" class="k-tree" :class="{collapsed:kTreeOpen===false}">
+            <div class="k-tree-head">
+              <span class="dim">📁 目录</span>
+              <button class="btn ghost sm" @click="kTreeOpen=!kTreeOpen">{{ kTreeOpen ? '收起' : '展开' }}</button>
             </div>
-            <div class="k-title" @click="openDetailK(k)">{{ k.title }}</div>
-            <div class="k-preview" @click="openDetailK(k)">{{ kPreviewText(k) }}</div>
-            <div class="k-foot">
-              <span class="dim">{{ fmtTime(k.updated_at || k.created_at) }}</span>
-              <span v-if="k.owner_id === auth.user?.id || auth.isSuper" class="ops">
-                <button class="del" @click="openEditK(k)">编辑</button>
-                <button class="del danger" @click="removeK(k)">删除</button>
-              </span>
+            <ul v-show="kTreeOpen" class="tree-ul">
+              <li class="tree-li root"><span class="tree-node" :class="{active:kParent===''}" @click="kParent='';loadK()">📄 全部条目</span></li>
+              <TreeNode v-for="n in kTree" :key="n.id" :node="n" :active="kParent" @pick="onPickParent" />
+            </ul>
+          </div>
+
+          <!-- 列表 -->
+          <div v-if="knowledge.length" class="k-grid">
+            <div v-for="k in knowledge" :key="k.id" class="k-card" :class="{ mine: k.owner_id === auth.user?.id, pinned: k.pinned }">
+              <div class="k-top">
+                <span v-if="k.pinned" class="pin-badge" title="已置顶">📌</span>
+                <span class="chip" :class="scopeChip(k.scope)">{{ scopeLabel(k.scope) }}</span>
+                <span v-if="k.category" class="chip accent">{{ k.category }}</span>
+                <span v-if="k.status==='draft'" class="chip warn">草稿</span>
+                <span class="k-owner">{{ k.owner_name === (auth.user && auth.user.username) ? '我' : k.owner_name }}</span>
+              </div>
+              <div class="k-title" v-html="highlight(k.title, kQuery)" @click="openDetailK(k)"></div>
+              <div class="k-preview" v-html="highlight(kPreview(k), kQuery)" @click="openDetailK(k)"></div>
+              <div v-if="parseTags(k.tags).length" class="k-tags">
+                <span v-for="t in parseTags(k.tags)" :key="t" class="k-tag" @click="kTag=t;loadK()">#{{ t }}</span>
+              </div>
+              <div class="k-foot">
+                <span class="dim">{{ fmtTime(k.updated_at || k.created_at) }} · 👁 {{ k.view_count || 0 }}</span>
+                <span class="k-foot-ops">
+                  <button class="icon-btn" :class="{on:k.starred}" :title="k.starred?'取消收藏':'收藏'" @click.stop="toggleStar(k)">{{ k.starred ? '★' : '☆' }}</button>
+                  <button v-if="k.owner_id===auth.user?.id || auth.isSuper" class="icon-btn" :class="{on:k.pinned}" :title="k.pinned?'取消置顶':'置顶'" @click.stop="togglePin(k)">{{ k.pinned ? '📌' : '📍' }}</button>
+                  <span v-if="k.owner_id === auth.user?.id || auth.isSuper" class="ops">
+                    <button class="del" @click="openEditK(k)">编辑</button>
+                    <button class="del danger" @click="removeK(k)">删除</button>
+                  </span>
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-        <div v-else class="empty">{{ kQuery ? '没有匹配的知识条目' : '还没有知识条目，点右上「新建」沉淀第一条吧' }}</div>
+          <div v-else class="empty">{{ kQuery || kTag || kParent ? '没有匹配的知识条目' : '还没有知识条目，点右上「新建」沉淀第一条吧' }}</div>
+        </template>
       </section>
 
       <!-- 知识详情弹窗 -->
@@ -142,39 +261,106 @@
           <div class="modal-head">
             <span class="chip" :class="scopeChip(viewK.scope)">{{ scopeLabel(viewK.scope) }}</span>
             <span v-if="viewK.category" class="chip accent">{{ viewK.category }}</span>
+            <span v-if="viewK.status==='draft'" class="chip warn">草稿</span>
+            <span v-if="parseTags(viewK.tags).length" class="chip">{{ parseTags(viewK.tags).join('、') }}</span>
+            <button class="icon-btn star" :class="{on:viewK.starred}" :title="viewK.starred?'取消收藏':'收藏'" @click="toggleStar(viewK)">{{ viewK.starred ? '★' : '☆' }}</button>
+            <button v-if="viewK.owner_id===auth.user?.id || auth.isSuper" class="icon-btn pin" :class="{on:viewK.pinned}" :title="viewK.pinned?'取消置顶':'置顶'" @click="togglePin(viewK)">{{ viewK.pinned ? '📌' : '📍' }}</button>
             <button class="modal-close" @click="viewK = null">✕</button>
           </div>
           <h3 class="modal-title">{{ viewK.title }}</h3>
           <div class="modal-meta dim">
-            {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }}
+            {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }} · 👁 {{ viewK.view_count || 0 }}
           </div>
-          <div class="modal-scroll">
-            <div class="modal-body rte-content" v-html="safeHtml(viewK.content) || '<span class=\'dim\'>（暂无内容）</span>'"></div>
 
-            <!-- 附件区 -->
-            <div v-if="viewK" class="modal-attach">
-              <div class="att-head">
-                <span class="att-title">附件（{{ kAtts.length }}）</span>
-                <div v-if="canEditK(viewK)" class="att-upload">
-                  <span v-if="uploading" class="dim up-txt">上传中…</span>
-                  <label class="btn sm">+ 上传文件
-                    <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
-                  </label>
+          <!-- 子标签：正文 / 评论 / 版本 / 双链 -->
+          <div class="k-tabs">
+            <button class="k-tab" :class="{on:kTab==='content'}" @click="kTab='content'">正文</button>
+            <button class="k-tab" :class="{on:kTab==='comments'}" @click="kTab='comments';loadComments(viewK.id)">评论 ({{ kComments.length }})</button>
+            <button class="k-tab" :class="{on:kTab==='versions'}" @click="kTab='versions';loadVersions(viewK.id)">版本 ({{ kVersions.length }})</button>
+            <button class="k-tab" :class="{on:kTab==='links'}" @click="kTab='links';loadLinks(viewK.id)">双向链接</button>
+          </div>
+
+          <div class="modal-scroll">
+            <!-- 正文 -->
+            <div v-show="kTab==='content'">
+              <div class="modal-body rte-content" v-html="safeHtml(viewK.content) || '<span class=\'dim\'>（暂无内容）</span>'"></div>
+
+              <!-- 附件区 -->
+              <div v-if="viewK" class="modal-attach">
+                <div class="att-head">
+                  <span class="att-title">附件（{{ kAtts.length }}）</span>
+                  <div v-if="canEditK(viewK)" class="att-upload">
+                    <span v-if="uploading" class="dim up-txt">上传中…</span>
+                    <label class="btn sm">+ 上传文件
+                      <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
+                    </label>
+                  </div>
+                </div>
+                <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB</p>
+                <div v-if="kAtts.length" class="att-list">
+                  <div v-for="a in kAtts" :key="a.id" class="att-item">
+                    <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
+                    <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                    <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
+                    <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
+                    <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
+                    <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                    <button v-if="canDelAtt(a)" class="del danger" @click="removeAtt(a)">删除</button>
+                  </div>
+                </div>
+                <div v-else class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
+              </div>
+            </div>
+
+            <!-- 评论 -->
+            <div v-show="kTab==='comments'" class="k-comments">
+              <div v-if="!kComments.length" class="dim" style="padding:10px 0">还没有评论，来写第一条吧（可用 @姓名 提醒同事）</div>
+              <div v-for="c in topComments" :key="c.id" class="comment">
+                <div class="comment-head"><b>{{ c.user_name }}</b><span class="dim">{{ fmtTime(c.created_at) }}</span></div>
+                <div class="comment-body" v-html="safeHtml(c.content)"></div>
+                <div class="comment-ops">
+                  <button class="del" @click="kReplyTo=c.id;kCommentText='@'+c.user_name+' '">回复</button>
+                  <button v-if="c.user_id===auth.user?.id || auth.isSuper" class="del danger" @click="delComment(c.id)">删除</button>
+                </div>
+                <div v-for="r in repliesOf(c.id)" :key="r.id" class="comment reply">
+                  <div class="comment-head"><b>{{ r.user_name }}</b><span class="dim">{{ fmtTime(r.created_at) }}</span></div>
+                  <div class="comment-body" v-html="safeHtml(r.content)"></div>
+                  <div class="comment-ops">
+                    <button class="del danger" @click="delComment(r.id)">删除</button>
+                  </div>
                 </div>
               </div>
-              <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB</p>
-              <div v-if="kAtts.length" class="att-list">
-                <div v-for="a in kAtts" :key="a.id" class="att-item">
-                  <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
-                  <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                  <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                  <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
-                  <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
-                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                  <button v-if="canDelAtt(a)" class="del danger" @click="removeAtt(a)">删除</button>
+              <div class="comment-editor">
+                <textarea v-model="kCommentText" class="glass-input ta" rows="2" :placeholder="kReplyTo?(kReplyTo?'回复中…':'') : '发表评论，@姓名 可提醒对方'"></textarea>
+                <div class="comment-send">
+                  <button v-if="kReplyTo" class="btn ghost sm" @click="kReplyTo=0;kCommentText=''">取消回复</button>
+                  <button class="btn primary sm" :disabled="kCommentBusy" @click="addComment">{{ kCommentBusy ? '发送中…' : '发表评论' }}</button>
                 </div>
               </div>
-              <div v-else class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
+            </div>
+
+            <!-- 版本历史 -->
+            <div v-show="kTab==='versions'" class="k-versions">
+              <div v-if="!kVersions.length" class="dim" style="padding:10px 0">暂无历史版本（每次保存会自动快照）</div>
+              <div v-for="v in kVersions" :key="v.id" class="version-item">
+                <div class="version-head"><span class="chip accent">v{{ v.version }}</span><b>{{ v.operator_name }}</b><span class="dim">{{ fmtTime(v.created_at) }}</span></div>
+                <div class="version-meta dim">{{ v.title }} · {{ v.category || '未分类' }}</div>
+                <button v-if="viewK.owner_id===auth.user?.id || auth.isSuper" class="btn ghost sm" @click="restoreVersion(v.id)">回滚到此版本</button>
+              </div>
+            </div>
+
+            <!-- 双向链接 -->
+            <div v-show="kTab==='links'" class="k-links">
+              <div class="link-group">
+                <div class="link-h">↗ 本条目引用的（出链）</div>
+                <div v-if="!kOutlinks.length" class="dim">正文中使用 <code>[[标题]]</code> 语法即可建立引用</div>
+                <div v-for="e in kOutlinks" :key="'o'+e.id" class="link-item" @click="openEntry(e)">{{ e.title }}</div>
+              </div>
+              <div class="link-group">
+                <div class="link-h">↘ 引用本条目的（反向链接）</div>
+                <div v-if="!kBacklinks.length" class="dim">还没有其它条目引用本条目</div>
+                <div v-for="e in kBacklinks" :key="'b'+e.id" class="link-item" @click="openEntry(e)">{{ e.title }}</div>
+              </div>
             </div>
 
             <!-- 变更 / 协作记录（v0.8.0） -->
@@ -199,6 +385,63 @@
           <div class="modal-foot">
             <button v-if="viewK.owner_id === auth.user?.id" class="btn ghost" @click="editFromView">编辑</button>
             <button class="btn primary" @click="viewK = null">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模板选择弹窗 -->
+      <div v-if="templateModal" class="modal-mask" @click.self="templateModal=false">
+        <div class="modal sm">
+          <div class="modal-head">
+            <h3 class="modal-title">从模板新建</h3>
+            <button class="modal-close" @click="templateModal=false">✕</button>
+          </div>
+          <div class="modal-scroll">
+            <div v-if="!templates.length" class="dim" style="padding:10px 0">暂无模板</div>
+            <div v-for="t in templates" :key="t.id" class="tpl-item">
+              <div class="tpl-main">
+                <span class="tpl-title">{{ t.title }}</span>
+                <span class="dim">{{ t.category || '通用' }} · <span v-if="t.builtin">系统预置</span><span v-else>我的</span></span>
+              </div>
+              <div class="tpl-ops">
+                <button class="btn sm primary" @click="applyTemplate(t)">使用</button>
+                <button v-if="!t.builtin" class="btn sm danger" @click="deleteTemplate(t)">删除</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn ghost" @click="templateModal=false">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 导入弹窗 -->
+      <div v-if="importModal" class="modal-mask" @click.self="importModal=false">
+        <div class="modal sm">
+          <div class="modal-head">
+            <h3 class="modal-title">导入 Markdown</h3>
+            <button class="modal-close" @click="importModal=false">✕</button>
+          </div>
+          <div class="modal-scroll">
+            <p class="dim" style="font-size:12px">按 <code># 一级标题</code> 切分为多条；正文会被转换为富文本。</p>
+            <textarea v-model="importText" class="glass-input ta" rows="10" placeholder="# 标题一&#10;正文内容…&#10;&#10;# 标题二&#10;另一篇…"></textarea>
+            <div class="fg2" style="margin-top:10px">
+              <div>
+                <label class="fld">默认分类</label>
+                <input v-model="importCategory" class="glass-input" placeholder="可留空" />
+              </div>
+              <div>
+                <label class="fld">可见范围</label>
+                <select v-model="importScope" class="glass-input">
+                  <option value="department">同部门共享</option>
+                  <option value="private">仅自己可见</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn ghost" @click="importModal=false">取消</button>
+            <button class="btn primary" :disabled="importing" @click="doImport">{{ importing ? '导入中…' : '开始导入' }}</button>
           </div>
         </div>
       </div>
@@ -432,7 +675,6 @@ function todayStr() {
 }
 function fmtTime(s) {
   if (!s) return ''
-  // 服务端 time 格式 2026-09-07T10:00:00Z → 本地 YYYY-MM-DD HH:mm
   const d = new Date(s)
   if (isNaN(d)) return String(s).slice(0, 16)
   const p = (n) => String(n).padStart(2, '0')
@@ -445,13 +687,20 @@ function switchTab(t) { tab.value = t }
 // ================= 迷你知识库 =================
 const knowledge = ref([])
 const categories = ref([])
+const allTags = ref([])
+const kbView = ref('list') // list | stats | trash
 const kQuery = ref('')
 const kCategory = ref('')
+const kTag = ref('')
+const kParent = ref('') // '' = 全部；'root' = 仅顶级；否则父级 id 字符串
+const kSort = ref('recent') // recent | created | hot
 const kMine = ref(false)
+const kStarred = ref(false)
 const editingK = ref(false)
 const savingK = ref(false)
 const viewK = ref(null)
-const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department' })
+const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published' })
+const kTagDraft = ref('')
 
 let kTimer = null
 async function loadK() {
@@ -461,22 +710,93 @@ async function loadK() {
       const params = {}
       if (kQuery.value.trim()) params.kw = kQuery.value.trim()
       if (kCategory.value) params.category = kCategory.value
+      if (kTag.value) params.tag = kTag.value
+      if (kParent.value) params.parent = kParent.value
       if (kMine.value) params.mine = 1
+      if (kStarred.value) params.starred = 1
+      if (kSort.value && kSort.value !== 'recent') params.sort = kSort.value
       knowledge.value = await api.get('/workspace/knowledge', params)
     } catch (e) { toast(e.response?.data?.error || '加载失败', 'error') }
-  }, kMine.value || kCategory.value ? 0 : 250)
+  }, (kMine.value || kCategory.value || kTag.value || kParent.value) ? 0 : 250)
 }
 async function loadCats() {
   try { categories.value = await api.get('/workspace/knowledge/categories') } catch {}
 }
+async function loadTags() {
+  try { allTags.value = await api.get('/workspace/knowledge/tags') } catch {}
+}
+// 统一刷新（列表 + 分类 + 标签）
+async function refreshKnowledge() {
+  await Promise.all([loadK(), loadCats(), loadTags()])
+}
+function parseTags(s) {
+  if (!s) return []
+  s = String(s).trim()
+  if (s.startsWith('[')) {
+    try { const a = JSON.parse(s); if (Array.isArray(a)) return a.map((x) => String(x).trim()).filter(Boolean) } catch {}
+  }
+  return s.split(',').map((x) => x.trim()).filter(Boolean)
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+// 搜索高亮（先转义，再包裹匹配片段，避免破坏 HTML）
+function highlight(text, kw) {
+  const raw = (text || '').toString()
+  const safe = escapeHtml(raw)
+  const k = (kw || '').trim()
+  if (!k) return safe
+  const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return safe.replace(new RegExp('(' + esc + ')', 'gi'), '<mark>$1</mark>')
+}
+// 纯文本预览（用于卡片与高亮）
+function kPreview(k) {
+  const raw = (k && k.content) || ''
+  const tmp = document.createElement('div')
+  tmp.innerHTML = raw
+  const text = (tmp.innerText || '').trim()
+  return text ? (text.length > 160 ? text.slice(0, 160) + '…' : text) : '（暂无内容）'
+}
+
+// 目录树（按 parent_id 构建）
+const kTreeOpen = ref(true)
+const kTree = computed(() => {
+  const items = knowledge.value || []
+  const map = {}
+  items.forEach((k) => { map[k.id] = { ...k, children: [] } })
+  const roots = []
+  items.forEach((k) => {
+    const node = map[k.id]
+    const pid = k.parent_id || 0
+    if (pid && map[pid]) map[pid].children.push(node)
+    else roots.push(node)
+  })
+  return roots
+})
+function onPickParent(id) { kParent.value = String(id); kbView.value = 'list'; loadK() }
+const parentTitle = computed(() => {
+  if (!kParent.value) return ''
+  const hit = (knowledge.value || []).find((x) => String(x.id) === String(kParent.value))
+  return hit ? hit.title : ''
+})
+const parentCandidates = computed(() => (knowledge.value || []).filter((x) => x.id !== kForm.id))
+
+function addKTag() {
+  const t = kTagDraft.value.trim()
+  if (t && !kForm.tags.includes(t)) kForm.tags.push(t)
+  kTagDraft.value = ''
+}
+
 function openNewK() {
-  Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department' })
+  Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published' })
+  kTagDraft.value = ''
   kAtts.value = []
   pendingAtts.value = []
   editingK.value = true
 }
 function openEditK(k) {
-  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope })
+  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published' })
+  kTagDraft.value = ''
   editingK.value = true
   loadKAtts(k.id)
 }
@@ -485,23 +805,19 @@ async function saveK() {
   savingK.value = true
   try {
     let savedId = kForm.id
+    const payload = { title: kForm.title, category: kForm.category, content: kForm.content, scope: kForm.scope, tags: kForm.tags, parent_id: kForm.parent_id, status: kForm.status }
     if (kForm.id) {
-      await api.put('/workspace/knowledge/' + kForm.id, kForm)
+      await api.put('/workspace/knowledge/' + kForm.id, payload)
       toast('已保存')
     } else {
-      // 新建：把编辑期中转缓存的附件 id 一并带上，由后端转正
-      const payload = { ...kForm }
       if (pendingAtts.value.length) payload.temp_attachment_ids = pendingAtts.value.map((a) => a.tempId)
       const created = await api.post('/workspace/knowledge', payload)
       savedId = created && created.id ? created.id : null
-      // 同步后端转正后的正文（图片地址由临时改为正式），避免再次编辑时显示破图
       if (created && created.content) kForm.content = created.content
       pendingAtts.value = []
       toast('已创建，正在打开详情…')
     }
-    // 刷新一次列表（同时拿到新条目对象供详情弹窗用）
-    await Promise.all([loadK(), loadCats()])
-    // 新建：自动跳转到详情弹窗，让用户立刻可上传附件
+    await refreshKnowledge()
     if (savedId && !kForm.id) {
       const fresh = (knowledge.value || []).find((x) => x.id === savedId)
       editingK.value = false
@@ -510,17 +826,201 @@ async function saveK() {
   } catch (e) { toast(e.response?.data?.error || '保存失败', 'error') }
   finally { savingK.value = false }
 }
-function openDetailK(k) {
-  viewK.value = k
-  kHistOpen.value = false
-  kHist.value = []
-  loadKAtts(k.id)
+async function openDetailK(k) {
+  try {
+    const d = await api.get('/workspace/knowledge/' + k.id)
+    viewK.value = d
+    kHistOpen.value = false
+    kHist.value = []
+    kTab.value = 'content'
+    kComments.value = []
+    kVersions.value = []
+    kOutlinks.value = []
+    kBacklinks.value = []
+    kReplyTo.value = 0
+    kCommentText.value = ''
+    loadKAtts(k.id)
+  } catch (e) { toast(e.response?.data?.error || '打开失败', 'error') }
 }
+function openEntry(e) { if (e && e.id) openDetailK(e) }
 function editFromView() {
   if (!viewK.value) return
   const k = viewK.value
   viewK.value = null
   openEditK(k)
+}
+async function togglePin(k) {
+  try {
+    const r = await api.post('/workspace/knowledge/' + k.id + '/pin')
+    k.pinned = r.pinned
+    if (viewK.value && viewK.value.id === k.id) viewK.value = { ...viewK.value, pinned: r.pinned }
+    toast(r.pinned ? '已置顶' : '已取消置顶')
+  } catch (e) { toast(e.response?.data?.error || '操作失败', 'error') }
+}
+async function toggleStar(k) {
+  try {
+    const r = await api.post('/workspace/knowledge/' + k.id + '/star')
+    k.starred = r.starred
+    if (viewK.value && viewK.value.id === k.id) viewK.value = { ...viewK.value, starred: r.starred }
+  } catch (e) { toast(e.response?.data?.error || '操作失败', 'error') }
+}
+async function removeK(k) {
+  if (!confirm(`删除知识条目「${k.title}」？将进入回收站（附件保留，可恢复）。`)) return
+  try { await api.del('/workspace/knowledge/' + k.id); toast('已移入回收站'); await refreshKnowledge() }
+  catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+
+// ---- 统计看板 ----
+const stats = ref(null)
+const statsLoading = ref(false)
+async function loadStats() {
+  statsLoading.value = true
+  try { stats.value = await api.get('/workspace/knowledge/stats') } catch (e) { toast(e.response?.data?.error || '统计加载失败', 'error') }
+  finally { statsLoading.value = false }
+}
+function toggleStats() { if (kbView.value === 'stats') kbView.value = 'list'; else { kbView.value = 'stats'; loadStats() } }
+function barPct(count, list) {
+  const max = Math.max(1, ...list.map((x) => x.count))
+  return (count / max * 100).toFixed(0) + '%'
+}
+function tagSize(count, list) {
+  const max = Math.max(1, ...list.map((x) => x.count))
+  return 12 + Math.round((count / max) * 8)
+}
+
+// ---- 回收站 ----
+const trash = ref([])
+async function loadTrash() {
+  try { trash.value = await api.get('/workspace/knowledge/trash') } catch (e) { toast(e.response?.data?.error || '回收站加载失败', 'error') }
+}
+function openTrash() { if (kbView.value === 'trash') kbView.value = 'list'; else { kbView.value = 'trash'; loadTrash() } }
+async function restoreK(id) {
+  try { await api.post('/workspace/knowledge/' + id + '/restore'); toast('已恢复'); await Promise.all([loadTrash(), refreshKnowledge()]) }
+  catch (e) { toast(e.response?.data?.error || '恢复失败', 'error') }
+}
+async function purgeK(id) {
+  if (!confirm('彻底删除？此操作不可恢复，附件/评论/版本将一并清除。')) return
+  try { await api.del('/workspace/knowledge/' + id + '/purge'); toast('已彻底删除'); await loadTrash() }
+  catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+async function emptyTrash() {
+  if (!confirm('清空回收站？全部条目将彻底删除且不可恢复。')) return
+  try { await api.post('/workspace/knowledge/trash/empty'); toast('已清空回收站'); await loadTrash() }
+  catch (e) { toast(e.response?.data?.error || '清空失败', 'error') }
+}
+
+// ---- 模板 ----
+const templates = ref([])
+const templateModal = ref(false)
+async function loadTemplates() {
+  try { templates.value = await api.get('/workspace/knowledge/templates') } catch (e) { toast(e.response?.data?.error || '模板加载失败', 'error') }
+}
+function openTemplates() { templateModal.value = true; loadTemplates() }
+async function applyTemplate(t) {
+  try {
+    const r = await api.get('/workspace/knowledge/templates/' + t.id)
+    Object.assign(kForm, { id: 0, title: r.title || t.title, category: r.category || '', content: r.content || '', scope: 'department', tags: parseTags(r.tags || t.tags), parent_id: 0, status: 'published' })
+    kTagDraft.value = ''
+    editingK.value = true
+    templateModal.value = false
+    kAtts.value = []
+    pendingAtts.value = []
+  } catch (e) { toast(e.response?.data?.error || '套用失败', 'error') }
+}
+async function deleteTemplate(t) {
+  if (t.builtin) { toast('系统预置模板不可删除', 'error'); return }
+  if (!confirm('删除该模板？')) return
+  try { await api.del('/workspace/knowledge/templates/' + t.id); toast('已删除'); await loadTemplates() }
+  catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+
+// ---- Markdown 导入 ----
+const importModal = ref(false)
+const importText = ref('')
+const importScope = ref('department')
+const importCategory = ref('')
+const importing = ref(false)
+function openImport() { importModal.value = true; importText.value = ''; importScope.value = 'department'; importCategory.value = '' }
+async function doImport() {
+  const md = importText.value.trim()
+  if (!md) { toast('请粘贴 Markdown 内容', 'error'); return }
+  importing.value = true
+  try {
+    const r = await api.post('/workspace/knowledge/import', { markdown: md, scope: importScope.value, category: importCategory.value })
+    toast('已导入 ' + (r.created || 0) + ' 条')
+    importModal.value = false
+    await refreshKnowledge()
+  } catch (e) { toast(e.response?.data?.error || '导入失败', 'error') }
+  finally { importing.value = false }
+}
+
+// ---- 导出（Markdown / Word / 原 TXT） ----
+function kbQueryString() {
+  const p = new URLSearchParams()
+  if (kQuery.value.trim()) p.set('kw', kQuery.value.trim())
+  if (kCategory.value) p.set('category', kCategory.value)
+  if (kTag.value) p.set('tag', kTag.value)
+  if (kMine.value) p.set('mine', '1')
+  if (kStarred.value) p.set('starred', '1')
+  if (kParent.value) p.set('parent', kParent.value)
+  return p.toString()
+}
+function downloadFile(path, q, filename) {
+  const tok = localStorage.getItem('sw_token')
+  fetch(baseUrl + path + (q ? '?' + q : ''), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
+    .then((r) => { if (!r.ok) throw new Error(); return r.blob() })
+    .then((b) => { const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = filename; a.click(); a.remove(); URL.revokeObjectURL(u) })
+    .catch(() => toast('导出失败', 'error'))
+}
+function exportMarkdown() { downloadFile('/workspace/knowledge/export/markdown', kbQueryString(), '知识库.md') }
+function exportDoc() { downloadFile('/workspace/knowledge/export/doc', kbQueryString(), '知识库.doc') }
+
+// ---- 详情子标签：评论 / 版本 / 双链 ----
+const kTab = ref('content')
+const kComments = ref([])
+const kCommentText = ref('')
+const kCommentBusy = ref(false)
+const kReplyTo = ref(0)
+const kVersions = ref([])
+const kOutlinks = ref([])
+const kBacklinks = ref([])
+const topComments = computed(() => kComments.value.filter((c) => !c.parent_id))
+function repliesOf(id) { return kComments.value.filter((c) => c.parent_id === id) }
+async function loadComments(id) {
+  try { kComments.value = await api.get('/workspace/knowledge/' + id + '/comments') } catch (e) { toast(e.response?.data?.error || '评论加载失败', 'error') }
+}
+async function addComment() {
+  const text = kCommentText.value.trim()
+  if (!text) return
+  kCommentBusy.value = true
+  try {
+    await api.post('/workspace/knowledge/' + viewK.value.id + '/comments', { content: text, parent_id: kReplyTo.value || 0 })
+    kCommentText.value = ''; kReplyTo.value = 0
+    await loadComments(viewK.value.id)
+    toast('评论已发表')
+  } catch (e) { toast(e.response?.data?.error || '评论失败', 'error') }
+  finally { kCommentBusy.value = false }
+}
+async function delComment(cid) {
+  if (!confirm('删除该评论？')) return
+  try { await api.del('/workspace/knowledge/comments/' + cid); await loadComments(viewK.value.id) } catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
+}
+async function loadVersions(id) {
+  try { kVersions.value = await api.get('/workspace/knowledge/' + id + '/versions') } catch (e) { toast(e.response?.data?.error || '版本加载失败', 'error') }
+}
+async function restoreVersion(vid) {
+  if (!confirm('回滚到该版本？当前内容将变为所选版本。')) return
+  try {
+    const r = await api.post('/workspace/knowledge/' + viewK.value.id + '/version/' + vid + '/restore')
+    toast('已回滚到该版本')
+    if (r && r.content !== undefined) viewK.value = { ...viewK.value, ...r }
+  } catch (e) { toast(e.response?.data?.error || '回滚失败', 'error') }
+}
+async function loadLinks(id) {
+  try {
+    const [o, b] = await Promise.all([api.get('/workspace/knowledge/' + id + '/outlinks'), api.get('/workspace/knowledge/' + id + '/backlinks')])
+    kOutlinks.value = o; kBacklinks.value = b
+  } catch (e) { toast(e.response?.data?.error || '链接加载失败', 'error') }
 }
 
 // ---- 知识库：变更 / 协作记录（v0.8.0） ----
@@ -535,7 +1035,7 @@ async function toggleKHist(k) {
   catch (e) { toast(e.response?.data?.error || '变更记录加载失败', 'error') }
 }
 function histActionLabel(a) {
-  return { create: '创建', update: '更新', delete: '删除', attachment_upload: '上传附件', attachment_delete: '删除附件' }[a] || a
+  return { create: '创建', update: '更新', delete: '删除', attachment_upload: '上传附件', attachment_delete: '删除附件', import: '导入', version_restore: '回滚版本' }[a] || a
 }
 
 // ---- 知识库附件 ----
@@ -551,10 +1051,8 @@ async function loadKAtts(id) {
 function canEditK(k) { return k && (auth.user?.id === k.owner_id || auth.isSuper) }
 function canDelAtt(a) {
   if (!viewK.value) return false
-  // 仅条目创建者 / 上传者 / 超管可删
   return auth.isSuper || viewK.value.owner_id === auth.user?.id || a.owner_id === auth.user?.id
 }
-// 图片缩略/预览 objectURL 缓存
 const thumbCache = new Map()
 function attKey(a) { return (a && (a.stored_name || a.id)) || '' }
 function thumbUrl(a) {
@@ -562,7 +1060,7 @@ function thumbUrl(a) {
   const tok = localStorage.getItem('sw_token')
   fetch(baseUrl + '/workspace/knowledge_attachments/' + attKey(a) + '/download', { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
     .then((r) => r.ok ? r.blob() : Promise.reject())
-    .then((b) => { const u = URL.createObjectURL(b); thumbCache.set(attKey(a), u); /* 触发视图刷新 */ if (viewK.value) viewK.value = { ...viewK.value } })
+    .then((b) => { const u = URL.createObjectURL(b); thumbCache.set(attKey(a), u); if (viewK.value) viewK.value = { ...viewK.value } })
     .catch(() => {})
   return ''
 }
@@ -588,7 +1086,6 @@ async function previewAtt(a) {
     const win = window.open(); if (win) { win.document.write('<iframe src="' + u + '" style="width:100%;height:100%;border:0"></iframe>'); win.document.title = a.file_name }
   } catch (e) { toast(e.message || '预览失败', 'error') }
 }
-// 是否可在线阅读（图片由缩略图预览，PDF 走浏览器原生内嵌预览）
 function isPdf(a) {
   return a && (a.mime === 'application/pdf' || (a.file_name && /\.pdf$/i.test(a.file_name)))
 }
@@ -596,19 +1093,14 @@ async function uploadAtts(e) {
   const files = Array.from(e.target.files || [])
   e.target.value = ''
   if (!files.length) return
-  // 既支持在详情弹窗里上传，也支持在编辑表单里上传
   const kid = viewK.value ? viewK.value.id : (kForm.id || 0)
   uploading.value = true
   try {
     if (kid) {
-      // 已保存条目：直接落到正式附件
-      for (const f of files) {
-        await api.upload('/workspace/knowledge/' + kid + '/attachments', f)
-      }
+      for (const f of files) await api.upload('/workspace/knowledge/' + kid + '/attachments', f)
       toast('已上传 ' + files.length + ' 个附件')
       loadKAtts(kid)
     } else {
-      // 新建未保存：先进中转缓存，保存时（saveK）由后端转正
       for (const f of files) {
         const att = await api.upload('/workspace/temp-attachments', f)
         pendingAtts.value.push({ tempId: att.id, fileName: att.file_name, mime: att.mime, size: att.size })
@@ -624,7 +1116,6 @@ function removePendingAtt(a) {
 }
 async function removeAtt(a) {
   if (!confirm('删除附件「' + a.file_name + '」？')) return
-  // 既支持在详情弹窗里删除，也支持在编辑表单里删除
   const kid = viewK.value ? viewK.value.id : (kForm.id || 0)
   try { await api.del('/workspace/knowledge_attachments/' + a.id); toast('已删除'); if (kid) loadKAtts(kid) }
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
@@ -649,20 +1140,9 @@ function fileIcon(name) {
   return '📎'
 }
 
-// ---- 导出 ----
-function kPreviewText(k) {
-  const raw = (k && k.content) || ''
-  // 富文本：去标签再截断展示
-  const tmp = document.createElement('div')
-  tmp.innerHTML = raw
-  const text = (tmp.innerText || '').trim()
-  return text ? (text.length > 160 ? text.slice(0, 160) + '…' : text) : '（暂无内容）'
-}
+// ---- 原 TXT 导出 ----
 function exportK() {
-  const params = new URLSearchParams()
-  if (kQuery.value.trim()) params.set('kw', kQuery.value.trim())
-  if (kCategory.value) params.set('category', kCategory.value)
-  const q = params.toString()
+  const q = kbQueryString()
   const tok = localStorage.getItem('sw_token')
   fetch(baseUrl + '/workspace/knowledge/export' + (q ? '?' + q : ''), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} })
     .then((r) => { if (!r.ok) throw new Error(); return r.blob() })
@@ -673,9 +1153,8 @@ function exportBundle() {
   const tok = localStorage.getItem('sw_token')
   const a = document.createElement('a')
   a.href = baseUrl + '/workspace/export/bundle'
-  a.download = '' // 交给服务端 Content-Disposition
+  a.download = ''
   if (tok) {
-    // 需要鉴权 header，走 fetch blob
     fetch(baseUrl + '/workspace/export/bundle', { headers: { Authorization: 'Bearer ' + tok } })
       .then((r) => { if (!r.ok) throw new Error(); const cd = r.headers.get('Content-Disposition') || ''; const m = /filename\*=UTF-8''([^;]+)/.exec(cd); const fn = m ? decodeURIComponent(m[1]) : ('工作台数据_' + Date.now() + '.zip'); return r.blob().then((b) => ({ b, fn })) })
       .then(({ b, fn }) => { const u = URL.createObjectURL(b); const x = document.createElement('a'); x.href = u; x.download = fn; x.click(); x.remove(); URL.revokeObjectURL(u); toast('打包已生成') })
@@ -684,11 +1163,6 @@ function exportBundle() {
     a.href = '/login'
     a.click()
   }
-}
-async function removeK(k) {
-  if (!confirm(`删除知识条目「${k.title}」？此操作不可恢复。`)) return
-  try { await api.del('/workspace/knowledge/' + k.id); toast('已删除'); await Promise.all([loadK(), loadCats()]) }
-  catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
 }
 
 // ================= 工作日志 =================
@@ -746,7 +1220,6 @@ const inboxUnread = computed(() => handovers.value.filter((h) => h.status === 'p
 const statusLabel = (s) => ({ pending: '待接手', in_progress: '处理中', done: '已完成' }[s] || s)
 const statusChip = (s) => ({ pending: 'warn', in_progress: 'accent', done: 'ok' }[s] || '')
 
-// 解析 AssigneeNames 数组（容错：JSON 失败时回退到 AssigneeName 单值）
 function parseAssigneeNames(h) {
   if (h.assignee_names) {
     try { const a = JSON.parse(h.assignee_names); if (Array.isArray(a) && a.length) return a } catch {}
@@ -754,9 +1227,7 @@ function parseAssigneeNames(h) {
   if (h.assignee_name) return [h.assignee_name]
   return []
 }
-// 列表/详情展示用
 function assigneeNamesText(h) { return parseAssigneeNames(h).join('、') }
-// 操作区权限：当前用户是否在该交接的接收人列表中（兼容旧数据 assignee_id）
 function isAssigneeOf(h) {
   const me = auth.user?.id
   if (!me) return false
@@ -769,12 +1240,10 @@ function isAssigneeOf(h) {
   }
   return false
 }
-// 把 ID 列表 / 名字列表 / 旧单字段 兼容解析
 function userNameOf(uid) {
   const u = users.value.find((x) => x.id === uid)
   return u ? u.name : ('#' + uid)
 }
-// 接收人可选列表：剔除自己、冻结的
 const pickableUsers = computed(() => users.value.filter((u) => !u.frozen && u.id !== auth.user?.id))
 function toggleAssignee(uid) {
   const arr = hForm.assignee_ids
@@ -786,7 +1255,7 @@ function toggleAssignee(uid) {
 async function loadUsers() {
   try {
     const all = await api.get('/users')
-    users.value = all.filter((u) => !u.frozen) // 冻结的不参与交接接收
+    users.value = all.filter((u) => !u.frozen)
   } catch {}
 }
 async function loadHandovers() {
@@ -835,18 +1304,34 @@ async function removeH(h) {
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
 }
 
+// 递归目录树节点组件（在 script setup 中内联声明）
+const TreeNode = {
+  name: 'TreeNode',
+  props: { node: { type: Object, required: true }, active: { type: [String, Number], default: '' } },
+  emits: ['pick'],
+  template: `
+    <li class="tree-li">
+      <span class="tree-node" :class="{active: String(active)===String(node.id)}" @click="$emit('pick', node.id)">
+        📄 {{ node.title }}<span v-if="node.children.length" class="tree-badge">{{ node.children.length }}</span>
+      </span>
+      <ul v-if="node.children.length" class="tree-ul sub">
+        <TreeNode v-for="c in node.children" :key="c.id" :node="c" :active="active" @pick="$emit('pick', $event)" />
+      </ul>
+    </li>
+  `
+}
+
 onMounted(() => {
-  loadK()
-  loadCats()
+  refreshKnowledge()
   loadLogs()
   loadHandovers()
-  if (auth.isSuper || auth.canManage) loadUsers() // 提前加载，便于发起交接
+  if (auth.isSuper || auth.canManage) loadUsers()
   useAutoRefresh(loadK, true)
 })
 onUnmounted(() => useAutoRefresh(loadK, false))
 
 watch(viewDate, loadLogs)
-watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loadLogs(); if (t === 'knowledge') { loadK(); loadCats() } })
+watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loadLogs(); if (t === 'knowledge') refreshKnowledge() })
 </script>
 
 <style scoped>
@@ -867,7 +1352,16 @@ watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loa
 .tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .handover-badge { font-style: normal; background: var(--danger); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; margin-left: 3px; }
 
-/* 通用表单 */
+/* 通用按钮/表单 */
+.btn { padding: 8px 16px; border-radius: 11px; border: 1px solid var(--glass-border); background: var(--overlay-2); color: var(--text); cursor: pointer; font-size: 13px; }
+.btn.primary { background: var(--brand-grad, var(--accent)); color: #fff; border: none; font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn.sm { padding: 6px 12px; font-size: 12px; }
+.btn.ok { background: rgba(5,150,105,0.12); color: var(--ok); border-color: rgba(5,150,105,0.35); }
+.btn.danger { color: var(--danger); border-color: rgba(225,29,72,0.35); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn.ghost.sm.on, .kb-actions .btn.ghost.sm.on { background: var(--accent-soft); color: var(--accent); border-color: rgba(79,70,229,0.3); }
+.kb-actions { gap: 6px; }
 .edit-form { border: 1px dashed var(--glass-border-strong); border-radius: 14px; padding: 16px; margin: 4px 0 16px; background: var(--overlay); display: flex; flex-direction: column; gap: 12px; }
 .fld { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
 .glass-input { width: 100%; padding: 9px 12px; border-radius: 11px; background: var(--bg-1); border: 1px solid var(--glass-border); color: var(--text); font-size: 13.5px; outline: none; }
@@ -875,16 +1369,14 @@ watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loa
 textarea.ta { resize: vertical; line-height: 1.6; }
 .fg2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .fg2.bot { align-items: end; }
-.btn { padding: 8px 16px; border-radius: 11px; border: 1px solid var(--glass-border); background: var(--overlay-2); color: var(--text); cursor: pointer; font-size: 13px; }
-.btn.primary { background: var(--brand-grad, var(--accent)); color: #fff; border: none; font-weight: 600; }
-.btn.ghost { background: transparent; }
-.btn.sm { padding: 6px 12px; font-size: 12px; }
-.btn.ok { background: rgba(5,150,105,0.12); color: var(--ok); border-color: rgba(5,150,105,0.35); }
-.btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .form-actions.right { justify-content: flex-end; }
 .chip { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--overlay-2); color: var(--text-dim); }
 .chip.accent { background: var(--accent-soft); border-color: rgba(79,70,229,0.3); color: var(--accent); }
+.chip.warn { background: rgba(217,119,6,0.14); color: #b45309; }
+.chip.pick-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); padding: 4px 6px 4px 10px; border-radius: 999px; font-size: 12.5px; }
+.chip.pick-chip .x { background: transparent; border: 0; color: inherit; font-size: 14px; line-height: 1; cursor: pointer; padding: 0 4px; opacity: .6; }
+.chip.pick-chip .x:hover { opacity: 1; }
 .dim { color: var(--text-faint); font-weight: 400; }
 .empty { text-align: center; color: var(--text-faint); padding: 36px 0; font-size: 13px; }
 .ops { display: inline-flex; gap: 6px; }
@@ -895,7 +1387,11 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .chk.mine { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
 .chk.mine input { width: 15px; height: 15px; }
 
-/* 知识库 */
+/* 标签编辑 */
+.tag-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag-input { width: auto; flex: 1; min-width: 160px; }
+
+/* 知识库：筛选 + 卡片 */
 .filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .filter-bar .search { flex: 1; min-width: 200px; }
 .filter-bar select { width: auto; }
@@ -903,12 +1399,98 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .k-card { border: 1px solid var(--glass-border); border-radius: 14px; padding: 13px 14px; background: var(--bg-1); display: flex; flex-direction: column; gap: 8px; transition: transform .12s ease, box-shadow .12s ease; cursor: pointer; }
 .k-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(15,23,42,0.08); }
 .k-card.mine { border-left: 3px solid var(--accent); }
+.k-card.pinned { border-left: 3px solid #d97706; }
 .k-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pin-badge { font-size: 12px; }
 .k-owner { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
 .k-title { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.4; }
+.k-title :deep(mark), .k-preview :deep(mark) { background: #fde68a; color: inherit; border-radius: 3px; padding: 0 1px; }
 .k-preview { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 4.2em; overflow: hidden; }
+.k-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.k-tag { font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; cursor: pointer; }
 .k-foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; font-size: 11.5px; }
-.k-foot .ops { display: inline-flex; gap: 6px; }
+.k-foot-ops { display: inline-flex; align-items: center; gap: 4px; }
+.icon-btn { border: none; background: transparent; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; border-radius: 6px; color: var(--text-faint); }
+.icon-btn.on { color: #d97706; }
+.icon-btn:hover { background: var(--overlay-2); }
+.icon-btn.star.on { color: #d97706; }
+.icon-btn.pin.on { color: #d97706; }
+
+/* 目录树 */
+.k-tree { border: 1px dashed var(--glass-border); border-radius: 12px; padding: 8px 12px; margin-bottom: 14px; background: var(--overlay); }
+.k-tree-head { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; }
+.tree-ul { list-style: none; margin: 6px 0 0; padding-left: 14px; }
+.tree-ul.sub { padding-left: 16px; border-left: 1px dashed var(--glass-border); margin-left: 4px; }
+.tree-li { margin: 2px 0; }
+.tree-node { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; padding: 2px 6px; border-radius: 7px; }
+.tree-node:hover { background: var(--overlay-2); color: var(--text); }
+.tree-node.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tree-badge { font-size: 10px; background: var(--overlay-2); border-radius: 999px; padding: 0 5px; color: var(--text-faint); }
+
+/* 统计看板 */
+.kb-stats { display: flex; flex-direction: column; gap: 16px; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.stat-card { border: 1px solid var(--glass-border); border-radius: 14px; padding: 16px; background: var(--bg-1); text-align: center; }
+.stat-num { font-size: 26px; font-weight: 800; color: var(--accent); }
+.stat-lbl { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+.stat-block { border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px; background: var(--bg-1); }
+.stat-h { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.bar-chart { display: flex; flex-direction: column; gap: 7px; }
+.bar-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.bar-name { width: 110px; flex-shrink: 0; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { flex: 1; height: 12px; background: var(--overlay-2); border-radius: 999px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.bar-cnt { width: 28px; text-align: right; color: var(--text-faint); }
+.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); cursor: pointer; font-size: 13px; }
+.tag-pill i { font-style: normal; font-size: 11px; opacity: .7; }
+.author-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.author-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; background: var(--overlay-2); color: var(--text-dim); font-size: 12.5px; }
+.author-pill i { font-style: normal; opacity: .6; }
+
+/* 回收站 */
+.kb-trash { display: flex; flex-direction: column; gap: 10px; }
+.trash-list { display: flex; flex-direction: column; gap: 10px; }
+.trash-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--glass-border); border-radius: 12px; padding: 12px 14px; background: var(--bg-1); flex-wrap: wrap; }
+.trash-main { display: flex; flex-direction: column; gap: 3px; }
+.trash-title { font-weight: 600; font-size: 14px; }
+.trash-ops { display: flex; gap: 8px; }
+
+/* 模板 / 导入 弹窗列表 */
+.tpl-item, .trash-item { }
+.tpl-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--glass-border); border-radius: 12px; padding: 12px 14px; background: var(--bg-1); }
+.tpl-main { display: flex; flex-direction: column; gap: 3px; }
+.tpl-title { font-weight: 600; font-size: 14px; }
+.tpl-ops { display: flex; gap: 8px; }
+
+/* 详情子标签 */
+.k-tabs { display: flex; gap: 4px; margin: 12px 0 6px; border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
+.k-tab { border: none; background: transparent; color: var(--text-dim); padding: 7px 12px; border-radius: 9px 9px 0 0; cursor: pointer; font-size: 12.5px; }
+.k-tab.on { color: var(--accent); font-weight: 600; border-bottom: 2px solid var(--accent); }
+
+/* 评论 */
+.k-comments { display: flex; flex-direction: column; gap: 10px; }
+.comment { border: 1px solid var(--glass-border); border-radius: 10px; padding: 9px 11px; background: var(--overlay); }
+.comment.reply { margin-left: 22px; background: var(--overlay-2); }
+.comment-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.comment-body { font-size: 13px; line-height: 1.7; margin: 5px 0; white-space: pre-wrap; word-break: break-word; }
+.comment-body :deep(code) { background: var(--overlay-2); padding: 1px 5px; border-radius: 4px; }
+.comment-ops { display: flex; gap: 8px; }
+.comment-editor { margin-top: 6px; }
+.comment-send { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* 版本 */
+.k-versions { display: flex; flex-direction: column; gap: 10px; }
+.version-item { border: 1px solid var(--glass-border); border-radius: 10px; padding: 9px 11px; background: var(--overlay); }
+.version-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.version-meta { font-size: 12px; margin: 4px 0 8px; }
+
+/* 双向链接 */
+.k-links { display: flex; flex-direction: column; gap: 14px; }
+.link-group { display: flex; flex-direction: column; gap: 6px; }
+.link-h { font-size: 13px; font-weight: 600; }
+.link-item { font-size: 13px; color: var(--accent); cursor: pointer; padding: 6px 10px; border: 1px solid var(--glass-border); border-radius: 9px; background: var(--bg-1); }
+.link-item:hover { background: var(--accent-soft); }
 
 /* 日志 */
 .log-view-toggle, .sub-tabs { display: inline-flex; border: 1px solid var(--glass-border); border-radius: 10px; overflow: hidden; }
@@ -947,13 +1529,16 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   .tabs { width: 100%; }
   .tab { flex: 1; padding: 10px 6px; text-align: center; }
   .k-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; }
   .panel-head { flex-direction: column; align-items: flex-start; }
   .scope-switch select, .date-input { width: 100%; }
+  .bar-name { width: 80px; }
 }
 
 /* 知识详情弹窗 */
 .modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
 .modal { background: var(--bg-1); border: 1px solid var(--glass-border); border-radius: 16px; width: min(560px, 100%); max-height: 82vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal.sm { width: min(460px, 100%); }
 .modal-head { display: flex; align-items: center; gap: 6px; padding: 14px 16px 0; }
 .modal-close { margin-left: auto; border: none; background: transparent; color: var(--text-faint); font-size: 16px; cursor: pointer; }
 .modal-close:hover { color: var(--text); }
@@ -961,7 +1546,6 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .modal-meta { font-size: 12px; margin: 0 16px 12px; }
 .modal-scroll { flex: 1; overflow-y: auto; padding: 0 16px; }
 .modal-body { font-size: 13.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-/* 富文本内容渲染样式（详情弹窗里用 v-html 展示） */
 .modal-body.rte-content { white-space: normal; }
 .modal-body.rte-content :deep(h2) { font-size: 17px; font-weight: 700; margin: 14px 0 6px; }
 .modal-body.rte-content :deep(h3) { font-size: 15px; font-weight: 700; margin: 10px 0 4px; }
@@ -973,14 +1557,13 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .modal-body.rte-content :deep(hr) { border: 0; border-top: 1px dashed var(--glass-border); margin: 12px 0; }
 .modal-body.rte-content :deep(pre) { background: var(--overlay-2); padding: 8px 10px; border-radius: 8px; font-size: 12.5px; overflow-x: auto; white-space: pre; }
 .modal-body.rte-content :deep(code) { background: var(--overlay-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.modal-body.rte-content :deep(table) { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+.modal-body.rte-content :deep(th), .modal-body.rte-content :deep(td) { border: 1px solid var(--glass-border); padding: 5px 9px; vertical-align: top; text-align: left; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hairline); margin-top: 12px; flex-shrink: 0; }
 
 /* 接收人多选 */
 .multi-pick { display: flex; flex-direction: column; gap: 8px; }
 .multi-pick .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.multi-pick .pick-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); padding: 4px 6px 4px 10px; border-radius: 999px; font-size: 12.5px; }
-.multi-pick .pick-chip .x { background: transparent; border: 0; color: inherit; font-size: 14px; line-height: 1; cursor: pointer; padding: 0 4px; opacity: .6; }
-.multi-pick .pick-chip .x:hover { opacity: 1; }
 .multi-pick .picker-list { max-height: 220px; overflow: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 6px 8px; background: var(--bg-soft, rgba(255,255,255,.6)); }
 .multi-pick .picker-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
 .multi-pick .picker-row:hover { background: var(--hover, rgba(0,0,0,.04)); }
