@@ -111,6 +111,8 @@ type Task struct {
 	SoonOverdue  bool      `json:"soon_overdue" gorm:"-"`   // v0.9.2 瞬态：30 分钟内将逾期（橙色提醒）
 	Running      bool      `json:"running" gorm:"-"`        // v0.14.0 瞬态：已到点且处于宽限期内，正在执行中（蓝色提醒）
 	RunningLeft  int       `json:"running_left" gorm:"-"`   // v0.14.0 瞬态：正在执行时距逾期还剩多少分钟（0 = 无宽限期或未在执行）
+	Starting     bool      `json:"starting" gorm:"-"`       // v0.14.1 瞬态：距开始 ≤ 30 分钟但尚未到点（青色「即将开始」提醒）
+	StartingIn   int       `json:"starting_in" gorm:"-"`    // v0.14.1 瞬态：距开始还有多少分钟（0 = 已到点或无开始时间）
 	CreatedAt    time.Time `json:"created_at"`
 }
 

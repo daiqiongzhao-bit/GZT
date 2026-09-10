@@ -126,6 +126,57 @@ func runningLeftMinutes(t models.Task) int {
 	return m
 }
 
+// isStarting v0.14.1：任务还没到点，但距离开始时间已经很近（默认 30 分钟内）——「即将开始」。
+//
+// 典型场景：每日 9:00 的任务，当前 8:35，距离开始 25 分钟，应提前提示执行人准备。
+// 只针对每日任务：单次/月度任务的 deadline 本身就是「截止时刻」而非「开始时刻」，
+// 它们已有 soon_overdue（即将逾期）覆盖同一窗口，再加「即将开始」会重复且误导。
+//
+// 四段状态机（以 09:00 任务、宽限 30 分钟为例）：
+//   ~08:29  正常（无标记）
+//   08:30~08:59  即将开始（青色，v0.14.1 新增）
+//   09:00~09:30  正在执行（蓝色，v0.14.0）
+//   09:30 之后   逾期（红色）
+func isStarting(t models.Task) bool {
+	if t.Status == models.TaskStatusDone {
+		return false
+	}
+	if t.Type != models.TaskTypeDaily {
+		return false
+	}
+	start := taskStartTime(t)
+	if start.IsZero() {
+		return false
+	}
+	lead := soonOverdueMinutes() // 与宽限期同一配置，默认 30 分钟
+	if lead <= 0 {
+		return false
+	}
+	now := time.Now()
+	if !now.Before(start) {
+		return false // 已到点，属于 running / overdue 窗口
+	}
+	return start.Sub(now) <= time.Duration(lead)*time.Minute
+}
+
+// startingInMinutes v0.14.1：距任务开始还剩多少分钟（向上取整，最少 1 分钟）。
+// 供前端提示「还有约 N 分钟开始」；未到「即将开始」窗口时返回 0，避免界面出现无意义文案。
+func startingInMinutes(t models.Task) int {
+	if !isStarting(t) {
+		return 0
+	}
+	start := taskStartTime(t)
+	left := start.Sub(time.Now())
+	m := int(left / time.Minute)
+	if left%time.Minute > 0 {
+		m++
+	}
+	if m < 1 {
+		m = 1
+	}
+	return m
+}
+
 // isSoonOverdue v0.9.2：距截止 ≤ soonOverdueMinutes 分钟（默认 30）但尚未逾期
 // —— 比如 11:00 截单、当前 10:35，距离 25 分钟，需要橙色「即将逾期」提示
 // 让使用者知道这个任务马上就要逾期了，比单纯标红更早介入
@@ -148,17 +199,17 @@ func isSoonOverdue(t models.Task) bool {
 		}
 		return dl.Sub(now) <= time.Duration(soonOverdueMinutes())*time.Minute
 	case models.TaskTypeDaily:
-		// v0.14.0：每日任务到点前不再显示「即将逾期」，保持状态正常。
+		// v0.14.0：每日任务到点前不再显示「即将逾期」，改为 v0.14.1 的「即将开始」。
 		//
 		// 原因：每日任务的 09:00 是「开始执行时间」而非「截止时间」。
-		// 此前以 09:00 为基准往前推 30 分钟（08:30~09:00）就标橙色「即将逾期」，
-		// 但此刻任务压根还没开始，执行人看到橙色预警会误以为要出事了，
-		// 实际上这段时间是正常的「尚未到点」。
+		// 此前以 09:00 为基准往前推 30 分钟（08:30~09:00）标橙色「即将逾期」，
+		// 但此刻任务压根还没开始，执行人看到橙色预警会误以为要出事了。
 		//
 		// 现在的状态机（以 09:00 任务、宽限 30 分钟为例）：
-		//   ~08:59  正常（无标记）
-		//   09:00~09:30 正在执行（蓝色，v0.14.0 新增）
-		//   09:30 之后  逾期（红色）
+		//   ~08:29  正常（无标记）
+		//   08:30~08:59  即将开始（青色，v0.14.1）
+		//   09:00~09:30  正在执行（蓝色，v0.14.0）
+		//   09:30 之后   逾期（红色）
 		// 单次任务仍保留提前预警（其 deadline 是真实截止时刻，预警有意义）。
 		return false
 	}
@@ -521,6 +572,10 @@ func ListTasks(c *gin.Context) {
 		list[i].Running = isRunning(list[i])
 		if list[i].Running {
 			list[i].RunningLeft = runningLeftMinutes(list[i])
+		}
+		list[i].Starting = isStarting(list[i])
+		if list[i].Starting {
+			list[i].StartingIn = startingInMinutes(list[i])
 		}
 	}
 	now := time.Now()

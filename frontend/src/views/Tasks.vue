@@ -218,6 +218,7 @@
               <td class="col-title">
                 <div class="t-title-row">
                   <span class="t-title">{{ t.title }}</span>
+                  <span v-if="t.starting && t.status !== 'done'" class="chip starting" :title="startingTitle(t)">即将开始</span>
                   <span v-if="t.soon_overdue && t.status !== 'done'" class="chip soon" title="距截止 30 分钟内，请尽快处理">即将逾期</span>
                   <span v-if="t.running && t.status !== 'done'" class="chip running" :title="runningTitle(t)">正在执行</span>
                   <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
@@ -541,6 +542,14 @@ const emptyText = computed(() => {
   return '暂无任务'
 })
 
+// v0.14.1 即将开始：悬浮提示还有多久到点，让执行人提前准备
+function startingTitle(t) {
+  const inMin = Number(t?.starting_in)
+  if (Number.isFinite(inMin) && inMin > 0) {
+    return `还有约 ${inMin} 分钟开始；到点后进入执行窗口，超时未完成将记为逾期`
+  }
+  return '即将到点，请准备执行'
+}
 function typeText(t) { return { daily: '每周', monthly: '每月', once: '单次' }[t] || t }
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }

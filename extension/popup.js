@@ -130,7 +130,8 @@ function render(data) {
       `<span class="t"><span class="n">${esc(t.title)}</span>` +
       `<span class="m">${when}${t.assignee ? ' · ' + esc(t.assignee) : ''}</span></span>` +
       (t.overdue ? '<span class="badge">逾期</span>' : '') +
-      (t.running && !t.overdue ? '<span class="badge run">执行中</span>' : '')
+      (t.running && !t.overdue ? '<span class="badge run">执行中</span>' : '') +
+      (t.starting && !t.running && !t.overdue ? '<span class="badge start">即将开始</span>' : '')
     ul.appendChild(li)
   })
   ul.querySelectorAll('.ck').forEach((b) => (b.onclick = () => toggleTask(b)))
