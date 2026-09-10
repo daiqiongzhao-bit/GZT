@@ -641,98 +641,182 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 
 // fillShifts 为所有已占位（非休息）的倒班人员填入具体班次。
 // 规则7 只统计倒班人员；固定班次人员不参与本函数。
+//
+// 【班次形态约束】（用户明确要求）
+// 每个「工作块」（两次休息之间的连续上班日）内，班次只能单向推进一次，
+// 严禁来回倒班。合法形态：
+//
+//	休 中中中 早早早 休
+//	休 中 早早早 休
+//	休 中中中中 早 休
+//
+// 非法形态：中 早 中 早（来回倒班）。
+//
+// 【均衡约束】每人各班次天数尽量平均（如 22 个工作日 → 11 早 + 11 中）。
 func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time, res *GenResult) error {
-	// 跨天轮转游标：每个员工一个"下一个班次"的偏移，实现轮流倒班
-	next := map[uint]int{}
-	for i, p := range rotating {
-		next[p.UserID] = i % len(pi.Shifts)
+	order := pi.blockShiftOrder()
+	if len(order) == 0 || len(rotating) == 0 {
+		return nil
+	}
+	n := len(order)
+
+	// 每日各班次人数负载；锁定需求指定的班次先计入，保证后续错峰能参考
+	load := make([]map[string]int, len(days))
+	for i := range days {
+		load[i] = map[string]int{}
+		for _, sh := range pi.Shifts {
+			load[i][sh] = 0
+		}
 	}
 
-	for _, d := range days {
-		k := dateKey(d)
-		// 当天需要上班的倒班人员。
-		// PendingShift 表示「已定要上班、班次待填」；只有 RestShift / 无记录才是休息。
-		var working []PlanPerson
-		for _, p := range rotating {
-			cur := lookPlan(plan, k, p.Name)
-			if isRestShift(cur) {
+	// 收集每人的工作块：连续的上班日，被休息日或已锁定班次日分隔。
+	//
+	// 为什么按「块」而不是逐日排：班次形态是块级约束
+	// （块内只能单向切换一次），逐日贪心必然排出来回倒班。
+	type blockT struct {
+		uid  uint
+		name string
+		idxs []int // days 中的下标
+	}
+	var blocks []blockT
+	for _, p := range rotating {
+		cur := []int{}
+		flush := func() {
+			if len(cur) > 0 {
+				blocks = append(blocks, blockT{p.UserID, p.Name, append([]int{}, cur...)})
+				cur = cur[:0]
+			}
+		}
+		for i, d := range days {
+			v := lookPlan(plan, dateKey(d), p.Name)
+			if isRestShift(v) {
+				flush()
 				continue
 			}
-			working = append(working, p)
+			// 已锁定具体班次（锁定需求）→ 保持不动，计入负载，并打断工作块
+			if v != "" && !isPendingShift(v) {
+				load[i][v]++
+				flush()
+				continue
+			}
+			cur = append(cur, i)
 		}
-		if len(working) == 0 {
+		flush()
+	}
+
+	byUID := map[uint][]blockT{}
+	for _, b := range blocks {
+		byUID[b.uid] = append(byUID[b.uid], b)
+	}
+
+	for _, p := range rotating {
+		bs := byUID[p.UserID]
+		if len(bs) == 0 {
 			continue
 		}
-
-		// 当天各班次已有人数（锁定上班需求可能已指定具体班次）
-		count := map[string]int{}
-		assigned := map[uint]string{}
-		for _, p := range working {
-			sh := lookPlan(plan, k, p.Name)
-			// 仅统计「已是真实班次」的人；PendingShift 是待填占位，不能计入
-			if sh == "" || isPendingShift(sh) {
-				continue
-			}
-			count[sh]++
-			assigned[p.UserID] = sh
+		// 该人本月总工作日
+		total := 0
+		for _, b := range bs {
+			total += len(b.idxs)
 		}
-
-		// 待分配的人：优先分给人数最少的班次，保证「每班最少人数」
-		var pending []PlanPerson
-		for _, p := range working {
-			if _, ok := assigned[p.UserID]; !ok {
-				pending = append(pending, p)
+		// 各班次目标配额：尽量均分（22 天 → 11 + 11）
+		quota := make([]int, n)
+		base := total / n
+		extra := total % n
+		for i := range quota {
+			quota[i] = base
+			if i < extra {
+				quota[i]++
 			}
 		}
-		// 按「当前人数最少的班次」优先级依次分配
-		for _, p := range pending {
-			// 候选班次按当天已排人数升序、且考虑该员工的下一个轮转班次
-			best := pi.pickShiftFor(plan, p, k, d, count, next)
-			count[best]++
-			assigned[p.UserID] = best
-			setPlan(plan, k, p.Name, best)
-			// 该员工下一天从下一个班次开始，形成轮转
-			next[p.UserID] = (indexOf(pi.Shifts, best) + 1) % len(pi.Shifts)
+		// 逐块切分并填写；quota 随填写递减，实现全局均衡
+		for _, b := range bs {
+			seg := planBlockSegments(len(b.idxs), quota)
+			pos := 0
+			for si, cnt := range seg {
+				for c := 0; c < cnt && pos < len(b.idxs); c++ {
+					dayIdx := b.idxs[pos]
+					sh := order[si]
+					setPlan(plan, dateKey(days[dayIdx]), b.name, sh)
+					load[dayIdx][sh]++
+					if quota[si] > 0 {
+						quota[si]--
+					}
+					pos++
+				}
+			}
 		}
 	}
 	return nil
 }
 
-// pickShiftFor 为某员工在某天选择班次：
-// 优先填补当天人数最少的班次（满足规则7），其次考虑轮转连续性。
-func (pi *PlanInfo) pickShiftFor(plan map[string]map[string]string, p PlanPerson, k string, d time.Time, count map[string]int, next map[uint]int) string {
-	// 候选：全部班次，按 (当天人数, 是否等于轮转期望) 排序
-	type cand struct {
-		shift string
-		cnt   int
-		pref  int // 0 = 正是轮转期望，1 = 其他
+// blockShiftOrder 返回工作块内的班次推进顺序（单向、不可逆）。
+//
+// 休息后第一天上「晚」的班，逐步提前，休假前上「早」的班：
+//
+//	[中班, 早班] → 块形态「中中中 早早早」
+//
+// 这与规则5（休假前早班、休假后晚班）天然一致。
+func (pi *PlanInfo) blockShiftOrder() []string {
+	if len(pi.Shifts) <= 2 && pi.Evening != "" && pi.Morning != "" && pi.Evening != pi.Morning {
+		return []string{pi.Evening, pi.Morning}
 	}
-	cands := make([]cand, 0, len(pi.Shifts))
-	want := pi.Shifts[next[p.UserID]%len(pi.Shifts)]
-	for _, sh := range pi.Shifts {
-		c := cand{shift: sh, cnt: count[sh]}
-		if sh != want {
-			c.pref = 1
-		}
-		cands = append(cands, c)
+	// 多班次：按开始时间逆序（最晚 → 最早）单向推进
+	out := make([]string, len(pi.Shifts))
+	for i, s := range pi.Shifts {
+		out[len(pi.Shifts)-1-i] = s
 	}
-	sort.SliceStable(cands, func(i, j int) bool {
-		if cands[i].cnt != cands[j].cnt {
-			return cands[i].cnt < cands[j].cnt
-		}
-		return cands[i].pref < cands[j].pref
-	})
-	return cands[0].shift
+	return out
 }
 
-// indexOf 返回班次在池中的下标；不存在返回 0。
-func indexOf(list []string, v string) int {
-	for i, s := range list {
-		if s == v {
-			return i
+// planBlockSegments 把长度为 L 的工作块按顺序切成 n 段，各段之和 = L。
+//
+// 段长参考 quota（该人各班次「还应排多少天」）按比例分配，
+// 因此逐块消耗 quota 后，全天下来各班次天数自然趋于平均。
+// 每段至少 1 天（天数不足时靠后的段可为 0）。
+func planBlockSegments(L int, quota []int) []int {
+	n := len(quota)
+	seg := make([]int, n)
+	if L <= 0 || n == 0 {
+		return seg
+	}
+	remain := L
+	remainQ := 0
+	for _, q := range quota {
+		if q > 0 {
+			remainQ += q
 		}
 	}
-	return 0
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			seg[i] = remain
+			break
+		}
+		want := remain / (n - i)
+		if remainQ > 0 && quota[i] > 0 {
+			want = (quota[i]*remain + remainQ/2) / remainQ
+		}
+		// 给后面的段至少留 1 天
+		maxTake := remain - (n - 1 - i)
+		if maxTake < 1 {
+			maxTake = 1
+		}
+		if want < 1 {
+			want = 1
+		}
+		if want > maxTake {
+			want = maxTake
+		}
+		seg[i] = want
+		remain -= want
+		if quota[i] > 0 {
+			remainQ -= quota[i]
+			if remainQ < 0 {
+				remainQ = 0
+			}
+		}
+	}
+	return seg
 }
 
 // applyAdjacencyRules 软约束优化（规则5）：
