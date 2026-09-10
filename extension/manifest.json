@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "排班工作台助手",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "一键查看今日班次、待办与逾期提醒（工具栏角标），支持网页端快捷跳转与任务勾选完成。服务器地址可在弹窗内设置，更换域名无需重装。",
   "permissions": [
     "storage",
