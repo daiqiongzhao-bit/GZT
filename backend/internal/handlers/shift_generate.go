@@ -151,8 +151,15 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 		targetRest = 0
 	}
 
+	// 每日休息人数计数器（跨人员共享）。
+	//
+	// 为什么需要：仅靠相位错峰，不同人的休息段仍可能压在同一天，
+	// 该天在岗人数骤降 → 触发每班最少人数违规。
+	// 这里维护「当天已安排多少人休息」，后续人员选休息段位置时
+	// 优先挑当天休息人数最少的位置，从而压平在岗人数曲线。
+	restPerDay := map[string]int{}
 	for _, p := range rotating {
-		pi.assignRestDays(plan, p, days, targetRest, forcedWork)
+		pi.assignRestDays(plan, p, days, targetRest, forcedWork, restPerDay)
 	}
 
 	// —— 阶段3：填班次（规则7 每班最少人数，仅统计倒班人员）——
@@ -356,10 +363,19 @@ func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
 //     造出超过 maxRest 的超长连休（线上实测出现过 5 连休）。
 //  3. 每个人的槽序列整体旋转一个相位（按 userID/年/月派生），
 //     使不同人的休息段在月内互相错开，避免同一天集体休息。
+//  4. 负载感知（load）：在槽内可浮动范围内，优先选择
+//     「当日已休息人数最少」的位置，进一步压平在岗人数曲线。
+//     这是解决「某天在岗人数骤降导致每班人数违规」的关键。
 //
 // freeLen: 可自由安排的「天」的数量
 // segLens: 各休息段的长度
+// load:    长度应 >= freeLen 的每日负载数组（可为 nil，表示不做负载感知）
 func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int) []int {
+	return restSegmentIndicesLoad(freeLen, segLens, userID, year, month, nil)
+}
+
+// restSegmentIndicesLoad 是 restSegmentIndices 的完整版，额外接受每日负载。
+func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month int, load []int) []int {
 	if freeLen <= 0 || len(segLens) == 0 {
 		return nil
 	}
@@ -398,6 +414,8 @@ func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int
 	// 槽内偏移：按槽位下标派生（不是段序号），随槽走
 	offs := splitSlotOffsets(userID, year, month, segCount, baseSlot)
 
+	hasLoad := len(load) >= freeLen
+
 	var idxs []int
 	for i, n := range segLens {
 		si := (i + phase) % segCount
@@ -408,29 +426,56 @@ func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int
 		if room < 0 {
 			room = 0
 		}
-		off := offs[i]
-		if off > room {
-			off = room
+
+		// 候选起点：以种子偏移为中心，向两侧扩展，覆盖整个可浮动范围。
+		// 这样既能保留确定性（同一人同一月稳定），又能在候选里挑负载最低的。
+		bestStart := slotStart[si]
+		bestScore := -1
+		for d := 0; d <= room; d++ {
+			for _, cand := range []int{offs[i] + d, offs[i] - d} {
+				if cand < 0 || cand > room {
+					continue
+				}
+				start := slotStart[si] + cand
+				if start+n > freeLen || start < 0 {
+					continue
+				}
+				// 打分：该段覆盖日期的负载之和，越小越好
+				score := 0
+				if hasLoad {
+					for k := 0; k < n; k++ {
+						score += load[start+k]
+					}
+				} else {
+					score = abs(cand - offs[i]) // 无负载时退回「离种子偏移最近」
+				}
+				if bestScore < 0 || score < bestScore {
+					bestScore = score
+					bestStart = start
+				}
+			}
+			// 有负载时无需穷举全部候选，找到零负载即可停止
+			if hasLoad && bestScore == 0 {
+				break
+			}
 		}
-		if off < 0 {
-			off = 0
-		}
-		start := slotStart[si] + off
-		// 全局边界兜底：槽本身已在 [0, freeLen) 内，这里只防御性收口
-		if start+n > freeLen {
-			start = freeLen - n
-		}
-		if start < 0 {
-			start = 0
-		}
+
 		for k := 0; k < n; k++ {
-			if p := start + k; p >= 0 && p < freeLen {
+			if p := bestStart + k; p >= 0 && p < freeLen {
 				idxs = append(idxs, p)
 			}
 		}
 	}
 	sort.Ints(idxs)
 	return idxs
+}
+
+// abs 返回整数绝对值。
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
@@ -452,7 +497,8 @@ func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
 // 策略：把应休天数切成若干段，每段长度不超过 maxRest，
 // 段与段之间至少间隔 1 个工作日；同时避开已锁定的上班需求。
 // 休息段的起始日尽量均匀分布，避免全挤在月初/月末。
-func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string) {
+// restPerDay 为跨人员共享的「每日休息人数」计数器，用于压平在岗人数曲线。
+func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string, restPerDay map[string]int) {
 	maxRest := pi.Rule.MaxRestStreak
 	if maxRest <= 0 {
 		maxRest = 3
@@ -541,9 +587,19 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				//   导致该天在岗人数骤降触发 min_per_shift 违规；
 				//   而相邻几天又人满为患——人力被浪费，且连上上限也易破。
 				//
-				// 做法见 restSegmentIndices 的注释。
-				for _, idx := range restSegmentIndices(len(free), segLens, p.UserID, pi.Year, pi.Month) {
-					rest[dateKey(free[idx])] = true
+				// 做法见 restSegmentIndicesLoad 的注释。
+				// 负载数组：free[j] 当天已有多少人休息，用于择优压平在岗曲线。
+				load := make([]int, len(free))
+				for j, d := range free {
+					load[j] = restPerDay[dateKey(d)]
+				}
+				for _, idx := range restSegmentIndicesLoad(len(free), segLens, p.UserID, pi.Year, pi.Month, load) {
+					if idx < 0 || idx >= len(free) {
+						continue
+					}
+					k := dateKey(free[idx])
+					rest[k] = true
+					restPerDay[k]++
 				}
 			} else {
 				// 空间不足：尽力铺（后续校验会报告违规）
