@@ -613,3 +613,23 @@ type PushSubscription struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// ============ 排班草稿（v0.19.3）============
+//
+// 场景：排班生成后往往还要人工微调，没定稿前不该直接覆盖正式班表。
+// 这里提供「暂存多个版本 → 选定后再推送到正式班表」的能力。
+type ShiftPlanDraft struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	DeptID    uint      `json:"dept_id" gorm:"index;not null"`
+	Year      int       `json:"year" gorm:"not null"`
+	Month     int       `json:"month" gorm:"not null"`
+	Name      string    `json:"name" gorm:"size:64;not null"`      // 版本名，如「方案A」「初稿」
+	Note      string    `json:"note" gorm:"size:512"`              // 备注
+	Content   string    `json:"content" gorm:"type:text;not null"` // JSON：{ "2026-09-01": {"张三":"早班", ...}, ... }
+	Stats     string    `json:"stats" gorm:"type:text"`            // JSON：违规数等信息快照
+	Applied   bool      `json:"applied" gorm:"default:false"`      // 是否已推送到正式班表
+	CreatorID uint      `json:"creator_id"`
+	Creator   string    `json:"creator" gorm:"size:64"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

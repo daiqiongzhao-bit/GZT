@@ -73,6 +73,8 @@ func Init() error {
 		&models.UserShiftPref{},
 		&models.ShiftRequest{},
 		&models.SpecialWorkDay{},
+		// v0.19.3 排班草稿（多版本暂存）
+		&models.ShiftPlanDraft{},
 	)
 }
 

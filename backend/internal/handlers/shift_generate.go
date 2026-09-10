@@ -388,11 +388,11 @@ func splitSlotOffsets(userID uint, year, month, segCount, slot int) []int {
 // segLens: 各休息段的长度
 // load:    长度应 >= freeLen 的每日负载数组（可为 nil，表示不做负载感知）
 func restSegmentIndices(freeLen int, segLens []int, userID uint, year, month int) []int {
-	return restSegmentIndicesLoad(freeLen, segLens, userID, year, month, nil)
+	return restSegmentIndicesLoad(freeLen, segLens, userID, year, month, nil, 0)
 }
 
 // restSegmentIndicesLoad 是 restSegmentIndices 的完整版，额外接受每日负载。
-func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month int, load []int) []int {
+func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month int, load []int, maxWork int) []int {
 	if freeLen <= 0 || len(segLens) == 0 {
 		return nil
 	}
@@ -418,6 +418,26 @@ func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month
 		cursor += slotLen[i]
 	}
 
+	// 统一的浮动上限：取最严格的段（最短段）推导，见下方 roomCap 使用处说明。
+	roomCap := -1 // -1 表示不限制
+	if maxWork > 0 {
+		minN, minSlot := segLens[0], slotLen[0]
+		for _, n := range segLens {
+			if n < minN {
+				minN = n
+			}
+		}
+		for _, sl := range slotLen {
+			if sl < minSlot {
+				minSlot = sl
+			}
+		}
+		roomCap = maxWork - minSlot + minN
+		if roomCap < 0 {
+			roomCap = 0
+		}
+	}
+
 	// 相位：按用户错开整段位置，范围 0 ~ segCount-1。
 	//
 	// 不能用 (userID+year+month)%segCount：连续 uid 会得到连续相位，
@@ -440,6 +460,16 @@ func restSegmentIndicesLoad(freeLen int, segLens []int, userID uint, year, month
 		// 槽长不足以容纳「段 + 隔离日」时退化为不允许浮动（room=0），
 		// 此时靠相位错峰仍能实现人与人之间的分散。
 		room := slotLen[si] - n - 1
+		//
+		// 还要受「连续上班上限」约束。
+		//   段 i 之后那个工作块的长度 = 槽长 + 下段偏移 - 本段偏移 - 段 i 长度，
+		//   最坏情况（本段偏移取 0、下段偏移取满）为 槽长 + room - 段长。
+		//   令其 ≤ maxWork 得 room ≤ maxWork - 槽长 + 段长。
+		//   由于下一段的偏移也参与，必须取所有段中最严格的那个（最短段），
+		//   否则不同段长混排时仍会漏出 7 天长班次。
+		if roomCap >= 0 && room > roomCap {
+			room = roomCap
+		}
 		if room < 0 {
 			room = 0
 		}
@@ -699,7 +729,7 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				for j, d := range free {
 					load[j] = restPerDay[dateKey(d)]
 				}
-				for _, idx := range restSegmentIndicesLoad(len(free), segLens, p.UserID, pi.Year, pi.Month, load) {
+				for _, idx := range restSegmentIndicesLoad(len(free), segLens, p.UserID, pi.Year, pi.Month, load, maxWork) {
 					if idx < 0 || idx >= len(free) {
 						continue
 					}
