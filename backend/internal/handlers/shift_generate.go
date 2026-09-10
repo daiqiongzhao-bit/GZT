@@ -150,6 +150,10 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	if targetRest < 0 {
 		targetRest = 0
 	}
+	maxWork := pi.Rule.MaxWorkStreak
+	if maxWork <= 0 {
+		maxWork = 6
+	}
 
 	// 每日休息人数计数器（跨人员共享）。
 	//
@@ -160,6 +164,12 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	restPerDay := map[string]int{}
 	for _, p := range rotating {
 		pi.assignRestDays(plan, p, days, targetRest, forcedWork, restPerDay)
+		// 连续上班超上限时，拆一个双休成单休来打断长班次。
+		//
+		// 用户原话：「那些连续上7天的你可以把某个双休改成单休啊，
+		// 为什么那么死板？」——与其让人连上 7、8 天，
+		// 不如牺牲一个双休，把长班次从中间切开。
+		pi.breakLongWorkStreaks(plan, p, days, maxWork)
 	}
 
 	// —— 阶段3：填班次（规则7 每班最少人数，仅统计倒班人员）——
@@ -246,14 +256,13 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 		minSegs = maxSegs
 	}
 
-	// 双休基准段数：向上取整，余数用单休消化（避免出现半段）
+	// 双休基准段数：向上取整。
+	//
+	// 为什么不再抖动段数：段数一旦变少，均分后每段就会 >2 天，
+	// 直接产生 3 连休——用户明确要求「能不三休就不要排三休」。
+	// 人与人的差异改由「哪几段是单休」体现（见下方打散），
+	// 既能错峰，又不会冒出三休。
 	wantSegs := (total + 1) / 2
-	// 小幅抖动 ±0 或 ±1，让不同人节奏略有差异
-	if next() < 0.3 && wantSegs+1 <= maxSegs {
-		wantSegs++
-	} else if next() < 0.3 && wantSegs-1 >= minSegs {
-		wantSegs--
-	}
 	if wantSegs < minSegs {
 		wantSegs = minSegs
 	}
@@ -264,52 +273,47 @@ func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
 		wantSegs = 1
 	}
 
-	// ---- 2) 每段初始 2 天（上限为 2 时直接成立），再补齐差额 ----
+	// ---- 2) 均分：base 天 + 其中 extra 段各多 1 天 ----
+	//
+	// wantSegs >= ceil(total/2) 时 base <= 2，
+	// 于是每段只可能是 1 或 2 天 —— 天然不出现 3 连休。
 	segs := make([]int, wantSegs)
-	base := 2
-	if maxRest < base {
-		base = maxRest
+	base := total / wantSegs
+	extra := total % wantSegs
+	if base < 1 {
+		base = 1
+		extra = 0
 	}
-	sum := 0
 	for i := range segs {
 		segs[i] = base
-		sum += base
 	}
 
-	// 差额：正数=还需加休，负数=需减休
-	diff := total - sum
-	// 可加的空间（每段最多到 maxRest）
-	for diff > 0 {
-		moved := false
-		for i := range segs {
-			if diff == 0 {
-				break
-			}
-			if segs[i] < maxRest {
-				segs[i]++
-				diff--
-				moved = true
-			}
+	// extra 个「+1」落在哪几段：用种子打散，让不同人节奏有差异
+	if extra > 0 {
+		idx := make([]int, wantSegs)
+		for i := range idx {
+			idx[i] = i
 		}
-		if !moved {
-			break
+		for i := wantSegs - 1; i > 0; i-- {
+			j := int(next()*float64(i+1)) % (i + 1)
+			idx[i], idx[j] = idx[j], idx[i]
+		}
+		for k := 0; k < extra && k < wantSegs; k++ {
+			segs[idx[k]]++
 		}
 	}
-	// 需减：优先把 2 天的段减成 1 天（即出现单休），且不产生 0
-	for diff < 0 {
-		moved := false
-		for i := range segs {
-			if diff == 0 {
-				break
+
+	// 兜底：若 maxRest 偏小导致某段超上限，把多出的天数挪给最短的段
+	for i := range segs {
+		for segs[i] > maxRest {
+			segs[i]--
+			minIdx := 0
+			for j := range segs {
+				if segs[j] < segs[minIdx] {
+					minIdx = j
+				}
 			}
-			if segs[i] > 1 {
-				segs[i]--
-				diff++
-				moved = true
-			}
-		}
-		if !moved {
-			break
+			segs[minIdx]++
 		}
 	}
 
@@ -476,6 +480,74 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// breakLongWorkStreaks 打断超过 maxWork 的连续上班段。
+//
+// 背景（用户原话）：
+//
+//	「那些连续上7天的你可以把某个双休改成单休啊，为什么那么死板？」
+//
+// 思路：找一段过长的连续上班，在它的中间挑一天改为休息；
+// 为了保持「本月总休息天数」不变，再从某个双休里拿掉一天改回上班。
+// 净效果：一个双休被拆成两个单休，长班次被切成两段——
+// 总休息天数没变，但节奏明显更健康。
+//
+// 只在必要时动手（确实存在超长班次时才改），不打扰本就合规的排班。
+func (pi *PlanInfo) breakLongWorkStreaks(plan map[string]map[string]string, p PlanPerson, days []time.Time, maxWork int) {
+	if maxWork <= 0 || len(days) == 0 {
+		return
+	}
+	// 最多循环几轮，防御性上限（正常 1~2 轮即收敛）
+	for round := 0; round < 8; round++ {
+		// 1) 找出最长的一段连续上班
+		bestStart, bestLen := -1, 0
+		curStart, curLen := -1, 0
+		for i, d := range days {
+			if isRestShift(lookPlan(plan, dateKey(d), p.Name)) {
+				curStart, curLen = -1, 0
+				continue
+			}
+			if curLen == 0 {
+				curStart = i
+			}
+			curLen++
+			if curLen > bestLen {
+				bestLen, bestStart = curLen, curStart
+			}
+		}
+		if bestLen <= maxWork {
+			return // 没有超长班次，收工
+		}
+
+		// 2) 在这段中间挑一天改为休息（切在正中间，两段尽量均衡）
+		cut := bestStart + bestLen/2
+
+		// 3) 找一个「双休」拆出一天补回来，保持总休息天数不变
+		donor := -1
+		for i, d := range days {
+			// 跳过即将变成休息的那天及其相邻日，避免把新休息段又破坏掉
+			if i >= cut-1 && i <= cut+1 {
+				continue
+			}
+			j := i + 1
+			if j >= len(days) {
+				break
+			}
+			if isRestShift(lookPlan(plan, dateKey(d), p.Name)) &&
+				isRestShift(lookPlan(plan, dateKey(days[j]), p.Name)) {
+				// 连续两天都休息 = 双休，把其中一天改回上班
+				donor = i
+				break
+			}
+		}
+		if donor < 0 {
+			return // 没有可拆的双休，放弃（保持现状，后续校验会如实报告）
+		}
+
+		setPlan(plan, dateKey(days[cut]), p.Name, RestShift)
+		setPlan(plan, dateKey(days[donor]), p.Name, PendingShift)
+	}
 }
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：

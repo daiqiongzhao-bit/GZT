@@ -44,9 +44,10 @@ func TestSplitRestStreaksDoubleFirst(t *testing.T) {
 	if p1 > 25 {
 		t.Errorf("单休占比 %.0f%% 过高（应 <=25%%）：%v", p1, lenCount)
 	}
-	// 上限内允许出现 3 连休作调配
-	if lenCount[3] == 0 {
-		t.Errorf("应有少量 3 连休用于调配（上限内）：%v", lenCount)
+	// 用户明确要求「能不三休就不要排三休」：
+	// 8 天休息能被 2 整除，应当全是双休，一个 3 连休都不该有。
+	if lenCount[3] != 0 {
+		t.Errorf("不应出现 3 连休（8 天可全排双休）：%v", lenCount)
 	}
 }
 
@@ -305,5 +306,36 @@ func TestRestSegmentIndicesSpreadAcrossUsers(t *testing.T) {
 	if len(patterns) < 4 {
 		t.Errorf("6 名员工只产生 %d 种休息模式，错峰不足：%v",
 			len(patterns), patterns)
+	}
+}
+
+// TestSplitRestStreaksNoTriple 用户明确要求「能不三休就不要排三休」。
+//
+// 只要总休息天数能被 2 整除，就应当全部排成双休，
+// 不允许出现 3 连休——3 连休只在天数除不尽、且受 maxRest 逼迫时才允许。
+func TestSplitRestStreaksNoTriple(t *testing.T) {
+	// 偶数天：必须全双休，零三休
+	for _, total := range []int{4, 6, 8, 10, 12} {
+		for uid := uint(1); uid <= 40; uid++ {
+			segs := splitRestStreaks(total, 3, uid, 2026, 9)
+			for _, n := range segs {
+				if n >= 3 {
+					t.Fatalf("total=%d uid=%d：出现 %d 连休，应全为双休：%v",
+						total, uid, n, segs)
+				}
+			}
+		}
+	}
+	// 奇数天：允许 1 个单休，但仍不得出现 3 连休
+	for _, total := range []int{5, 7, 9, 11} {
+		for uid := uint(1); uid <= 40; uid++ {
+			segs := splitRestStreaks(total, 3, uid, 2026, 9)
+			for _, n := range segs {
+				if n >= 3 {
+					t.Fatalf("total=%d uid=%d：出现 %d 连休（奇数天应只出现单休）：%v",
+						total, uid, n, segs)
+				}
+			}
+		}
 	}
 }
