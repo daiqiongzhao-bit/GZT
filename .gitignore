@@ -15,3 +15,9 @@ data/
 # 本地运行产物（测试密钥 / 日志，勿提交）
 secrets.env
 runtime.log
+
+# Python（tools/pack_extension.py 运行/编译产生的字节码缓存）
+# 不忽略会导致 release.sh 前置的「工作区干净」检查失败，从而挡住发版。
+__pycache__/
+*.pyc
+*.pyo

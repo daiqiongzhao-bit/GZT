@@ -78,10 +78,18 @@ body {
 .upd { font-size: 11px; color: #9aa3b2; }
 
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.stats-5 { grid-template-columns: repeat(5, 1fr); padding: 0 2px; }
+.stats-5 .stat { padding: 8px 2px; }
+.stats-5 .stat b { font-size: 17px; }
+.stats-5 .stat span { font-size: 10.5px; }
 .stat { background: #ffffff; border: 1px solid #e6e9f2; border-radius: 10px; padding: 10px 6px; text-align: center; }
 .stat b { display: block; font-size: 20px; color: #1f2733; }
 .stat span { font-size: 11px; color: #6b7280; }
 .stat.danger b { color: #ef4444; }
+.stat.primary b { color: #2563eb; }
+.stat.info b { color: #0d9488; }
+
+.ver { font-size: 10px; color: #94a3b8; margin-left: 4px; font-weight: 400; letter-spacing: 0.3px; }
 
 h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
 
@@ -135,5 +143,8 @@ h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
   .badge { background: #2a1418; color: #f87171; }
   .badge.run { background: #152442; color: #60a5fa; }
   .badge.start { background: #0f2e2b; color: #5eead4; }
+  .stat.primary b { color: #60a5fa; }
+  .stat.info b { color: #5eead4; }
+  .ver { color: #475569; }
   .spin { border-color: #2a3550; border-top-color: #60a5fa; }
 }

@@ -4,6 +4,13 @@ async function loadBase() {
   const r = await new Promise((res) => chrome.storage.local.get(['swb_base'], res))
   WEB = (r.swb_base && r.swb_base.trim()) || DEFAULT_WEB
 }
+// v0.14.2：从 manifest 读取真实版本号显示在标题栏
+// 用于排查 Chrome 扩展缓存问题——若角标显示 v0.0.1 则说明插件版本未刷新到最新
+try {
+  const ver = chrome.runtime.getManifest().version
+  const el = document.getElementById('plugin-ver')
+  if (el) el.textContent = 'v' + ver
+} catch (_) { /* 非扩展环境忽略 */ }
 const $ = (id) => document.getElementById(id)
 
 function show(id) {
@@ -108,8 +115,15 @@ function render(data) {
   // 统计
   const todayTasks = (dash.today_task_list || tasks.filter((t) => t.due_today)).filter((t) => t.status !== 'done')
   const overdue = tasks.filter((t) => t.overdue && t.status !== 'done')
+  const running = tasks.filter((t) => t.running && t.status !== 'done')
+  // 「即将开始」dashboard 已带 starting_count；优先用字段，没有再回退到遍历
+  const startingCount = (typeof dash.starting_count === 'number')
+    ? dash.starting_count
+    : todayTasks.filter((t) => t.starting && !t.running && !t.overdue).length
   const month = (dash.month_task_list || tasks.filter((t) => t.due_this_month)).filter((t) => t.status !== 'done')
   $('st-today').textContent = todayTasks.length
+  $('st-starting').textContent = startingCount
+  $('st-running').textContent = running.length
   $('st-over').textContent = overdue.length
   $('st-month').textContent = month.length
 

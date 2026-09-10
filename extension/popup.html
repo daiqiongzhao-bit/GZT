@@ -7,7 +7,7 @@
 <body>
   <header class="hd">
     <span class="logo">📋</span>
-    <span class="ttl">排班工作台助手</span>
+    <span class="ttl">排班工作台助手 <span class="ver" id="plugin-ver"></span></span>
     <button id="btn-refresh" class="rbtn" title="刷新">⟳</button>
   </header>
 
@@ -47,8 +47,14 @@
       <span id="updated" class="upd"></span>
     </div>
 
-    <div class="stats">
+    <!-- 概览网格：今日待办 / 即将开始 / 执行中 / 逾期 / 本月，共 5 栏。
+         标题栏的版本角标（id="plugin-ver"）由 popup.js 在运行时用
+         chrome.runtime.getManifest().version 填充，便于一眼判断是否命中
+         Chrome 插件缓存；此处不写死版本号，避免版本漂移。 -->
+    <div class="stats stats-5">
       <div class="stat"><b id="st-today">–</b><span>今日待办</span></div>
+      <div class="stat info"><b id="st-starting">–</b><span>即将开始</span></div>
+      <div class="stat primary"><b id="st-running">–</b><span>执行中</span></div>
       <div class="stat danger"><b id="st-over">–</b><span>逾期</span></div>
       <div class="stat"><b id="st-month">–</b><span>本月</span></div>
     </div>

@@ -59,6 +59,33 @@ if [[ ! "$BUMP" =~ ^(patch|minor|major)$ ]]; then
   exit 1
 fi
 
+# ---------- 0. 打包浏览器插件（保证分发 zip 与 extension/ 源码一致） ----------
+# 历史缺陷：frontend/public/extension.zip 长期是手工产物，v0.9.2 之后再未重打包，
+#          导致 v0.14.x 的插件功能从未随镜像送达用户。这里在发版前置步骤强制重打包。
+# 优先 python3，回退 python；二者皆无则「明确报错退出」——绝不静默跳过，
+# 静默跳过正是该缺陷的成因。
+PYTHON="$(command -v python3 || command -v python || true)"
+if [ -z "$PYTHON" ]; then
+  echo "✗ 找不到 python3 / python，无法打包浏览器插件（拒绝静默跳过）"
+  exit 1
+fi
+
+# 重新打包插件；若产物有变化则在当前分支上自动提交，避免其把后续 clean 检查顶掉。
+pack_extension() {
+  "$PYTHON" tools/pack_extension.py
+  if [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$BRANCH" ] \
+     && [ -n "$(git status --porcelain -- extension/manifest.json frontend/public/extension.zip extension.zip)" ]; then
+    git add extension/manifest.json frontend/public/extension.zip extension.zip
+    git commit -q -m "$1"
+    echo "    已提交插件打包产物: $1"
+  else
+    echo "    插件包已是最新，无需提交"
+  fi
+}
+
+echo "==> 打包浏览器插件"
+pack_extension "build: 重新打包插件 zip"
+
 # ---------- 1. 前置检查 ----------
 echo "==> 前置检查"
 if [ -n "$(git status --porcelain)" ]; then
@@ -119,6 +146,14 @@ sed -i "s/AppVersion: \"v[0-9.]*\"/AppVersion: \"${NEW}\"/" backend/internal/con
 git add backend/internal/config/config.go
 git commit -q -m "${NEW}: 同步 AppVersion"
 git push origin "$BRANCH" -q
+
+# ---------- 3.6 重新打包插件（此时 AppVersion 已是 ${NEW}） ----------
+# AppVersion 是插件版本号的单一来源；它刚刚在 0/4 步被改成 ${NEW}，因此必须
+# 再打包一次，保证 zip 内 manifest.version == ${NEW#v}。否则仍会把「低一档版本」
+# 的插件随镜像分发出去——正是本次要修的版本漂移缺陷。
+echo
+echo "==> 重新打包浏览器插件（版本 ${NEW#v}）"
+pack_extension "build: 重新打包插件 zip (${NEW})"
 
 # ---------- 4. 打 tag 并推送 GitHub ----------
 echo

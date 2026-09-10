@@ -4,6 +4,16 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
+# 打包浏览器插件（保证嵌入二进制的 extension.zip 与 extension/ 源码一致）。
+# 优先 python3，回退 python；二者皆无则明确报错退出——绝不静默跳过。
+PYTHON="$(command -v python3 || command -v python || true)"
+if [ -z "$PYTHON" ]; then
+  echo "✗ 找不到 python3 / python，无法打包浏览器插件（拒绝静默跳过）"
+  exit 1
+fi
+echo "==> 0/3 打包浏览器插件"
+"$PYTHON" tools/pack_extension.py
+
 echo "==> 1/3 安装前端依赖"
 cd frontend && pnpm install && pnpm build
 cd "$ROOT"
