@@ -182,6 +182,176 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	return res, nil
 }
 
+// splitRestStreaks 把 total 天休息切成若干段，每段长度 <= maxRest。
+//
+// 设计意图：maxRest 是「连续休息上限」，不是「每次都必须休满」。
+// 真实排班中，休息应以单休、双休为主，偶有 3 连休，而不是清一色 3 连休。
+//
+// 生成策略：
+//  1. 先按 maxRest 算出最少段数 minSegs = ceil(total/maxRest)，
+//     再决定段数：倾向于把段数放大到 1.2~1.6 倍，让单/双休有机会出现，
+//     但不超过 total（否则每段不足 1 天）。
+//  2. 每段长度在 [1, maxRest] 内取值，权重偏向 1 和 2（合计约 75%），
+//     3 连休占比约 25%——既满足"最高 3 连休"，又不会总是休 3 天。
+//  3. 用 userID+year+month 作为种子，保证同一人同一月结果稳定可复现。
+func splitRestStreaks(total, maxRest int, userID uint, year, month int) []int {
+	if total <= 0 {
+		return nil
+	}
+	if maxRest < 1 {
+		maxRest = 1
+	}
+	if maxRest == 1 || total <= 1 {
+		// 上限为 1 时，只能整月单休
+		out := make([]int, total)
+		for i := range out {
+			out[i] = 1
+		}
+		return out
+	}
+
+	// 确定性伪随机（不引入 math/rand，避免全局种子污染测试）
+	seed := uint64(userID)*1000003 + uint64(year)*10007 + uint64(month)*211 + 8848897
+	next := func() float64 {
+		seed ^= seed << 13
+		seed ^= seed >> 7
+		seed ^= seed << 17
+		return float64(seed%1000000) / 1000000.0
+	}
+
+	// 段数上限：不超过 total（保证每段至少 1 天）
+	maxSegs := total
+	if maxSegs > 12 {
+		maxSegs = 12 // 一个月内休息段数上限，避免过于零碎
+	}
+	minSegs := (total + maxRest - 1) / maxRest
+	if minSegs < 1 {
+		minSegs = 1
+	}
+	if minSegs > maxSegs {
+		minSegs = maxSegs
+	}
+
+	// 目标段数：在 [minSegs, maxSegs] 中偏向 minSegs 略高一点
+	wantSegs := minSegs
+	if maxSegs > minSegs {
+		extra := maxSegs - minSegs
+		// 放大 0~0.5 倍，且至少给 1 段机会（让单/双休能出现）
+		add := int(float64(extra) * (0.25 + next()*0.25))
+		if add < 1 && extra >= 1 {
+			add = 1
+		}
+		if add > extra {
+			add = extra
+		}
+		wantSegs = minSegs + add
+	}
+
+	// 按权重分配每段长度：1→35%, 2→40%, 3→25%（上限为 2 时 1→45%,2→55%）
+	segs := make([]int, wantSegs)
+	remain := total
+	for i := range segs {
+		left := len(segs) - i
+		// 剩余天数必须在 [left*1, left*maxRest] 内
+		lo := 1
+		if remain-(left-1)*maxRest > lo {
+			lo = remain - (left-1)*maxRest
+		}
+		hi := maxRest
+		if remain-(left-1)*1 < hi {
+			hi = remain - (left - 1)
+		}
+		if hi > remain {
+			hi = remain
+		}
+		if lo > hi {
+			lo = hi
+		}
+
+		r := next()
+		var pick int
+		if maxRest >= 3 {
+			switch {
+			case r < 0.35:
+				pick = 1
+			case r < 0.75:
+				pick = 2
+			default:
+				pick = 3
+			}
+		} else { // maxRest == 2
+			if r < 0.45 {
+				pick = 1
+			} else {
+				pick = 2
+			}
+		}
+		if pick < lo {
+			pick = lo
+		}
+		if pick > hi {
+			pick = hi
+		}
+		segs[i] = pick
+		remain -= pick
+	}
+	// 兜底：若仍有剩余（理论上不会），追加到末段以前的可行位置
+	for remain > 0 {
+		done := false
+		for i := range segs {
+			if remain == 0 {
+				break
+			}
+			if segs[i] < maxRest {
+				segs[i]++
+				remain--
+				done = true
+			}
+		}
+		if !done {
+			break
+		}
+	}
+	return segs
+}
+
+// splitDrift 为某人的休息段起点生成一组确定性偏移量（错峰）。
+//
+// 目的：避免同部门所有人都在同一天休息。偏移量按 userID 派生，
+// 因此同一人同一月结果稳定；不同人之间互不相同。
+// 偏移幅度限制在单段平均间距的 ±1/3 以内，防止把休息段挤到一起。
+func splitDrift(userID uint, year, month, segCount, freeLen int) []int {
+	drift := make([]int, segCount)
+	if segCount == 0 {
+		return drift
+	}
+	avgGap := freeLen / segCount
+	if avgGap < 2 {
+		return drift // 空间太紧，不扰动，优先保证能放下
+	}
+	ampl := avgGap / 3
+	if ampl < 1 {
+		ampl = 1
+	}
+
+	seed := uint64(userID)*2654435761 + uint64(year)*40503 + uint64(month)*97 + 12345
+	next := func() int {
+		seed ^= seed << 13
+		seed ^= seed >> 7
+		seed ^= seed << 17
+		return int(seed % uint64(2*ampl+1))
+	}
+	for i := range drift {
+		// 首段不扰动（保持月初锚点），其余段在 ±ampl 内浮动
+		if i == 0 {
+			drift[i] = 0
+			continue
+		}
+		drift[i] = next() - ampl
+	}
+	return drift
+}
+
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
 // 特殊工作日（规则6）或 已锁定的上班需求（规则4）。
 func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
@@ -255,16 +425,13 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 
 	need := targetRest - len(rest)
 	if need > 0 {
-		// 切成不超过 maxRest 的段，尽量用满上限以减少段数
-		var segLens []int
-		for need > 0 {
-			n := maxRest
-			if n > need {
-				n = need
-			}
-			segLens = append(segLens, n)
-			need -= n
-		}
+		// 切成不超过 maxRest 的段。
+		//
+		// 关键点：maxRest 是【上限】而非【固定值】。若每次都用满上限，
+		// 8 天休息会被机械切成 [3,3,2]，全员一模一样，既不真实也不人性化。
+		// 这里改为混合长度：以单休(1)/双休(2)为主、偶尔出现 3 连休，
+		// 且用确定性种子打散，保证同一(人,月)每次生成结果一致（可复现）。
+		segLens := splitRestStreaks(need, maxRest, p.UserID, pi.Year, pi.Month)
 
 		// 可自由安排的天（未被更早阶段占用）
 		var free []time.Time
@@ -286,16 +453,29 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 				}
 			}
 			if needSlots <= len(free) {
-				// 均匀铺开：按等分位置放置每段起点
-				gap := float64(len(free)) / float64(len(segLens))
+				// 均匀铺开 + 每人错位扰动。
+				//
+				// 若不扰动，所有人的休息段起点都落在相同的等分位置，
+				// 结果就是"全员同一天休息"——既不真实，也会让当天在岗
+				// 人数骤降触发每班人数违规。这里给每个人一个稳定的
+				// 起始偏移，把休息日错峰打散。
+				segCount := len(segLens)
+				gap := float64(len(free)) / float64(segCount)
+
+				// 确定性漂移：同一人同一月固定，不同人之间分布不同
+				drift := splitDrift(p.UserID, pi.Year, pi.Month, segCount, len(free))
+
 				cursor := 0
 				for i, n := range segLens {
-					start := int(float64(i) * gap)
+					start := int(float64(i)*gap) + drift[i]
 					if start < cursor {
 						start = cursor
 					}
-					for start+n > len(free) && start > cursor {
-						start--
+					if start+n > len(free) {
+						start = len(free) - n
+					}
+					if start < cursor {
+						start = cursor
 					}
 					for j := 0; j < n && start+j < len(free); j++ {
 						rest[dateKey(free[start+j])] = true
