@@ -732,6 +732,8 @@ func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []Pla
 		// 逐块切分并填写；quota 随填写递减，实现全局均衡
 		for _, b := range bs {
 			seg := planBlockSegments(len(b.idxs), quota)
+			// 负载感知微调：错开不同人的中/早分界，压平每日各班人数
+			seg = pi.pickBalancedSegments(len(b.idxs), seg, b.idxs, load, order)
 			pos := 0
 			for si, cnt := range seg {
 				for c := 0; c < cnt && pos < len(b.idxs); c++ {
@@ -793,16 +795,25 @@ func planBlockSegments(L int, quota []int) []int {
 			break
 		}
 		want := remain / (n - i)
-		if remainQ > 0 && quota[i] > 0 {
+		if quota[i] <= 0 {
+			// 该班次配额已用完 → 本块不再排它。
+			// 典型场景：块只剩 1 天，而中班天数已达标 → 排早班更均衡。
+			want = 0
+		} else if remainQ > 0 {
 			want = (quota[i]*remain + remainQ/2) / remainQ
 		}
-		// 给后面的段至少留 1 天
-		maxTake := remain - (n - 1 - i)
-		if maxTake < 1 {
-			maxTake = 1
+		// 块长 ≥2 时首段至少 1 天：保证形态是「休 中… 早… 休」，
+		// 与规则5（休假后第一天晚班）一致；块长 1 时自由选择。
+		minTake := 0
+		if i == 0 && L >= 2 {
+			minTake = 1
 		}
-		if want < 1 {
-			want = 1
+		maxTake := remain - (n - 1 - i)
+		if maxTake < minTake {
+			maxTake = minTake
+		}
+		if want < minTake {
+			want = minTake
 		}
 		if want > maxTake {
 			want = maxTake
@@ -817,6 +828,61 @@ func planBlockSegments(L int, quota []int) []int {
 		}
 	}
 	return seg
+}
+
+// pickBalancedSegments 在基础切分附近微调，压平每日各班次人数。
+//
+// 为什么需要：若只按「每人均衡」切分，所有人的块会趋于同步——
+// 月初大家都在块头（全中班）、月末都在块尾（全早班），
+// 于是出现「某天早班 0 人、某天中班 0 人」这种极端分布，
+// 直接触发「每班最少人数」违规。
+//
+// 做法：在基础切分点 ±2 范围内搜索，选「当天该班次已有人数」最少的方案；
+// 同时对偏离基础值加二次惩罚，避免为了错峰而破坏班次均衡。
+func (pi *PlanInfo) pickBalancedSegments(L int, base []int, idxs []int, load []map[string]int, order []string) []int {
+	if len(base) < 2 || L <= 0 {
+		return base
+	}
+	best, bestScore := base, -1
+	for delta := -2; delta <= 2; delta++ {
+		cand := make([]int, len(base))
+		copy(cand, base)
+		cand[0] = base[0] + delta
+		if cand[0] < 0 || cand[0] > L {
+			continue
+		}
+		remain := L - cand[0]
+		if len(cand) == 2 {
+			cand[1] = remain
+		} else {
+			m := len(cand) - 1
+			for i := 1; i < len(cand); i++ {
+				cand[i] = remain / m
+				if i == len(cand)-1 {
+					cand[i] = remain - (remain/m)*(m-1)
+				}
+			}
+		}
+		// 该方案下，块内每天的「同班次已有人数」之和，越小越均衡
+		score := 0
+		pos := 0
+		for si, cnt := range cand {
+			for c := 0; c < cnt && pos < len(idxs); c++ {
+				dayIdx := idxs[pos]
+				if si < len(order) {
+					score += load[dayIdx][order[si]]
+				}
+				pos++
+			}
+		}
+		// 偏离惩罚：优先小调整，避免破坏每人班次均衡
+		score += delta * delta * 2
+		if bestScore < 0 || score < bestScore {
+			bestScore = score
+			best = cand
+		}
+	}
+	return best
 }
 
 // applyAdjacencyRules 软约束优化（规则5）：
