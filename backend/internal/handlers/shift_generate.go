@@ -146,6 +146,30 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	if targetWork > totalDays {
 		targetWork = totalDays
 	}
+
+	// 供给下限：出勤人日必须撑得起「每天每班最少人数」，否则无解。
+	//
+	// 例：31 天的月份，6 个倒班人员，每班最少 2 人 × 2 个班次 = 每天需 4 人，
+	// 全月需 124 人日；而 6 人 × 20 天出勤只有 120 人日 —— 差 4 人日，
+	// 无论怎么错峰都必有几天凑不够人（实测 12 月 8 天每班人数不足）。
+	// 这里把出勤天数自动抬到刚好够用的下限，并在 warnings 里说明，
+	// 而不是硬排出一份必然违规的班表。
+	if len(rotating) > 0 && len(pi.Shifts) > 0 && pi.Rule.MinPerShift > 0 {
+		perDay := pi.Rule.MinPerShift * len(pi.Shifts)
+		minWork := (totalDays*perDay + len(rotating) - 1) / len(rotating)
+		if minWork > totalDays {
+			minWork = totalDays
+		}
+		if targetWork < minWork {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"本月 %d 天、倒班 %d 人，每天需 %d 人上班（%d 个班次 × 每班最少 %d 人），"+
+					"共需 %d 人日；按当前「月出勤 %d 天」只有 %d 人日，无法排开。"+
+					"已自动将出勤天数上调为 %d 天。",
+				totalDays, len(rotating), perDay, len(pi.Shifts), pi.Rule.MinPerShift,
+				totalDays*perDay, targetWork, targetWork*len(rotating), minWork))
+			targetWork = minWork
+		}
+	}
 	targetRest := totalDays - targetWork
 	if targetRest < 0 {
 		targetRest = 0
@@ -646,9 +670,9 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 	if maxRest <= 0 {
 		maxRest = 3
 	}
-	if targetRest <= 0 {
-		return
-	}
+	// 注意：targetRest<=0（出勤天数被抬到满月）时不能提前 return——
+	// 下方还要为每一天写 PendingShift 占位，否则 fillShifts 无从下手，
+	// 会排出一份全空的班表。
 
 	// 已确定休息 / 已确定上班（更早阶段决定，本函数不得推翻）
 	rest := map[string]bool{}
@@ -719,8 +743,19 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 		// 不必事后拆散双休（事后拆会把班表打得过碎）。
 		minWantSegs := 0
 		if maxWork > 0 {
-			blocks := (workDays + maxWork - 1) / maxWork
-			minWantSegs = blocks + 1
+			// 工作块长度 ≈ 槽长 - 段长 = 月天数/段数 - 段长。
+			// 令其 ≤ maxWork 反解出段数下限：
+			//   段数 ≥ 月天数 / (maxWork + 段长)
+			// 段长按双休 2 天估算（本函数以双休为主）。
+			//
+			// 旧公式用「工作日数/maxWork + 1」会高估段数：
+			// 28 天 8 休本该 4 段（槽长 7、块长 5 天，未超限），
+			// 却被抬成 5 段（槽长 5），导致可用的错峰档位只剩 5 个 < 6 人，
+			// 两人撞同一相位 → 该天 3 人同时休息、上班只剩 3 人。
+			minWantSegs = (len(days) + maxWork + 2 - 1) / (maxWork + 2)
+			if minWantSegs < 1 {
+				minWantSegs = 1
+			}
 		}
 		segLens := splitRestStreaksMin(need, maxRest, minWantSegs, p.UserID, pi.Year, pi.Month)
 
