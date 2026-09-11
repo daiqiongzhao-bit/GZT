@@ -1082,6 +1082,7 @@ function onDeptChange() {
 function onRangeChange() {
   invalidatePlan()
   loadSpecial()
+  fetchDrafts()
 }
 
 onMounted(async () => {
@@ -1249,6 +1250,19 @@ thead .mx-name { background: var(--glass-strong); font-weight: 700; }
 .pk-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pk-btn.rest { color: var(--text-dim); }
 .pk-foot { display: flex; justify-content: flex-end; padding: 0 16px 14px; }
+
+/* 草稿箱 */
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--glass-border); color: var(--text-dim); }
+.tag.ok { color: var(--accent); border-color: var(--accent); }
+.draft-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--overlay); }
+.draft-row.on { border-color: var(--accent); }
+.dr-main { flex: 1; min-width: 0; }
+.dr-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.dr-meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+.dr-note { font-size: 11px; color: var(--text-dim); margin-top: 3px; white-space: pre-wrap; word-break: break-all; }
+.dr-ops { display: flex; gap: 6px; flex-shrink: 0; }
+.btn.sm { padding: 5px 10px; font-size: 12px; }
+.btn.danger { color: var(--danger, #e5484d); }
 
 /* 移动端 */
 @media (max-width: 820px) {

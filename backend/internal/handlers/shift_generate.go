@@ -177,6 +177,9 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 		return nil, err
 	}
 
+	// 压平每日早/中班比例（修月初月末残块导致的 1:3 失衡）
+	pi.balanceDailyShiftMix(plan, rotating, days)
+
 	// —— 阶段4：软约束优化（规则5）——
 	pi.applyAdjacencyRules(plan, rotating, days, res)
 
@@ -1049,6 +1052,100 @@ func (pi *PlanInfo) pickBalancedSegments(L int, base []int, idxs []int, load []m
 // applyAdjacencyRules 软约束优化（规则5）：
 // 休假前一天尽量排早班、休假后第一天尽量排晚班。
 // 只在「不破坏每班最少人数」的前提下做交换，避免按下葫芦浮起瓢。
+// balanceDailyShiftMix 压平「每日早班/中班人数」的比例。
+//
+// 为什么需要：休息日已按人数均匀铺开（每天上班人数恒定），
+// 但块内切分点是按【块长比例】定的，而月初/月末存在跨月残块
+// （上月延续导致长度 1~3 天），这些残块的切分点与全局轮转错位，
+// 于是出现某天「1 早 3 中」这类失衡（11 月实测 3/30 天）。
+//
+// 修法：只移动【块内的切分点】，绝不单点翻转。
+//
+//	块形态恒为 [中×a, 早×b]：
+//	  · 把最后一个中班日改成早班 → [中×(a-1), 早×(b+1)]
+//	  · 把第一个早班日改成中班 → [中×(a+1), 早×(b-1)]
+//	两种操作都保持块内单向（休→中→早→休），不会倒班。
+func (pi *PlanInfo) balanceDailyShiftMix(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time) {
+	morning, evening := pi.Morning, pi.Evening
+	if morning == "" || evening == "" || len(days) == 0 {
+		return
+	}
+	names := make([]string, 0, len(rotating))
+	for _, p := range rotating {
+		names = append(names, p.Name)
+	}
+	if len(names) == 0 {
+		return
+	}
+
+	for i, d := range days {
+		k := dateKey(d)
+		prevK, nextK := "", ""
+		if i > 0 {
+			prevK = dateKey(days[i-1])
+		}
+		if i+1 < len(days) {
+			nextK = dateKey(days[i+1])
+		}
+
+		// 最多修 |差值| 次；每轮只动 1 人，改完立即重算
+		for round := 0; round < len(names); round++ {
+			mc, ec := 0, 0
+			for _, n := range names {
+				switch lookPlan(plan, k, n) {
+				case morning:
+					mc++
+				case evening:
+					ec++
+				}
+			}
+			total := mc + ec
+			if total < 2 {
+				break
+			}
+			// 目标：早中尽量各半（早班取较少的一份，与班次推进顺序无关）
+			wantM := total / 2
+			if mc == wantM {
+				break
+			}
+
+			moved := false
+			if mc < wantM {
+				// 早班不够：把一个「中班日」改成早班。
+				// 必须是其工作块的【最后一个中班日】，否则会造出 中早中 的倒班。
+				for _, n := range names {
+					if lookPlan(plan, k, n) != evening {
+						continue
+					}
+					if nextK != "" && lookPlan(plan, nextK, n) == evening {
+						continue // 后面还是中班 → 不是最后一个
+					}
+					setPlan(plan, k, n, morning)
+					moved = true
+					break
+				}
+			} else {
+				// 早班过多：把一个「早班日」改成中班。
+				// 必须是其工作块的【第一个早班日】，否则会造出 早中早 的倒班。
+				for _, n := range names {
+					if lookPlan(plan, k, n) != morning {
+						continue
+					}
+					if prevK != "" && lookPlan(plan, prevK, n) == morning {
+						continue // 前面还是早班 → 不是第一个
+					}
+					setPlan(plan, k, n, evening)
+					moved = true
+					break
+				}
+			}
+			if !moved {
+				break // 无人可动，放弃这一天
+			}
+		}
+	}
+}
+
 func (pi *PlanInfo) applyAdjacencyRules(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time, res *GenResult) {
 	if pi.Morning == "" || pi.Evening == "" || pi.Morning == pi.Evening {
 		return
