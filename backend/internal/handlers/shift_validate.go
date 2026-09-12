@@ -255,6 +255,11 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 				continue
 			}
 			for _, p := range pi.People {
+				// 已锁定休假（产假/婚假等）当天本就不该上班，特殊工作日亦不例外：
+				// 规则6 让位于已锁定的休假需求，不再误报「未上班」。
+				if pi.onLeaveOn(p.UserID, d) {
+					continue
+				}
 				if isRestShift(lookPlan(plan, k, p.Name)) {
 					vs = append(vs, Violation{
 						Date: k, Person: p.Name,

@@ -234,6 +234,17 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	// 优先挑当天休息人数最少的位置，从而压平在岗人数曲线。
 	restPerDay := map[string]int{}
 
+	// 回填「已确定的休息」（含阶段1b 锁定的产假/婚假等休假需求）：
+	// 若不回填，普通轮休会误以为这些天无人休息，从而堆到休假日上，
+	// 造成某天在岗倒班人数骤降、跌破每班最少人数。
+	for _, p := range rotating {
+		for _, d := range days {
+			if isRestShift(lookPlan(plan, dateKey(d), p.Name)) {
+				restPerDay[dateKey(d)]++
+			}
+		}
+	}
+
 	// 逐人铺休息：普通人员用全局 targetRest；休假人员按自身「可用天数」折算，
 	// 并额外保留休息以打断连续上班（否则休完产假回来会连上 20 天）。
 	for ri, p := range rotating {
@@ -274,6 +285,15 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 		// 不如牺牲一个双休，把长班次从中间切开。
 		pi.breakLongWorkStreaks(plan, p, days, maxWork)
 	}
+
+	// —— 阶段2b：每班最少人数兜底修复 ——
+	// 若某些天因「产假/婚假等休假叠加普通轮休」导致在岗倒班人数跌破每班最少人数，
+	// 在不搬动已锁定需求、且遵守连续上班/休息上限的前提下，
+	// 把「过剩日」某人的休息挪到「紧缺日」，压平在岗曲线。
+	// 仅在确实存在紧缺日时动手；均摊良好的班表（如规模测试中的完美均衡）每天休息人数
+	// 恰好等于上限、从不超过，故不会被改动 —— 零副作用。
+	// 每人总休息天数不变（从一天移到另一天），月出勤目标（如 22 天）不受影响。
+	pi.repairMinPerShift(plan, rotating, days)
 
 	// —— 阶段3：填班次（规则7 每班最少人数，仅统计倒班人员）——
 	if err := pi.fillShifts(plan, rotating, days, res); err != nil {
@@ -727,6 +747,153 @@ func (pi *PlanInfo) breakLongWorkStreaks(plan map[string]map[string]string, p Pl
 		setPlan(plan, dateKey(days[cut]), p.Name, RestShift)
 		setPlan(plan, dateKey(days[donor]), p.Name, PendingShift)
 	}
+}
+
+// repairMinPerShift 把「休息人数超上限」的天的倒班人员休息挪到「休息人数低于上限」的天，
+// 保证每天在岗倒班人数 ≥ 每班最少人数（规则7，仅统计倒班人员）。
+//
+// 触发条件：仅当某天休息的倒班人数 > len(rotating)-perDay 时才动手。
+// 均摊良好的班表（如规模测试中的完美均衡）每天恰好等于上限、从不超过，不会被改动 —— 零副作用。
+//
+// 安全约束（挪动前逐一校验，不通过就换人/换天）：
+//   - 不搬动已锁定休假（产假/婚假）与特殊工作日/锁定上班需求；
+//   - 挪动后该人连续休息 ≤ MaxRestStreak、连续上班 ≤ MaxWorkStreak；
+//   - 目标天挪动后休息人数仍 ≤ 上限。
+//
+// 每人总休息天数不变（从一天移到另一天），故月出勤目标（如 22 天）不受影响。
+func (pi *PlanInfo) repairMinPerShift(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time) {
+	if len(rotating) == 0 || len(pi.Shifts) == 0 || pi.Rule.MinPerShift <= 0 {
+		return
+	}
+	perDay := pi.Rule.MinPerShift * len(pi.Shifts)
+	maxRest := len(rotating) - perDay // 每天最多允许的休息人数
+	if maxRest < 0 {
+		return
+	}
+	maxRestStreak := pi.Rule.MaxRestStreak
+	if maxRestStreak <= 0 {
+		maxRestStreak = 3
+	}
+	maxWorkStreak := pi.Rule.MaxWorkStreak
+	if maxWorkStreak <= 0 {
+		maxWorkStreak = 6
+	}
+
+	// 反复消除「休息人数超上限」的天，直到全部合规或无法再挪。
+	// 每次成功挪动都严格减少总超额量（迁出日 -1、迁入日 +1 且不超上限），
+	// 必然收敛；iter 上限仅作防御性兜底。
+	for iter := 0; iter < len(days)*len(rotating)+1; iter++ {
+		restCount := make([]int, len(days))
+		for i, d := range days {
+			c := 0
+			for _, p := range rotating {
+				if isRestShift(lookPlan(plan, dateKey(d), p.Name)) {
+					c++
+				}
+			}
+			restCount[i] = c
+		}
+
+		progressed := false
+		for hi := 0; hi < len(days) && !progressed; hi++ {
+			if restCount[hi] <= maxRest {
+				continue
+			}
+			// 在过剩日 hi 上休息、且可挪动的倒班人员中，找一个能接收其休息的目标天 lo。
+			for _, p := range rotating {
+				if !isRestShift(lookPlan(plan, dateKey(days[hi]), p.Name)) {
+					continue // 当天本就上班，无法「挪走休息」
+				}
+				if pi.onLeaveOn(p.UserID, days[hi]) {
+					continue // 产假/婚假锁定，不能挪
+				}
+				for lo := 0; lo < len(days); lo++ {
+					if lo == hi {
+						continue
+					}
+					if restCount[lo] >= maxRest {
+						continue // 目标天也满员，挪过去会新造一个超额日
+					}
+					if isRestShift(lookPlan(plan, dateKey(days[lo]), p.Name)) {
+						continue // 该人当天已休息
+					}
+					if pi.mustWorkOn(p, days[lo]) || pi.onLeaveOn(p.UserID, days[lo]) {
+						continue // 目标天该人必须上班或已锁定休假，不能改休息
+					}
+					if !pi.canSwapRest(plan, p, days, hi, lo, maxRestStreak, maxWorkStreak) {
+						continue
+					}
+					// 执行挪动：hi 改回待填班次（上班），lo 改休息。总休息天数不变。
+					setPlan(plan, dateKey(days[hi]), p.Name, PendingShift)
+					setPlan(plan, dateKey(days[lo]), p.Name, RestShift)
+					progressed = true
+					break
+				}
+				if progressed {
+					break
+				}
+			}
+		}
+		if !progressed {
+			return
+		}
+	}
+}
+
+// canSwapRest 临时把 p 在 hi 的休息挪到 lo，校验挪动后是否破坏连续上班/休息上限。
+// 校验完会还原 plan，由调用方决定是否真正落子。
+func (pi *PlanInfo) canSwapRest(plan map[string]map[string]string, p PlanPerson, days []time.Time, hi, lo, maxRestStreak, maxWorkStreak int) bool {
+	kh := dateKey(days[hi])
+	kl := dateKey(days[lo])
+	oldHi := lookPlan(plan, kh, p.Name)
+	oldLo := lookPlan(plan, kl, p.Name)
+	setPlan(plan, kh, p.Name, PendingShift) // hi 改为上班
+	setPlan(plan, kl, p.Name, RestShift)    // lo 改为休息
+	ok := runLenRest(plan, p, days, lo) <= maxRestStreak &&
+		runLenWork(plan, p, days, hi) <= maxWorkStreak
+	setPlan(plan, kh, p.Name, oldHi) // 还原
+	setPlan(plan, kl, p.Name, oldLo)
+	return ok
+}
+
+// runLenRest 返回包含 days[idx] 的「连续休息」段长度（idx 当天须为休息）。
+func runLenRest(plan map[string]map[string]string, p PlanPerson, days []time.Time, idx int) int {
+	cnt := 1
+	for i := idx - 1; i >= 0; i-- {
+		if isRestShift(lookPlan(plan, dateKey(days[i]), p.Name)) {
+			cnt++
+		} else {
+			break
+		}
+	}
+	for i := idx + 1; i < len(days); i++ {
+		if isRestShift(lookPlan(plan, dateKey(days[i]), p.Name)) {
+			cnt++
+		} else {
+			break
+		}
+	}
+	return cnt
+}
+
+// runLenWork 返回包含 days[idx] 的「连续上班」段长度（idx 当天须为上班）。
+func runLenWork(plan map[string]map[string]string, p PlanPerson, days []time.Time, idx int) int {
+	cnt := 1
+	for i := idx - 1; i >= 0; i-- {
+		if !isRestShift(lookPlan(plan, dateKey(days[i]), p.Name)) {
+			cnt++
+		} else {
+			break
+		}
+	}
+	for i := idx + 1; i < len(days); i++ {
+		if !isRestShift(lookPlan(plan, dateKey(days[i]), p.Name)) {
+			cnt++
+		} else {
+			break
+		}
+	}
+	return cnt
 }
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
