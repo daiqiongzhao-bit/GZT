@@ -71,6 +71,7 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 		work  map[string]string
 	}
 	idxes := make([]pIdx, 0, len(pi.People))
+	nameToUID := map[string]uint{}
 	for _, p := range pi.People {
 		ix := pIdx{name: p.Name, fixed: p.IsFixed(), rest: map[string]bool{}, work: map[string]string{}}
 		for _, d := range daysInRange(from, to) {
@@ -83,6 +84,7 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 			}
 		}
 		idxes = append(idxes, ix)
+		nameToUID[p.Name] = p.UserID
 	}
 
 	for _, ix := range idxes {
@@ -179,6 +181,8 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 
 		// —— 规则3：月度出勤天数 ——
 		// 同理，固定班次人员的出勤天数由其固定班次与生效星期决定，不按月目标考核。
+		// 产假/婚假等已锁定休假不计入出勤目标：该人只需在「可用天数」内排满，
+		// 否则会对其误报「出勤天数不足」（休了 11 天产假却要求上满 22 天本就不合理）。
 		if pi.Rule.MonthWorkDays > 0 && !ix.fixed {
 			cnt := 0
 			for _, d := range daysInRange(from, to) {
@@ -186,11 +190,19 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 					cnt++
 				}
 			}
-			if cnt < pi.Rule.MonthWorkDays {
+			leaveDays := 0
+			if uid, ok := nameToUID[ix.name]; ok {
+				leaveDays = pi.leaveDaysInMonth(uid)
+			}
+			effTarget := pi.Rule.MonthWorkDays - leaveDays
+			if effTarget < 0 {
+				effTarget = 0
+			}
+			if cnt < effTarget {
 				vs = append(vs, Violation{
 					Date: dateKey(from), EndDate: dateKey(to), Person: ix.name,
 					Rule: "month_work_days", Label: "出勤天数不足", Level: "warn",
-					Reason: fmt.Sprintf("本月排班 %d 天，少于目标 %d 天", cnt, pi.Rule.MonthWorkDays),
+					Reason: fmt.Sprintf("本月排班 %d 天，少于目标 %d 天（已扣除 %d 天产假/婚假等休假）", cnt, effTarget, leaveDays),
 				})
 			} else if cnt > pi.Rule.MonthWorkDays && !pi.Rule.AllowExceedMonthDays {
 				vs = append(vs, Violation{

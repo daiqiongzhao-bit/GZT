@@ -356,10 +356,10 @@ function onPwaInstalled() { canInstall.value = false }
 
 // 检测到新版本 Service Worker：PWA 里没有刷新按钮，不提示的话用户会一直用旧壳，
 // 表现为「点了菜单没反应」。这里主动提示并让用户一键刷新。
-function onSwUpdated(msg) {
+function onSwUpdated() {
   if (sessionStorage.getItem('sw-updated-tip') === '1') return
   sessionStorage.setItem('sw-updated-tip', '1')
-  if (!confirm(msg || '检测到新版本，是否立即刷新以应用最新功能？')) return
+  if (!confirm('检测到新版本，是否立即刷新以应用最新功能？')) return
   // 顺手清掉旧缓存，确保刷新后拉到全新资源；最多等 1.5s，避免清缓存卡住导致不刷新
   const go = () => location.reload()
   if (window.caches && caches.keys) {

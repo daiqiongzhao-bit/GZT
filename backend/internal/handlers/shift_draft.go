@@ -41,14 +41,15 @@ func ListPlanDrafts(c *gin.Context) {
 	}
 	year, _ := strconv.Atoi(c.Query("year"))
 	month, _ := strconv.Atoi(c.Query("month"))
-	if year == 0 || month == 0 {
-		now := time.Now()
-		year, month = now.Year(), int(now.Month())
-	}
 
+	// 草稿箱视图：不传 year+month 时返回该部门全部草稿（跨月份），
+	// 避免「保存的是 11 月、当前看的是 9 月」导致草稿凭空消失。
 	var list []models.ShiftPlanDraft
-	q := db.DB.Where("dept_id = ? AND year = ? AND month = ?", deptID, year, month)
-	if err := q.Order("created_at desc").Find(&list).Error; err != nil {
+	q := db.DB.Where("dept_id = ?", deptID)
+	if year > 0 && month > 0 {
+		q = q.Where("year = ? AND month = ?", year, month)
+	}
+	if err := q.Order("year desc, month desc, created_at desc").Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -61,6 +62,8 @@ func ListPlanDrafts(c *gin.Context) {
 		Creator   string    `json:"creator"`
 		Stats     string    `json:"stats"`
 		Days      int       `json:"days"`
+		Year      int       `json:"year"`
+		Month     int       `json:"month"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 	}
@@ -74,6 +77,7 @@ func ListPlanDrafts(c *gin.Context) {
 		out = append(out, item{
 			ID: d.ID, Name: d.Name, Note: d.Note, Applied: d.Applied,
 			Creator: d.Creator, Stats: d.Stats, Days: days,
+			Year: d.Year, Month: d.Month,
 			CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 		})
 	}

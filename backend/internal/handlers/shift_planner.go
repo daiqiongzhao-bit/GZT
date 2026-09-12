@@ -252,11 +252,16 @@ func (p PlanPerson) fixedOn(day time.Time) bool {
 	return false
 }
 
-// loadPlanPeople 载入参与排班的员工（排除冻结 / 休假中 / 无姓名）。
+// loadPlanPeople 载入参与排班的员工（排除冻结 / 无姓名）。
+// 注意：处于「休假」状态（on_leave）的人员【不再被整体排除】——
+// 产假、婚假等只把其休假日期标记为休息（见阶段1b），这些天不计入
+// 「每班最少人数」名额，其余日子仍正常排班，从而满足其他人每月 22 天班。
+// 仅当某人整月没有任何「已锁定的休假需求」却仍被标记 on_leave 时，
+// 才视为「完全停职/不可用」而排除（例如长期停职人员）。
 // userIDs 非空时按指定人员取；否则按 deptID 及其子孙部门取。
-func loadPlanPeople(deptID uint, userIDs []uint) []PlanPerson {
+func loadPlanPeople(deptID uint, userIDs []uint, byUser map[uint][]models.ShiftRequest, first, last time.Time) []PlanPerson {
 	var users []models.User
-	q := db.DB.Where("frozen = ? AND on_leave = ?", false, false)
+	q := db.DB.Where("frozen = ?", false)
 	if len(userIDs) > 0 {
 		q = q.Where("id IN ?", userIDs)
 	} else if deptID > 0 {
@@ -284,6 +289,11 @@ func loadPlanPeople(deptID uint, userIDs []uint) []PlanPerson {
 		if name == "" {
 			continue
 		}
+		// 完全停职/不可用：整月没有任何已锁定休假需求却标记了 on_leave，
+		// 说明不是「带薪假」而是长期离岗，整月不参与排班。
+		if u.OnLeave && !hasLockedLeaveInRange(byUser, u.ID, first, last) {
+			continue
+		}
 		p := PlanPerson{UserID: u.ID, Name: name, EmpNo: u.EmpNo, Mode: models.ShiftModeRotate}
 		if pref, ok := pm[u.ID]; ok && pref.Mode == models.ShiftModeFixed {
 			if fs := strings.TrimSpace(pref.FixedShift); fs != "" {
@@ -296,6 +306,23 @@ func loadPlanPeople(deptID uint, userIDs []uint) []PlanPerson {
 		out = append(out, p)
 	}
 	return out
+}
+
+// hasLockedLeaveInRange 判断某人本月是否存在「已锁定的休假需求」覆盖 [first,last]
+// 中的任意一天（产假/婚假等）。用于区分「带薪假（仍参与排班）」与
+// 「长期停职（整月排除）」两种 on_leave 语义。
+func hasLockedLeaveInRange(byUser map[uint][]models.ShiftRequest, uid uint, first, last time.Time) bool {
+	for _, r := range byUser[uid] {
+		if r.Type != models.PrefTypeRest || r.Status != models.PrefStatusLocked {
+			continue
+		}
+		for d := dayOf(first); !d.After(last); d = d.AddDate(0, 0, 1) {
+			if requestCovers(r, d) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---- 员工需求（规则4）----
@@ -395,7 +422,7 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		Shifts:    shifts,
 		Morning:   morning,
 		Evening:   evening,
-		People:    loadPlanPeople(deptID, userIDs),
+		People:    loadPlanPeople(deptID, userIDs, byUser, first, last),
 		Special:   loadSpecialDays(deptID, dateKey(first), dateKey(last)),
 		ReqByUser: byUser,
 	}

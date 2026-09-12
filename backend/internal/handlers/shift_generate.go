@@ -56,6 +56,31 @@ func (pi *PlanInfo) feasible() error {
 	return nil
 }
 
+// onLeaveOn 某人某天是否处于「已锁定的休假需求」覆盖范围内（产假/婚假等）。
+// 这些天在阶段1b 已被标为休息，自然不计入「每班最少人数」名额。
+func (pi *PlanInfo) onLeaveOn(userID uint, day time.Time) bool {
+	for _, r := range pi.ReqByUser[userID] {
+		if r.Type != models.PrefTypeRest || r.Status != models.PrefStatusLocked {
+			continue
+		}
+		if requestCovers(r, day) {
+			return true
+		}
+	}
+	return false
+}
+
+// leaveDaysInMonth 统计某人本月因已锁定休假需求（产假/婚假等）而休息的天数。
+func (pi *PlanInfo) leaveDaysInMonth(userID uint) int {
+	c := 0
+	for _, d := range daysInRange(pi.First, pi.Last) {
+		if pi.onLeaveOn(userID, d) {
+			c++
+		}
+	}
+	return c
+}
+
 // GeneratePlan 生成整月排班计划。
 func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	if len(pi.People) == 0 {
@@ -140,20 +165,21 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	}
 
 	// —— 阶段2：排休息（规则2 + 规则3）——
-	// 目标：每人休息天数 = 月天数 - 月出勤目标（不低于连续休上限约束所需）
+	// 普通人员沿用「月出勤目标」的全局口径（保证与既有行为/测试一致）；
+	// 产假、婚假等休假人员单独处理：其休假天数不计入出勤目标、也不占用
+	// 「每班最少人数」名额，并额外保留正常休息以打断连续上班。
 	totalDays := len(days)
+	maxWork := pi.Rule.MaxWorkStreak
+	if maxWork <= 0 {
+		maxWork = 6
+	}
+
+	// 全局出勤目标与「供给下限」抬升（沿用既有逻辑）：倒班人数不足以撑起
+	// 每天每班最少人数时，把出勤天数自动抬到刚好够用的下限。
 	targetWork := pi.Rule.MonthWorkDays
 	if targetWork > totalDays {
 		targetWork = totalDays
 	}
-
-	// 供给下限：出勤人日必须撑得起「每天每班最少人数」，否则无解。
-	//
-	// 例：31 天的月份，6 个倒班人员，每班最少 2 人 × 2 个班次 = 每天需 4 人，
-	// 全月需 124 人日；而 6 人 × 20 天出勤只有 120 人日 —— 差 4 人日，
-	// 无论怎么错峰都必有几天凑不够人（实测 12 月 8 天每班人数不足）。
-	// 这里把出勤天数自动抬到刚好够用的下限，并在 warnings 里说明，
-	// 而不是硬排出一份必然违规的班表。
 	if len(rotating) > 0 && len(pi.Shifts) > 0 && pi.Rule.MinPerShift > 0 {
 		perDay := pi.Rule.MinPerShift * len(pi.Shifts)
 		minWork := (totalDays*perDay + len(rotating) - 1) / len(rotating)
@@ -174,9 +200,30 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	if targetRest < 0 {
 		targetRest = 0
 	}
-	maxWork := pi.Rule.MaxWorkStreak
-	if maxWork <= 0 {
-		maxWork = 6
+
+	// 逐日可用倒班人数（扣除当天休假者），用于判断每班最少人数是否可满足。
+	// 只要「最闲的一天」都凑得齐每班最少人数，整月就不会出现硬违规；
+	// 否则提前报错，而不是硬排出一份必然违规的班表。
+	if len(rotating) > 0 && len(pi.Shifts) > 0 && pi.Rule.MinPerShift > 0 {
+		perDay := pi.Rule.MinPerShift * len(pi.Shifts)
+		minAvail := len(rotating)
+		for _, d := range days {
+			avail := 0
+			for _, p := range rotating {
+				if !pi.onLeaveOn(p.UserID, d) {
+					avail++
+				}
+			}
+			if avail < minAvail {
+				minAvail = avail
+			}
+		}
+		if minAvail < perDay {
+			return nil, fmt.Errorf(
+				"本月最闲的一天也仅有 %d 名倒班人员在岗（已扣除产假/婚假等休假者），"+
+					"无法满足每班最少 %d 人 × %d 个班次 = %d 人；请增加人员、减少班次或调低每班最少人数",
+				minAvail, pi.Rule.MinPerShift, len(pi.Shifts), perDay)
+		}
 	}
 
 	// 每日休息人数计数器（跨人员共享）。
@@ -186,8 +233,40 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	// 这里维护「当天已安排多少人休息」，后续人员选休息段位置时
 	// 优先挑当天休息人数最少的位置，从而压平在岗人数曲线。
 	restPerDay := map[string]int{}
+
+	// 逐人铺休息：普通人员用全局 targetRest；休假人员按自身「可用天数」折算，
+	// 并额外保留休息以打断连续上班（否则休完产假回来会连上 20 天）。
 	for ri, p := range rotating {
-		pi.assignRestDays(plan, p, days, targetRest, forcedWork, restPerDay, ri, len(rotating))
+		restTarget := targetRest
+		leaveDays := pi.leaveDaysInMonth(p.UserID)
+		if leaveDays > 0 {
+			avail := totalDays - leaveDays
+			if avail < 0 {
+				avail = 0
+			}
+			// 出勤目标上限：不超过可用天数；但也要留足休息以打断连续上班。
+			// 最少需要的休息日 = ceil(目标出勤 / 连续上班上限) - 1。
+			workTarget := pi.Rule.MonthWorkDays
+			if workTarget > avail {
+				workTarget = avail
+			}
+			if workTarget > maxWork {
+				minRest := (workTarget + maxWork - 1) / maxWork - 1
+				if workTarget > avail-minRest {
+					workTarget = avail - minRest
+				}
+			}
+			if workTarget < 0 {
+				workTarget = 0
+			}
+			// 该人本月总休息目标 = 休假天数 + 可用天数内的正常休息。
+			// assignRestDays 会在已标好的休假日之外再补 (restTarget - leaveDays) 天。
+			restTarget = leaveDays + (avail - workTarget)
+			if restTarget < 0 {
+				restTarget = 0
+			}
+		}
+		pi.assignRestDays(plan, p, days, restTarget, forcedWork, restPerDay, ri, len(rotating))
 		// 连续上班超上限时，拆一个双休成单休来打断长班次。
 		//
 		// 用户原话：「那些连续上7天的你可以把某个双休改成单休啊，
@@ -206,6 +285,11 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 
 	// —— 阶段4：软约束优化（规则5）——
 	pi.applyAdjacencyRules(plan, rotating, days, res)
+
+	// 再压一次：applyAdjacencyRules 为满足「休假前后班次」会搬动个别格子，
+	// 可能把刚压平的人数又推歪（实测 20 人 12-05 被改回「早5 中7」）。
+	// 人数不足是 error 级、休假前后班次是 warn 级，所以以人数优先再修一轮。
+	pi.balanceDailyShiftMix(plan, rotating, days)
 
 	// —— 阶段5：收尾 ——
 	// 兜底清理：任何仍未被 resolve 的占位都归为休息，绝不让内部哨兵值外泄到班表。
@@ -918,13 +1002,18 @@ func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []Pla
 		for _, b := range bs {
 			total += len(b.idxs)
 		}
-		// 各班次目标配额：尽量均分（22 天 → 11 + 11）
+		// 各班次目标配额：尽量均分（22 天 → 11 + 11）。
+		//
+		// 不能均分时，多出的那一天给【早班】（order 的最后一个）：
+		// 用户明确要求「不对等的情况下，早班可以比中班人多」。
+		// 早期版本把 +1 给了 order[0]（中班），21 天出勤会排成 中11 早10，
+		// 正好与业务习惯相反。
 		quota := make([]int, n)
 		base := total / n
 		extra := total % n
 		for i := range quota {
 			quota[i] = base
-			if i < extra {
+			if i >= n-extra {
 				quota[i]++
 			}
 		}
@@ -933,6 +1022,22 @@ func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []Pla
 			seg := planBlockSegments(len(b.idxs), quota)
 			// 负载感知微调：错开不同人的中/早分界，压平每日各班人数
 			seg = pi.pickBalancedSegments(len(b.idxs), seg, b.idxs, load, order)
+			// 孤立单天块（月初/月末残块）：基础切分与微调都可能把它排成早班
+			// （L=1 时 maxTake 压掉首段）；但它往往同时是「休假后第一天」，
+			// 规则5 要求中班。单天块不可能同时满足「休假前早班 + 休假后中班」，
+			// 只能保一个 —— 按块首形态（休 中… 早… 休）选中班，
+			// 且必须放在微调之后，否则会被覆盖。
+			if len(b.idxs) == 1 && pi.Rule.RequireEveningAfterRest {
+				di := b.idxs[0]
+				pv := ""
+				if di > 0 {
+					pv = lookPlan(plan, dateKey(days[di-1]), b.name)
+				}
+				if di == 0 || isRestShift(pv) {
+					seg = make([]int, n)
+					seg[0] = 1
+				}
+			}
 			pos := 0
 			for si, cnt := range seg {
 				for c := 0; c < cnt && pos < len(b.idxs); c++ {
@@ -958,6 +1063,7 @@ func (pi *PlanInfo) fillShifts(plan map[string]map[string]string, rotating []Pla
 //	[中班, 早班] → 块形态「中中中 早早早」
 //
 // 这与规则5（休假前早班、休假后晚班）天然一致。
+
 func (pi *PlanInfo) blockShiftOrder() []string {
 	if len(pi.Shifts) <= 2 && pi.Evening != "" && pi.Morning != "" && pi.Evening != pi.Morning {
 		return []string{pi.Evening, pi.Morning}
@@ -1042,12 +1148,27 @@ func (pi *PlanInfo) pickBalancedSegments(L int, base []int, idxs []int, load []m
 	if len(base) < 2 || L <= 0 {
 		return base
 	}
+	// 只调【第 0 段】长度（单自由度）。
+	//
+	// 曾尝试对全部 n-1 个切分点做坐标下降，想给三班制更多自由度，
+	// 但实测是负优化：三班制合格组合从 14 掉到 9，晚班甚至被排成 0 人
+	// ——多个自由度互相追逐「当前 load 最小」，反而把班次挤到一侧。
+	// 两班制下第 1 段恒等于余数，本来就是全自由度，无需扩展。
+	// 块长 ≥2 时首段至少 1 天：保证块形态是「休 中/晚… 早… 休」，
+	// 即休假后第一天必然是晚班（规则5）。
+	// 必须与 planBlockSegments 的 minTake 保持一致 —— 少了这道约束，
+	// 微调会把首段压成 0 天，块直接从早班开局，规则5 立刻破功
+	// （实测 2026-12 出现「休假后非晚班」1 处）。
+	minFirst := 0
+	if L >= 2 {
+		minFirst = 1
+	}
 	best, bestScore := base, -1
 	for delta := -2; delta <= 2; delta++ {
 		cand := make([]int, len(base))
 		copy(cand, base)
 		cand[0] = base[0] + delta
-		if cand[0] < 0 || cand[0] > L {
+		if cand[0] < minFirst || cand[0] > L {
 			continue
 		}
 		remain := L - cand[0]
@@ -1087,7 +1208,7 @@ func (pi *PlanInfo) pickBalancedSegments(L int, base []int, idxs []int, load []m
 // applyAdjacencyRules 软约束优化（规则5）：
 // 休假前一天尽量排早班、休假后第一天尽量排晚班。
 // 只在「不破坏每班最少人数」的前提下做交换，避免按下葫芦浮起瓢。
-// balanceDailyShiftMix 压平「每日早班/中班人数」的比例。
+// balanceDailyShiftMix 压平「每日各班次人数」的比例。
 //
 // 为什么需要：休息日已按人数均匀铺开（每天上班人数恒定），
 // 但块内切分点是按【块长比例】定的，而月初/月末存在跨月残块
@@ -1095,14 +1216,16 @@ func (pi *PlanInfo) pickBalancedSegments(L int, base []int, idxs []int, load []m
 // 于是出现某天「1 早 3 中」这类失衡（11 月实测 3/30 天）。
 //
 // 修法：只移动【块内的切分点】，绝不单点翻转。
+// 通用支持 N 个班次（两班制 [中,早] 只是 N=2 的特例）：
 //
-//	块形态恒为 [中×a, 早×b]：
-//	  · 把最后一个中班日改成早班 → [中×(a-1), 早×(b+1)]
-//	  · 把第一个早班日改成中班 → [中×(a+1), 早×(b-1)]
-//	两种操作都保持块内单向（休→中→早→休），不会倒班。
+//	块形态恒为 [晚×a, 中×b, 早×c]，与 blockShiftOrder 一致（块内单向推进）：
+//	  · 段 j 人太多 → 把该段【最后一天】推到下一段 j+1
+//	  · 段 j 人太少 → 把下一段 j+1 的【第一天】拉回段 j
+//	两种操作都只在相邻段之间搬运，保持块内单向（休→晚→中→早→休），不会倒班。
 func (pi *PlanInfo) balanceDailyShiftMix(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time) {
-	morning, evening := pi.Morning, pi.Evening
-	if morning == "" || evening == "" || len(days) == 0 {
+	order := pi.blockShiftOrder()
+	n := len(order)
+	if n < 2 || len(days) == 0 {
 		return
 	}
 	names := make([]string, 0, len(rotating))
@@ -1112,72 +1235,337 @@ func (pi *PlanInfo) balanceDailyShiftMix(plan map[string]map[string]string, rota
 	if len(names) == 0 {
 		return
 	}
+	idxOf := map[string]int{}
+	for i, s := range order {
+		idxOf[s] = i
+	}
+	minPer := pi.Rule.MinPerShift
+	absv := func(v int) int {
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+	// 规则5（休假前后班次）是软约束，但既然能不破坏就别破坏。
+	// newIdx 是搬运后该人当天的班次序号：
+	//   明天休息 → 今天必须是最后一个班次（早班）；昨天休息 → 必须是第一个（晚班）。
+	// 零和交换属于「可选优化」，遇到会破坏该规则的人直接跳过即可，
+	// 没必要为了压平差额去牺牲休假前后的班次形态。
+	adjacencyOK := func(nm string, newIdx int, prevK, nextK string) bool {
+		if pi.Rule.RequireMorningBeforeRest && nextK != "" &&
+			isRestShift(lookPlan(plan, nextK, nm)) && newIdx != n-1 {
+			return false
+		}
+		if pi.Rule.RequireEveningAfterRest && prevK != "" &&
+			isRestShift(lookPlan(plan, prevK, nm)) && newIdx != 0 {
+			return false
+		}
+		return true
+	}
 
-	for i, d := range days {
+	// 每人各班次已排天数。挑人时按它排序，别总拿同一批人开刀。
+	//
+	// 为什么必须看这个：每日「早≥中」与每人「早=中」并不总是一致的——
+	// 例如 7 人出勤 20 天，每天上班 5 人时全天需要 早3/中2，
+	// 全月早班人日必然多于中班，谁都做不到严格 10/10。
+	// 但若每次都按名单顺序挑第一个可动的人，差额会全压在同两个人身上
+	// （实测员工01/07 被推成 早15/中5，差 10）。
+	// 改成「优先搬该班次天数最少的人」，差额就能摊到所有人头上。
+	tally := map[string][]int{}
+	for _, nm := range names {
+		tally[nm] = make([]int, n)
+	}
+	for _, d := range days {
 		k := dateKey(d)
-		prevK, nextK := "", ""
-		if i > 0 {
-			prevK = dateKey(days[i-1])
+		for _, nm := range names {
+			if j, ok := idxOf[lookPlan(plan, k, nm)]; ok {
+				tally[nm][j]++
+			}
 		}
-		if i+1 < len(days) {
-			nextK = dateKey(days[i+1])
-		}
+	}
 
-		// 最多修 |差值| 次；每轮只动 1 人，改完立即重算
-		for round := 0; round < len(names); round++ {
-			mc, ec := 0, 0
-			for _, n := range names {
-				switch lookPlan(plan, k, n) {
-				case morning:
-					mc++
-				case evening:
-					ec++
-				}
+	// 单遍扫描。曾尝试多轮（改动第 k 天会影响 k±1 天谁可动），
+	// 但实测会在紧绷场景下震荡，把原本合格的日子又推歪（N=12 三班制反而退化），
+	// 因此固定只扫一遍。
+	{
+		for i, d := range days {
+			k := dateKey(d)
+			prevK, nextK := "", ""
+			if i > 0 {
+				prevK = dateKey(days[i-1])
 			}
-			total := mc + ec
-			if total < 2 {
-				break
-			}
-			// 目标：早中尽量各半（早班取较少的一份，与班次推进顺序无关）
-			wantM := total / 2
-			if mc == wantM {
-				break
+			if i+1 < len(days) {
+				nextK = dateKey(days[i+1])
 			}
 
-			moved := false
-			if mc < wantM {
-				// 早班不够：把一个「中班日」改成早班。
-				// 必须是其工作块的【最后一个中班日】，否则会造出 中早中 的倒班。
-				for _, n := range names {
-					if lookPlan(plan, k, n) != evening {
-						continue
+			// 每轮只动 1 人，改完立即重算；上限给足，靠 moved 提前退出
+			for round := 0; round < len(names)*n; round++ {
+				cnt := make([]int, n)
+				total := 0
+				for _, nm := range names {
+					if j, ok := idxOf[lookPlan(plan, k, nm)]; ok {
+						cnt[j]++
+						total++
 					}
-					if nextK != "" && lookPlan(plan, nextK, n) == evening {
-						continue // 后面还是中班 → 不是最后一个
-					}
-					setPlan(plan, k, n, morning)
-					moved = true
+				}
+				if total < 2 {
 					break
 				}
-			} else {
-				// 早班过多：把一个「早班日」改成中班。
-				// 必须是其工作块的【第一个早班日】，否则会造出 早中早 的倒班。
-				for _, n := range names {
-					if lookPlan(plan, k, n) != morning {
-						continue
+
+				// 目标：各班次均分，不能整除时多出的给【靠后】的班次。
+				// order 是从「晚/中」到「早」推进，靠后即更靠近早班一侧，
+				// 满足业务要求「不对等时早班人数 >= 中班」。
+				target := make([]int, n)
+				base := total / n
+				extra := total % n
+				for j := range target {
+					target[j] = base
+					if j >= n-extra {
+						target[j]++
 					}
-					if prevK != "" && lookPlan(plan, prevK, n) == morning {
-						continue // 前面还是早班 → 不是第一个
-					}
-					setPlan(plan, k, n, evening)
-					moved = true
-					break
 				}
-			}
-			if !moved {
-				break // 无人可动，放弃这一天
+
+				// 只处理【相邻段】之间的搬运，方向由本段的盈亏决定：
+				// 段 j 人多 → 往后推（j → j+1）；段 j 人少 → 从前一段拉（j+1 → j）。
+				//
+				// 曾放宽为「本段或邻段任一偏离目标就搬」，结果在紧绷场景下
+				// 反复来回搬、越搬越歪（三班制合格组合从 14 掉到 9），已回退。
+				//
+				// 候选人不取「第一个可动的」，而是取【最需要这个班次】的人：
+				// 推进时优先选后段天数最少的人，回退时优先选前段天数最少的人。
+				moved := false
+				for j := 0; j < n-1 && !moved; j++ {
+					if cnt[j] > target[j] {
+						// 段 j 人太多 → 把它的【最后一天】推到段 j+1。
+						if minPer > 0 && cnt[j]-1 < minPer {
+							continue // 搬走会让本段跌破每班最少人数
+						}
+						bestKey, bestNm := 1<<30, ""
+						for _, nm := range names {
+							if lookPlan(plan, k, nm) != order[j] {
+								continue
+							}
+							if nextK != "" && lookPlan(plan, nextK, nm) == order[j] {
+								continue // 后面还是本段 → 不是最后一天
+							}
+							if !adjacencyOK(nm, j+1, prevK, nextK) {
+								continue // 会破坏休假前后班次
+							}
+							if key := tally[nm][j+1] - tally[nm][j]; key < bestKey {
+								bestKey, bestNm = key, nm
+							}
+						}
+						if bestNm != "" {
+							setPlan(plan, k, bestNm, order[j+1])
+							tally[bestNm][j]--
+							tally[bestNm][j+1]++
+							moved = true
+						}
+					} else if cnt[j] < target[j] {
+						// 段 j 人太少 → 把段 j+1 的【第一天】拉回段 j。
+						if minPer > 0 && cnt[j+1]-1 < minPer {
+							continue
+						}
+						bestKey, bestNm := 1<<30, ""
+						for _, nm := range names {
+							if lookPlan(plan, k, nm) != order[j+1] {
+								continue
+							}
+							if prevK != "" && lookPlan(plan, prevK, nm) == order[j+1] {
+								continue // 前面还是本段 → 不是第一天
+							}
+							if !adjacencyOK(nm, j, prevK, nextK) {
+								continue // 会破坏休假前后班次
+							}
+							if key := tally[nm][j] - tally[nm][j+1]; key < bestKey {
+								bestKey, bestNm = key, nm
+							}
+						}
+						if bestNm != "" {
+							setPlan(plan, k, bestNm, order[j])
+							tally[bestNm][j+1]--
+							tally[bestNm][j]++
+							moved = true
+						}
+					}
+				}
+				if !moved {
+					// 当日各班人数已达标，但【个人】班次天数可能仍不均衡
+					// （例如 7 人时全天需要 早3/中2，谁都不可能严格 10/10，
+					//   差额本该摊到每个人头上，却常集中在个别人身上）。
+					//
+					// 做一次「零和交换」：一人从段 j 推进到 j+1，另一人从段 j+1 拉回段 j。
+					// 当天各班人数不变（不破坏每班最少人数），
+					// 但两人的天数此消彼长，整体差距缩小。
+					for j := 0; j < n-1 && !moved; j++ {
+						// 推进候选：段 j 的段尾，取「后段相对最少」者（d 最大）
+						pushD, pushNm := -1<<30, ""
+						for _, nm := range names {
+							if lookPlan(plan, k, nm) != order[j] {
+								continue
+							}
+							if nextK != "" && lookPlan(plan, nextK, nm) == order[j] {
+								continue
+							}
+							if !adjacencyOK(nm, j+1, prevK, nextK) {
+								continue
+							}
+							if d := tally[nm][j] - tally[nm][j+1]; d > pushD {
+								pushD, pushNm = d, nm
+							}
+						}
+						if pushNm == "" {
+							continue
+						}
+						// 拉回候选：段 j+1 的段首，取「前段相对最少」者（d 最小）
+						pullD, pullNm := 1<<30, ""
+						for _, nm := range names {
+							if nm == pushNm {
+								continue
+							}
+							if lookPlan(plan, k, nm) != order[j+1] {
+								continue
+							}
+							if prevK != "" && lookPlan(plan, prevK, nm) == order[j+1] {
+								continue
+							}
+							if !adjacencyOK(nm, j, prevK, nextK) {
+								continue
+							}
+							if d := tally[nm][j] - tally[nm][j+1]; d < pullD {
+								pullD, pullNm = d, nm
+							}
+						}
+						if pullNm == "" {
+							continue
+						}
+						// 判据用 min-max，而不是「总差变小」：
+						// 全天早班人日多于中班时，「早-中」的总差是守恒量，
+						// 把差额从 A 转给 B，总差一点没少（A 减 2、B 加 2）。
+						// 真正要压的是【最大】那一个人的差：交换后两人的
+						// 最大 |差| 必须严格小于交换前的最大 |差|。
+						//
+						// 这里曾写成两条独立门槛，其中
+						//   absv(pushD-2) >= absv(pullD) → 跳过
+						// 要求「推进者搬完后比拉回者【原本】还平」，过严：
+						// 实测 30 天/22 出勤（6 人）里 pushD=8、pullD=-6，
+						// 交换后是 6 与 -4，最大差 8→6 明明是改善却被拦下，
+						// 于是班次差长期卡在 6（线上带固定班人员时到 8）。
+						// 改成标准 min-max 后该场景能继续收敛。
+						oldMax := absv(pushD)
+						if a := absv(pullD); a > oldMax {
+							oldMax = a
+						}
+						newMax := absv(pushD - 2)
+						if a := absv(pullD + 2); a > newMax {
+							newMax = a
+						}
+						if newMax >= oldMax {
+							continue // 最大那一头的偏斜没变小，不值得动
+						}
+						setPlan(plan, k, pushNm, order[j+1])
+						tally[pushNm][j]--
+						tally[pushNm][j+1]++
+						setPlan(plan, k, pullNm, order[j])
+						tally[pullNm][j+1]--
+						tally[pullNm][j]++
+						moved = true
+					}
+				}
+				if !moved {
+					break // 已平衡，或无人可动
+				}
 			}
 		}
+	}
+	// 收尾：零和交换收敛遍。
+	//
+	// 前面每轮是「当天搬运优先 + 至多一次零和交换」，很多跨天的人均偏斜没摊开
+	// （30 天/22 出勤下实测每轮只成功 1 次交换）。这里在不改变【任何一天各班人数】
+	// 的前提下，反复寻找「把偏斜最严重的人往均衡方向推」的两人互换并立即执行，
+	// 直到没有可改善的交换为止。
+	//
+	// 安全性：每次都是段 j 一人↔段 j+1 一人对换，当天各班人数恒定，
+	// 绝不会触发「每班最少人数」违规，也不会破坏块内单向
+	// （候选限定在段尾/段首，且经 adjacencyOK 校验）。由于每次交换都让
+	// 参与两人的最大 |班次差| 严格变小，偏斜量有下界，循环必然终止。
+	for {
+		bestGain := 0
+		var bk, bPush, bPull string
+		var bj int
+		for j := 0; j < n-1; j++ {
+			for i, d := range days {
+				k := dateKey(d)
+				prevK, nextK := "", ""
+				if i > 0 {
+					prevK = dateKey(days[i-1])
+				}
+				if i+1 < len(days) {
+					nextK = dateKey(days[i+1])
+				}
+				// 推进候选：段 j 段尾（d 最大）
+				pushD, pushNm := -1<<30, ""
+				for _, nm := range names {
+					if lookPlan(plan, k, nm) != order[j] {
+						continue
+					}
+					if nextK != "" && lookPlan(plan, nextK, nm) == order[j] {
+						continue
+					}
+					if !adjacencyOK(nm, j+1, prevK, nextK) {
+						continue
+					}
+					if dd := tally[nm][j] - tally[nm][j+1]; dd > pushD {
+						pushD, pushNm = dd, nm
+					}
+				}
+				if pushNm == "" {
+					continue
+				}
+				// 拉回候选：段 j+1 段首（d 最小）
+				pullD, pullNm := 1<<30, ""
+				for _, nm := range names {
+					if nm == pushNm {
+						continue
+					}
+					if lookPlan(plan, k, nm) != order[j+1] {
+						continue
+					}
+					if prevK != "" && lookPlan(plan, prevK, nm) == order[j+1] {
+						continue
+					}
+					if !adjacencyOK(nm, j, prevK, nextK) {
+						continue
+					}
+					if dd := tally[nm][j] - tally[nm][j+1]; dd < pullD {
+						pullD, pullNm = dd, nm
+					}
+				}
+				if pullNm == "" {
+					continue
+				}
+				oldMax := absv(pushD)
+				if a := absv(pullD); a > oldMax {
+					oldMax = a
+				}
+				newMax := absv(pushD - 2)
+				if a := absv(pullD + 2); a > newMax {
+					newMax = a
+				}
+				if g := oldMax - newMax; g > bestGain {
+					bestGain, bk, bPush, bPull, bj = g, k, pushNm, pullNm, j
+				}
+			}
+		}
+		if bestGain <= 0 {
+			break
+		}
+		setPlan(plan, bk, bPush, order[bj+1])
+		tally[bPush][bj]--
+		tally[bPush][bj+1]++
+		setPlan(plan, bk, bPull, order[bj])
+		tally[bPull][bj+1]--
+		tally[bPull][bj]++
 	}
 }
 

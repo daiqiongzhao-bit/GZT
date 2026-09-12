@@ -1,5 +1,10 @@
 <template>
   <div class="sched">
+    <div class="sched-tabs">
+      <button class="seg" :class="{ on: schedTab === 'schedule' }" @click="schedTab = 'schedule'">班表展示</button>
+      <button class="seg" :class="{ on: schedTab === 'planner' }" @click="schedTab = 'planner'">排班管理</button>
+    </div>
+    <div v-if="schedTab === 'schedule'">
     <div class="head-row">
       <h3 class="section-title" style="margin:0">班表展示 <span class="section-sub">{{ deptName }}</span></h3>
       <div class="head-actions">
@@ -241,7 +246,7 @@
           </tbody>
         </table>
       </div>
-      <p class="matrix-note">注：格子显示班次简称，空白表示该日无排班；休息按「当月未排班天数」估算，工时按「每班次 8 小时制」累计（早/中/晚/夜各 8h，休息 0h）。正常满勤约 22 天 ≈ 174~176 工时(h)。</p>
+      <p class="matrix-note">注：格子显示班次简称，标「休」表示该日休息（未排班或显式休息）；工时按「每班次 8 小时制」累计（早/中/晚/夜各 8h，休息 0h）。正常满勤约 22 天 ≈ 174~176 工时(h)。</p>
     </section>
 
     <!-- 内联新增表单 -->
@@ -283,6 +288,10 @@
         <button class="btn primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存排班' }}</button>
       </div>
     </section>
+    </div>
+    <div v-else>
+      <Planner />
+    </div>
   </div>
 </template>
 
@@ -293,6 +302,10 @@ import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
 import { deptOptions, indentOf } from '@/utils/dept'
 import EmptyState from '@/components/EmptyState.vue'
+import Planner from '@/views/Planner.vue'
+
+// 班表页内嵌「排班管理」标签页（v0.21.3：原独立「排班」入口合并进班表）
+const schedTab = ref('schedule')
 
 const auth = useAuthStore()
 const schedules = ref([])
@@ -734,8 +747,8 @@ const matrixRows = computed(() => {
     const workDays = new Set()
     for (let d = 1; d <= daysInMonth; d++) {
       const sh = pd[d]
-      if (!sh) continue
-      if (sh === '休息') { cells[d] = '休息'; continue } // 格子里也标「休」，不计工时/当班
+      // 未排班 / 显式「休息」都按休息处理：格子里标「休」，但不计入工时与当班人数
+      if (!sh || sh === '休息') { cells[d] = '休息'; continue }
       cells[d] = sh
       workDays.add(d)
       hours += shiftHours(sh)
@@ -792,6 +805,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.sched-tabs { display: inline-flex; border: 1px solid var(--glass-border); border-radius: 11px; overflow: hidden; background: var(--overlay); margin-bottom: 14px; }
+.sched-tabs .seg { padding: 8px 16px; font-size: 13px; border: none; background: transparent; color: var(--text-dim); cursor: pointer; }
+.sched-tabs .seg + .seg { border-left: 1px solid var(--glass-border); }
+.sched-tabs .seg.on { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .head-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .head-actions { display: flex; gap: 8px; align-items: center; }
 

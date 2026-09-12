@@ -352,7 +352,9 @@
                       :title="(specialMap[d.key] ? specialMap[d.key] + ' · ' : '') + d.key">
                     {{ d.d }}<em>{{ d.wk }}</em>
                   </th>
-                  <th class="mx-sum">出勤</th>
+                  <th v-for="s in shiftNames" :key="'h' + s" class="mx-sum" :title="s + '（全月天数）'">{{ cellLabel(s) }}</th>
+                  <th class="mx-sum" title="休息（全月天数）">休</th>
+                  <th class="mx-sum" title="工时（每班次 8 小时）">工时</th>
                 </tr>
               </thead>
               <tbody>
@@ -367,12 +369,34 @@
                       @click="cycleCell(p.name, d.key)">
                     {{ cellLabel(cellOf(p.name, d.key)) }}
                   </td>
-                  <td class="mx-sum">{{ workDaysOf(p.name) }}</td>
+                  <td v-for="s in shiftNames" :key="'s' + s" class="mx-sum">{{ personShiftCount[p.name][s] }}</td>
+                  <td class="mx-sum">{{ personShiftCount[p.name].__rest }}</td>
+                  <td class="mx-sum hours">{{ hoursOf(p.name) }}</td>
                 </tr>
               </tbody>
+              <tfoot>
+                <tr v-for="s in shiftNames" :key="'f' + s" class="mx-foot">
+                  <td class="mx-name">{{ cellLabel(s) }}班当班</td>
+                  <td v-for="d in dayList" :key="'fd' + d.key" class="mx-cell mx-foot-cell">{{ dailyShiftCount[d.key]?.[s] || 0 }}</td>
+                  <td v-for="s2 in shiftNames" :key="'fs' + s2" class="mx-sum">{{ s === s2 ? shiftMonthlyTotal(s) : '' }}</td>
+                  <td class="mx-sum"></td>
+                  <td class="mx-sum hours"></td>
+                </tr>
+                <tr class="mx-foot mx-foot-total">
+                  <td class="mx-name">当班总</td>
+                  <td v-for="d in dayList" :key="'ft' + d.key" class="mx-cell mx-foot-cell">{{ dailyTotal(d.key) }}</td>
+                  <td v-for="s in shiftNames" :key="'ft' + s" class="mx-sum">{{ shiftMonthlyTotal(s) }}</td>
+                  <td class="mx-sum">{{ totalRestDays() }}</td>
+                  <td class="mx-sum hours">{{ totalHours() }}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
-          <p class="hint">提示：固定班次人员（标「固」）的格子已按规则1 锁死，点击不会改变；先取消其固定班次才能手动调整。</p>
+          <p class="hint">
+            点击任意格子可手动切换班次（改动即时重算校验）。页脚「X班当班」为该日各班次人数，「当班总」为该日总出勤；
+            右侧每列分别为每人全月各休/工时，最末行汇总的「休」为全月休息人·天、「工时」为全月总工时（每班次 8h）。
+            固定班次人员（标「固」）格子已锁死，点击不会改变。
+          </p>
         </section>
 
         <section class="panel pub-panel">
@@ -390,7 +414,7 @@
       <div class="picker glass" style="max-width:680px">
         <div class="pk-head">
           <b>草稿箱</b>
-          <span class="section-sub">{{ deptName }} · {{ year }} 年 {{ month }} 月</span>
+          <span class="section-sub">{{ deptName }} · 全部版本（跨月份）</span>
         </div>
 
         <div class="pk-body" style="flex-direction:column;align-items:stretch;max-height:52vh;overflow:auto">
@@ -401,6 +425,7 @@
             <div class="dr-main">
               <div class="dr-title">
                 {{ d.name }}
+                <span class="tag">{{ d.year }} 年 {{ d.month }} 月</span>
                 <span v-if="d.applied" class="tag ok">已发布</span>
               </div>
               <div class="dr-meta">
@@ -819,8 +844,10 @@ const savingDraft = ref(false)
 async function fetchDrafts() {
   if (!canOperate.value) return
   try {
+    // 取该部门全部草稿（跨月份），草稿箱里按每条的 年/月 标注，
+    // 避免「保存的是 11 月、当前看的是 9 月」导致草稿凭空消失。
     const r = await api.get('/shift-drafts', {
-      params: { dept_id: deptId.value, year: year.value, month: month.value }
+      params: { dept_id: deptId.value }
     })
     drafts.value = r.items || []
   } catch (e) {
@@ -908,7 +935,7 @@ async function removeDraft(d) {
 
 async function applyDraft(d) {
   const stat = draftStat(d)
-  if (!confirm(`把草稿「${d.name}」推送到正式班表？\n\n该部门 ${year.value} 年 ${month.value} 月既有班表将被覆盖。\n当前快照：${stat}`)) return
+  if (!confirm(`把草稿「${d.name}」推送到正式班表？\n\n该部门 ${d.year} 年 ${d.month} 月既有班表将被覆盖。\n当前快照：${stat}`)) return
   applying.value = true
   try {
     const r = await api.post(`/shift-drafts/${d.id}/apply`)
@@ -970,6 +997,63 @@ function workDaysOf(name) {
     return s && s !== '休息'
   }).length
 }
+
+// 整月矩阵汇总：每人各班次天数 / 休息 / 工时；每日各班次当班人数
+function isRestShift(s) { return !s || s === '休息' }
+
+// 每人：各班次天数 + 休息天数
+const personShiftCount = computed(() => {
+  const map = {}
+  for (const p of people.value) {
+    const acc = {}
+    for (const s of shiftNames.value) acc[s] = 0
+    acc.__rest = 0
+    for (const d of dayList.value) {
+      const s = cellOf(p.name, d.key)
+      if (isRestShift(s)) acc.__rest++
+      else if (acc[s] !== undefined) acc[s]++
+    }
+    map[p.name] = acc
+  }
+  return map
+})
+
+// 每日：各班次当班人数
+const dailyShiftCount = computed(() => {
+  const map = {}
+  for (const d of dayList.value) {
+    const acc = {}
+    for (const s of shiftNames.value) acc[s] = 0
+    const byName = (plan.value || {})[d.key] || {}
+    for (const nm in byName) {
+      const s = byName[nm]
+      if (!isRestShift(s) && acc[s] !== undefined) acc[s]++
+    }
+    map[d.key] = acc
+  }
+  return map
+})
+
+function hoursOf(name) { return workDaysOf(name) * 8 }
+function dailyTotal(key) {
+  const acc = dailyShiftCount.value[key]
+  if (!acc) return 0
+  let n = 0
+  for (const s of shiftNames.value) n += acc[s] || 0
+  return n
+}
+function shiftMonthlyTotal(s) {
+  let n = 0
+  for (const d of dayList.value) n += dailyShiftCount.value[d.key]?.[s] || 0
+  return n
+}
+function totalWorkDays() {
+  return people.value.reduce((a, p) => a + workDaysOf(p.name), 0)
+}
+function totalRestDays() {
+  return people.value.reduce((a, p) => a + (planDays.value - workDaysOf(p.name)), 0)
+}
+function totalHours() { return totalWorkDays() * 8 }
 
 // 班次配色（与班表页一致：早=蓝、中=绿、晚=橙、夜=紫，未知班次回落灰）
 function shiftCls(s) {
@@ -1088,6 +1172,7 @@ function onRangeChange() {
 onMounted(async () => {
   await loadBase()
   await refreshDeptData()
+  await fetchDrafts()
 })
 
 // 需求列表在「员工需求」标签下才需要最新；切换时刷新一次，避免看到过期数据
@@ -1236,6 +1321,13 @@ thead .mx-name { background: var(--glass-strong); font-weight: 700; }
 .mx-fixed { display: inline-block; margin-left: 5px; padding: 1px 5px; border-radius: 5px; font-size: 9.5px; background: rgba(217, 119, 6, .14); color: var(--warn); font-weight: 700; vertical-align: 1px; }
 .matrix tbody tr.fixed .mx-name { background: rgba(217, 119, 6, .06); }
 .matrix tbody tr.conflict .mx-name { box-shadow: inset 3px 0 0 var(--danger); }
+/* 整月矩阵页脚：每日各班次当班人数 + 全月汇总 */
+.mx-foot-cell { height: 23px; font-size: 10.5px; color: var(--text-dim); background: rgba(79, 70, 229, .05); }
+.matrix tfoot .mx-name { text-align: left; padding-left: 8px !important; font-weight: 700; color: var(--text-dim); background: var(--glass-strong); }
+.matrix tfoot .mx-sum { background: var(--glass-strong); }
+.mx-foot { background: rgba(15, 23, 42, .035); }
+.mx-foot-total { background: rgba(79, 70, 229, .10); }
+.mx-foot-total .mx-sum { background: rgba(79, 70, 229, .16); }
 
 .pub-panel { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .pub-panel > div { flex: 1; min-width: 240px; }

@@ -23,7 +23,6 @@ export const icons = {
 export const navItems = [
   { to: '/', label: '概览', icon: icons.dashboard },
   { to: '/schedule', label: '班表', icon: icons.schedule },
-  { to: '/planner', label: '排班', icon: icons.planner },
   { to: '/tasks', label: '任务', icon: icons.tasks },
   { to: '/workspace', label: '知识库', icon: icons.workspace },
   { to: '/settings', label: '设置', icon: icons.settings }
