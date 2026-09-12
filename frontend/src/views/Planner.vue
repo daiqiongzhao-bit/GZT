@@ -99,6 +99,7 @@
           <label class="sw"><input type="checkbox" v-model="rule.require_morning_before_rest" /><span>休假前一天尽量排早班（规则5，软约束）</span></label>
           <label class="sw"><input type="checkbox" v-model="rule.require_evening_after_rest" /><span>休假回来第一天尽量排晚班（规则5，软约束）</span></label>
           <label class="sw"><input type="checkbox" v-model="rule.allow_exceed_month_days" /><span>允许超过本月应上班天数（规则3 只提示不判违规）</span></label>
+          <label class="sw"><input type="checkbox" v-model="rule.carry_over_prev_month" /><span>衔接上月班表（规则9：上月连续上班已达上限时，本月初必须安排休息）</span></label>
         </div>
 
         <div class="rule-foot">
@@ -539,6 +540,8 @@ const rule = ref({
   evening_shift_name: '',
   min_per_shift: 2,
   allow_exceed_month_days: false,
+  // 规则9 跨月衔接：默认开启（后端 nil 也按开启处理）
+  carry_over_prev_month: true,
   updated_by: ''
 })
 const savingRule = ref(false)
@@ -557,6 +560,8 @@ async function loadRule() {
       evening_shift_name: r.evening_shift_name || '',
       min_per_shift: r.min_per_shift ?? 2,
       allow_exceed_month_days: !!r.allow_exceed_month_days,
+      // 后端未配置(null)时按「默认开启」展示，与生成器口径保持一致
+      carry_over_prev_month: r.carry_over_prev_month == null ? true : !!r.carry_over_prev_month,
       updated_by: r.updated_by || ''
     }
   } catch (e) {
