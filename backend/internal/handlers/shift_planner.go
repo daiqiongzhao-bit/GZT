@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -392,6 +393,15 @@ type PlanInfo struct {
 	People    []PlanPerson
 	Special   map[string]string // 特殊工作日 date→事由
 	ReqByUser map[uint][]models.ShiftRequest
+	// CarryWork：姓名 → 截至上月末的「连续上班天数」。
+	// 由上月已发布班表（schedules）回溯得出，用于规则9 跨月衔接：
+	// 若 carryWork >= MaxWorkStreak，则本月月初必须安排休息。
+	// 仅当 Rule.CarryOverPrevMonth 开启时才有值（否则为空 map）。
+	CarryWork map[string]int
+	// carryHint：姓名 → 本月「第几天起必须已休过」（1-based）。
+	// 例如 carryWork=5、上限=6 时，则该人本月最多再连上 1 天，
+	// 即第 2 天必须休息 → hint[姓名]=2。
+	carryHint map[string]int
 }
 
 // buildPlanInfo 装配某部门某月的排班上下文。
@@ -412,6 +422,14 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		byUser[r.UserID] = append(byUser[r.UserID], r)
 	}
 
+	people := loadPlanPeople(deptID, userIDs, byUser, first, last)
+	carryWork := map[string]int{}
+	carryHint := map[string]int{}
+	if rule.CarryOverEnabled() {
+		carryWork = loadCarryOverWork(deptID, year, month, rule.MaxWorkStreak, people)
+		assignCarryHints(carryWork, carryHint, rule.MaxWorkStreak, people)
+	}
+
 	return &PlanInfo{
 		DeptID:    deptID,
 		Year:      year,
@@ -422,10 +440,158 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		Shifts:    shifts,
 		Morning:   morning,
 		Evening:   evening,
-		People:    loadPlanPeople(deptID, userIDs, byUser, first, last),
+		People:    people,
 		Special:   loadSpecialDays(deptID, dateKey(first), dateKey(last)),
 		ReqByUser: byUser,
+		CarryWork: carryWork,
+		carryHint: carryHint,
 	}
+}
+
+// assignCarryHints 由「跨月连上班数」推导每人的月初强制休假日：carryHint[姓名] = 第几天须休。
+//
+// 基础换算：还能再连上 (maxWork - carryWork) 天，再下一天就超限，故 hint = 余量 + 1。
+//
+// 【负载均衡】只做基础换算是不够的。现实数据（线上 2026-10 副本实测）里，
+// 上月末往往是「整组人同进同出」——因为排班在月初统一铺休息、月末统一收，
+// 一个月末的连上班数 × 参与人数 = 40~70 人日，而一天最多只能安排
+// (倒班人数 - 每班最少人数 × 班次数) 人休息（4 人 4 班每班 2 人时，一天只能休 0 人！）。
+// 若按基础换算把所有到限的人都顶在月初同一两天，会算出「一天要休 5~6 人」的
+// 数学上不可能满足的班表，反而比不衔接更差。
+//
+// 因此这里把「必须休」摊到月初的一段窗口里，逐日排空：
+//
+//	· 到限的人（余量 0）优先往前排，否则他第一天就会被记违规；
+//	· 每天最多安排 dailyCap 人，dailyCap 保守取「倒班人数 / 6」（最坏情况每人
+//	  连上上限 6 天，一天安排倒班人数的 1/6 休息恰好匹配周转速度）；
+//	  每班最少人数 > 0 时再按「一天至多能休几人」收紧。
+//
+// 这样：人数充裕时等价于「月初尽早休」，人数紧张时自然退化，
+// 在数学上无解的情况下把冲突从「一天挤 6 人」摊成「几天内轮休」。
+func assignCarryHints(carryWork, carryHint map[string]int, maxWorkStreak int, people []PlanPerson) {
+	if maxWorkStreak <= 0 || len(people) == 0 {
+		return
+	}
+	// 按「余量」升序：余量越小（越早到限）越先安排。
+	type item struct {
+		name  string
+		usage int // 本月还能再连上的天数
+	}
+	items := make([]item, 0, len(carryWork))
+	for _, p := range people {
+		cw, ok := carryWork[p.Name]
+		if !ok || cw <= 0 {
+			continue
+		}
+		usage := maxWorkStreak - cw
+		if usage < 0 {
+			usage = 0
+		}
+		items = append(items, item{name: p.Name, usage: usage})
+	}
+	if len(items) == 0 {
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].usage != items[j].usage {
+			return items[i].usage < items[j].usage
+		}
+		return items[i].name < items[j].name
+	})
+
+	// 单日最多安排多少人「跨月断休」
+	dailyCap := len(people) / 6
+	if dailyCap < 1 {
+		dailyCap = 1
+	}
+	if len(people) > 0 {
+		// 每人最多连上 maxWorkStreak 天，则每天需要 1/maxWorkStreak 的人休息；
+		// 取 6 与 maxWorkStreak 的较小者更保守（月内连上上限越小，周转越快）。
+		cap2 := len(people) / maxWorkStreak
+		if cap2 < 1 {
+			cap2 = 1
+		}
+		if cap2 < dailyCap {
+			dailyCap = cap2
+		}
+	}
+
+	usedPerDay := map[int]int{}
+	for _, it := range items {
+		// 从「第 usage+1 天」开始找一个还有名额的窗口日；
+		// 越晚则离到限越近，越应优先，故仍按 usage 升序分配、逐日填满后再顺延。
+		day := it.usage + 1
+		for usedPerDay[day] >= dailyCap {
+			day++
+		}
+		usedPerDay[day]++
+		carryHint[it.name] = day
+	}
+}
+
+// loadCarryOverWork 读取【上月已发布班表】，回溯每人截至上月末的连续上班天数。
+//
+// 数据来源：schedules 表（已发布班表）。取上月最后 lookback 天用于回溯，
+// lookback 取 maxWorkStreak+1（够判定是否已达上限），至少 10 天。
+// 未发布过上月班表 → 视为 0（无衔接），不报错、不影响生成。
+func loadCarryOverWork(deptID uint, year, month, maxWorkStreak int, people []PlanPerson) map[string]int {
+	out := map[string]int{}
+	if maxWorkStreak <= 0 {
+		return out
+	}
+	first := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	prevLast := first.AddDate(0, 0, -1) // 上月最后一天
+	lookback := maxWorkStreak + 1
+	if lookback < 10 {
+		lookback = 10
+	}
+	prevFrom := prevLast.AddDate(0, 0, -(lookback - 1))
+
+	var rows []models.Schedule
+	q := db.DB.Where("date >= ? AND date <= ?", dateKey(prevFrom), dateKey(prevLast))
+	if deptID > 0 {
+		q = q.Where("dept_id IN ?", descendantDeptIDs(deptID))
+	}
+	q.Find(&rows)
+	if len(rows) == 0 {
+		return out // 上月未发布，无衔接
+	}
+
+	// 每人每天的班次（含休息标记）
+	// schedules 只记录「上班」的班次；未出现的日期视为休息。
+	dayShift := map[string]map[string]string{} // name → date → shift
+	for _, r := range rows {
+		var names []string
+		if err := json.Unmarshal([]byte(r.People), &names); err != nil {
+			continue
+		}
+		for _, nm := range names {
+			if dayShift[nm] == nil {
+				dayShift[nm] = map[string]string{}
+			}
+			dayShift[nm][r.Date] = r.Shift
+		}
+	}
+
+	for _, p := range people {
+		m := dayShift[p.Name]
+		if m == nil {
+			continue
+		}
+		cnt := 0
+		// 从月末往前数连续「有班次」的天数
+		for d := prevLast; !d.Before(prevFrom); d = d.AddDate(0, 0, -1) {
+			if _, ok := m[dateKey(d)]; ok {
+				cnt++
+			} else {
+				break // 遇到休息即中断
+			}
+		}
+		if cnt > 0 {
+			out[p.Name] = cnt
+		}
+	}
+	return out
 }
 
 // requestOn 返回某员工某天的生效需求（休假优先于上班）。

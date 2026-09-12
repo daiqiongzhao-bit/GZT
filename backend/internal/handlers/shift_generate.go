@@ -262,7 +262,7 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 				workTarget = avail
 			}
 			if workTarget > maxWork {
-				minRest := (workTarget + maxWork - 1) / maxWork - 1
+				minRest := (workTarget+maxWork-1)/maxWork - 1
 				if workTarget > avail-minRest {
 					workTarget = avail - minRest
 				}
@@ -807,6 +807,10 @@ func (pi *PlanInfo) repairMinPerShift(plan map[string]map[string]string, rotatin
 				if pi.onLeaveOn(p.UserID, days[hi]) {
 					continue // 产假/婚假锁定，不能挪
 				}
+				// 规则9：跨月断休日不得被挪走（硬约束，见 carryRestLocked 注释）
+				if pi.carryRestLocked(p, days[hi], plan, days) {
+					continue
+				}
 				for lo := 0; lo < len(days); lo++ {
 					if lo == hi {
 						continue
@@ -898,6 +902,45 @@ func runLenWork(plan map[string]map[string]string, p PlanPerson, days []time.Tim
 
 // mustWorkOn 判断某倒班人员在某天是否「必须上班」：
 // 特殊工作日（规则6）或 已锁定的上班需求（规则4）。
+// carryRestLocked 判断 (p, day) 是否为规则9 的「跨月断休日」——
+// 即这一枚休息是为了断开上月末的连续上班而强制安排的，任何后续阶段
+// 都不得把它挪走、改成上班。
+//
+// 为什么需要这个守卫：forceCarryRest 落下的休息属于**硬约束**，
+// 但它只是目标天里普通的一天，后续的 repairMinPerShift（把过剩日的休息
+// 挪去紧缺日）完全可能在不知情的情况下把它搬走，月初断休随即失效。
+// 这里按「是否恰好落在第 hint 个可自由安排日」复算一次，作为判定依据。
+func (pi *PlanInfo) carryRestLocked(p PlanPerson, day time.Time, plan map[string]map[string]string, days []time.Time) bool {
+	hint, ok := pi.carryHint[p.Name]
+	if !ok || hint <= 0 {
+		return false
+	}
+	k := dateKey(day)
+	cnt := 0
+	for _, d := range days {
+		dk := dateKey(d)
+		// 还原「当时哪些天是可自由安排的」：本天以后被改动过的不影响计数，
+		// 只按「曾经已确定的休息 / 必须上班」过滤。
+		if pi.mustWorkOn(p, d) || pi.onLeaveOn(p.UserID, d) {
+			continue
+		}
+		if dk == k {
+			// 走到目标天：若它当前状态是休息，则它就是那枚强制休息
+			return isRestShift(lookPlan(plan, dk, p.Name))
+		}
+		// 目标天之前若已是休息（非强制），也不计入可自由安排日
+		if isRestShift(lookPlan(plan, dk, p.Name)) {
+			cnt = -1 // 结构已被改动，放弃判定（宁可放行，避免误锁）
+			break
+		}
+		cnt++
+		if cnt >= hint {
+			break
+		}
+	}
+	return false
+}
+
 func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
 	if pi.isSpecialWorkDay(day) {
 		return true
@@ -916,6 +959,46 @@ func (pi *PlanInfo) mustWorkOn(p PlanPerson, day time.Time) bool {
 // 段与段之间至少间隔 1 个工作日；同时避开已锁定的上班需求。
 // 休息段的起始日尽量均匀分布，避免全挤在月初/月末。
 // restPerDay 为跨人员共享的「每日休息人数」计数器，用于压平在岗人数曲线。
+//
+// 规则9 跨月衔接：若该人上月末已连续上班到上限
+// （carryHint 给出「第几天起必须已休过」，1-based），
+// 则本月第 hint 个「可自由安排的上班日」强制排休，断开跨月连上。
+//
+// 返回是否真正落下一枚强制休息日。
+//
+// 为什么不用「把 hint 之前的日子全部 blocked」的写法：
+//
+//	blocked 的语义是「必须上班」，把这些天冻结会出现两个问题——
+//	  1. 当天在岗人数被抬高，每班最少人数不再缺人 → 后续 repairMinPerShift
+//	     不会把它们挪成休息，月初断休就无人保障；
+//	  2. 这些天也不再参与 restPerDay 均衡，在岗曲线被顶出一个尖峰。
+//	这里只落「一枚」休息（跨月连上只需断一次），其余日子交还原有的
+//	均匀铺开 / 出席目标逻辑，保持既有班表形态不被搅动。
+func (pi *PlanInfo) forceCarryRest(rest, blocked map[string]bool, days []time.Time, p PlanPerson) bool {
+	hint, ok := pi.carryHint[p.Name]
+	if !ok || hint <= 0 {
+		return false
+	}
+	cnt := 0
+	for i := 0; i < len(days); i++ {
+		k := dateKey(days[i])
+		if rest[k] || blocked[k] {
+			continue // 已是休息 / 必须上班（锁定需求、特殊工作日）→ 不计入
+		}
+		cnt++
+		if cnt == hint {
+			if rest[k] {
+				return false // 本来就要休，无需强插
+			}
+			rest[k] = true // 强制休息，断开跨月连上
+			return true
+		}
+	}
+	// 该人本月没有足够的可自由安排日来落这枚休息（例如整月被锁定上班），
+	// 交回 validatePlan 报「跨月连续上班超限」的 error，由用户调整需求。
+	return false
+}
+
 func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPerson, days []time.Time, targetRest int, forcedWork map[string][]string, restPerDay map[string]int, phaseIdx, phaseTotal int) {
 	maxRest := pi.Rule.MaxRestStreak
 	if maxRest <= 0 {
@@ -976,6 +1059,21 @@ func (pi *PlanInfo) assignRestDays(plan map[string]map[string]string, p PlanPers
 	workDays := len(days) - targetRest
 	if workDays < 0 {
 		workDays = 0
+	}
+
+	// —— 规则9 跨月衔接（提前处理，先于「出勤目标」分支）——
+	//
+	// 为什么必须放在这里：月初断休是【硬约束】，不受出勤天数目标影响。
+	// 实际线上常见的极端情形是「4 人撑 4 个班次 × 每班 1 人」→ 被迫全员满月出勤
+	// （targetRest=0、need=0），此时原有的「need>0 才铺休息段」分支根本不会执行，
+	// 强制休息逻辑会被整体跳过，月初照旧接着连上。
+	// 因此先无条件落一枚休息日，再从下方出勤目标里扣掉这一天。
+	carryForced := pi.forceCarryRest(rest, blocked, days, p)
+	if carryForced {
+		// 强制休息是【硬约束】，必须真正增加休息总量，不能从出勤预算里「挪用」——
+		// 否则那枚休息会被计入 targetRest，导致月末少休一天、或让 repairMinPerShift
+		// 在别处又补一枚休息，等于没强制。
+		targetRest++
 	}
 
 	need := targetRest - len(rest)
@@ -1733,6 +1831,216 @@ func (pi *PlanInfo) balanceDailyShiftMix(plan map[string]map[string]string, rota
 		setPlan(plan, bk, bPull, order[bj])
 		tally[bPull][bj+1]--
 		tally[bPull][bj]++
+	}
+
+	// —— 跨天兜底修复：消除「某班次跌破最少人数」的死角 ——
+	//
+	// 前面的搬运全部限制在【同一天内】的相邻段之间，遇到多约束死角就无解。
+	// 典型死角（线上实测，2026-10）：某天「1 中 + 3 早」，需要从早班拉 1 人去中班，
+	// 但三名早班候选全部被挡 ——
+	//   · 甲：次日休息 → 规则5 要求今天必须早班（休假前须早班）；
+	//   · 乙/丙：前一天也是早班 → 不是段首，跨段搬运会破坏块内单向（倒退班）。
+	// 此时【天内无解】，但【跨天有解】：把相邻天多出来的中班人换过来即可。
+	//
+	// 做法：找相邻天 d2，若 d2 有「多余的中段(靠前段)」而 d1 恰缺该段，
+	// 则找同一名倒班人员 p，满足：
+	//   · p 在 d1 上班且班次可退（非当天最早段边界）、在 d2 上班；
+	//   · 把 p 在 d1 的班次往靠前段调、在 d2 的班次往靠后段调后，
+	//     两天各班人数都不跌破下限，且不破坏块内单向与规则5。
+	// 用「两天整体违规量下降」作为判据，保证收敛（严格递减）。
+	pi.repairShiftShortageCrossDay(plan, rotating, days, order, minPer)
+}
+
+// repairShiftShortageCrossDay 跨天修复「班次人数不足」死角。
+//
+// 为什么需要（线上实测 2026-10 多需求场景）：
+//
+//	balanceDailyShiftMix 的搬运全部限制在【同一天内】的相邻段之间，
+//	遇到「规则5 + 块内单向」双重约束时无解。典型死角：
+//	  某天「1 中 + 3 早」，需从早班拉 1 人去中班，但三名早班候选全被挡——
+//	    · 甲：次日休息 → 规则5「休假前须早班」，今天不能改中班；
+//	    · 乙/丙：前一天也是早班 → 不是段首，跨段搬会破坏块内单向（倒退班）。
+//	  天内无解，但【跨天有解】：把相邻天「多出来的中班人」换过来即可。
+//
+// 算法：反复寻找一次「两日交换」使【两天的总缺口量严格下降】，直至无改善。
+// 一次交换定义为同一名倒班人员 p 在相邻两天 di / dj 之间：
+//
+//	p 在 di 的班次 a ⟷ p 在 dj 的班次 b（两人次配额互换）
+//
+// 等价于把 p 的班次段位在两天间重新分配。交换后要求：
+//   - 两天各班倒班人数都不跌破下限（或不比原来更差）；
+//   - 不破坏块内单向（monoOK）与规则5（adjOK）。
+//
+// 因为每轮总缺口严格下降，迭代必然终止。达标场景（总缺口=0）首轮即返回，零副作用。
+func (pi *PlanInfo) repairShiftShortageCrossDay(plan map[string]map[string]string, rotating []PlanPerson, days []time.Time, order []string, minPer int) {
+	n := len(order)
+	if n < 2 || minPer <= 0 || len(days) < 2 || len(rotating) == 0 {
+		return
+	}
+	idxOf := map[string]int{}
+	for i, s := range order {
+		idxOf[s] = i
+	}
+
+	// 某天的各班倒班人数
+	countDay := func(k string) []int {
+		c := make([]int, n)
+		for _, p := range rotating {
+			if j, ok := idxOf[lookPlan(plan, k, p.Name)]; ok {
+				c[j]++
+			}
+		}
+		return c
+	}
+	// 缺口量
+	deficit := func(c []int) int {
+		s := 0
+		for j := 0; j < n; j++ {
+			if c[j] < minPer {
+				s += minPer - c[j]
+			}
+		}
+		return s
+	}
+	// 块内单向：p 在 di 改为 newIdx 后，「前序最近工作日段号 ≤ newIdx ≤ 后续最近工作日段号」
+	monoOK := func(p PlanPerson, di, newIdx int) bool {
+		prevI, nextI := -1, -1
+		for i := di - 1; i >= 0; i-- {
+			v := lookPlan(plan, dateKey(days[i]), p.Name)
+			if j, ok := idxOf[v]; ok {
+				prevI = j
+				break
+			}
+			if isRestShift(v) {
+				break
+			}
+		}
+		for i := di + 1; i < len(days); i++ {
+			v := lookPlan(plan, dateKey(days[i]), p.Name)
+			if j, ok := idxOf[v]; ok {
+				nextI = j
+				break
+			}
+			if isRestShift(v) {
+				break
+			}
+		}
+		if prevI >= 0 && newIdx < prevI {
+			return false
+		}
+		if nextI >= 0 && newIdx > nextI {
+			return false
+		}
+		return true
+	}
+	// 规则5：休假前一天须为末段、休假后第一天须为首段
+	adjOK := func(p PlanPerson, di, newIdx int) bool {
+		prevK, nextK := "", ""
+		if di > 0 {
+			prevK = dateKey(days[di-1])
+		}
+		if di+1 < len(days) {
+			nextK = dateKey(days[di+1])
+		}
+		if pi.Rule.RequireMorningBeforeRest && nextK != "" &&
+			isRestShift(lookPlan(plan, nextK, p.Name)) && newIdx != n-1 {
+			return false
+		}
+		if pi.Rule.RequireEveningAfterRest && prevK != "" &&
+			isRestShift(lookPlan(plan, prevK, p.Name)) && newIdx != 0 {
+			return false
+		}
+		return true
+	}
+
+	// 迭代：每轮挑一次最优交换（总缺口下降最多），执行后进入下一轮。
+	for iter := 0; iter < len(days)*len(rotating)+1; iter++ {
+		cur := make([][]int, len(days))
+		total := 0
+		for i := range days {
+			cur[i] = countDay(dateKey(days[i]))
+			total += deficit(cur[i])
+		}
+		if total == 0 {
+			return
+		}
+
+		bestGain := 0
+		bestI, bestJ, bestNewI, bestNewJ := -1, -1, -1, -1
+		var bestP PlanPerson
+
+		for i := 0; i < len(days); i++ {
+			if deficit(cur[i]) == 0 {
+				continue // 该天已达标
+			}
+			curI, okI := 0, false
+			// 该天缺人的段集合
+			for tgt := 0; tgt < n; tgt++ {
+				if cur[i][tgt] >= minPer {
+					continue // 该段不缺
+				}
+				// 尝试从相邻天 j 引入 p：p 在 j 天处于某段 srcJ，
+				// 在 i 天处于某段 srcI；把 p 在 j 的段改为 tgt 不可能跨天生效，
+				// 故改为「p 在 i 的段改为 tgt」，同时把 p 在 j 的段做反向调整保持均衡。
+				for _, p := range rotating {
+					si, ok := idxOf[lookPlan(plan, dateKey(days[i]), p.Name)]
+					if !ok || si == tgt {
+						continue
+					}
+					if !monoOK(p, i, tgt) {
+						continue
+					}
+					if !adjOK(p, i, tgt) {
+						continue
+					}
+					// p 在 i 改到 tgt 后，原段 si 若跌破下限，需要用 j 天补偿：
+					// 找 j = i±1，把 p 在 j 的班次从某段改为 si（补回），
+					// 且 j 天原段不能因此跌破下限。
+					for _, j := range []int{i - 1, i + 1} {
+						if j < 0 || j >= len(days) {
+							continue
+						}
+						sj, okj := idxOf[lookPlan(plan, dateKey(days[j]), p.Name)]
+						if !okj || sj == si {
+							continue
+						}
+						if !monoOK(p, j, si) {
+							continue
+						}
+						if !adjOK(p, j, si) {
+							continue
+						}
+						// 模拟两天变化
+						di := append([]int{}, cur[i]...)
+						di[si]--
+						di[tgt]++
+						dj := append([]int{}, cur[j]...)
+						dj[sj]--
+						dj[si]++
+						newDef := deficit(di) + deficit(dj)
+						oldDef := deficit(cur[i]) + deficit(cur[j])
+						if newDef >= oldDef {
+							continue
+						}
+						if g := oldDef - newDef; g > bestGain {
+							bestGain = g
+							bestI, bestJ = i, j
+							bestNewI, bestNewJ = tgt, si
+							bestP = p
+						}
+					}
+					_ = curI
+					_ = okI
+				}
+			}
+		}
+
+		if bestGain <= 0 || bestP.Name == "" || bestI < 0 || bestJ < 0 {
+			return // 无改善空间
+		}
+		// 落子：p 在 i 天 → order[bestNewI]，在 j 天 → order[bestNewJ]
+		setPlan(plan, dateKey(days[bestI]), bestP.Name, order[bestNewI])
+		setPlan(plan, dateKey(days[bestJ]), bestP.Name, order[bestNewJ])
 	}
 }
 

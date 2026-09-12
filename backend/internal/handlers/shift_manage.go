@@ -84,6 +84,10 @@ type shiftRuleReq struct {
 	EveningShiftName         string `json:"evening_shift_name"`
 	MinPerShift              int    `json:"min_per_shift"`
 	AllowExceedMonthDays     bool   `json:"allow_exceed_month_days"`
+	// 规则9 跨月衔接开关。用指针区分「未提交」与「显式关闭」：
+	// 未提交(nil) → 保持库中既有值（新库则默认开启）；
+	// 显式 false → 关闭。
+	CarryOverPrevMonth *bool `json:"carry_over_prev_month"`
 }
 
 // UpdateShiftRule PUT /shift-rules 保存规则（部门管/超管）
@@ -140,15 +144,31 @@ func UpdateShiftRule(c *gin.Context) {
 	r.EveningShiftName = strings.TrimSpace(req.EveningShiftName)
 	r.MinPerShift = req.MinPerShift
 	r.AllowExceedMonthDays = req.AllowExceedMonthDays
+	// 规则9：请求里带了就用请求值（含显式 false），没带就沿用库中现值；
+	// 库中为 nil（老数据）时落到「默认开启」，与 CarryOverEnabled() 的口径一致。
+	if req.CarryOverPrevMonth != nil {
+		v := *req.CarryOverPrevMonth
+		r.CarryOverPrevMonth = &v
+	} else if !r.CarryOverEnabled() {
+		v := false
+		r.CarryOverPrevMonth = &v
+	} else {
+		v := true
+		r.CarryOverPrevMonth = &v
+	}
 	r.UpdatedBy = claimsName(cl)
 
 	if err := db.DB.Save(&r).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	carryTxt := "关"
+	if r.CarryOverEnabled() {
+		carryTxt = "开"
+	}
 	addLog(c, cl.UserID, cl.Username, fmt.Sprintf(
-		"保存排班规则（%s）：连续休≤%d 连续上≤%d 月出勤%d 每班≥%d",
-		deptName(deptID), r.MaxRestStreak, r.MaxWorkStreak, r.MonthWorkDays, r.MinPerShift))
+		"保存排班规则（%s）：连续休≤%d 连续上≤%d 月出勤%d 每班≥%d 衔接上月班表(%s)",
+		deptName(deptID), r.MaxRestStreak, r.MaxWorkStreak, r.MonthWorkDays, r.MinPerShift, carryTxt))
 	c.JSON(http.StatusOK, r)
 }
 

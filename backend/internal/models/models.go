@@ -127,11 +127,32 @@ type ShiftRule struct {
 	EveningShiftName         string `json:"evening_shift_name" gorm:"size:32"`                // 「晚班」的班次名
 	// 规则7：每班次最少人数
 	MinPerShift int `json:"min_per_shift" gorm:"default:0"` // 0 = 不约束
+	// 规则9：跨月衔接。开启后读取【上月末已发布班表】的连续上班天数，
+	// 若已达 MaxWorkStreak 上限，则本月月初必须安排休息，不能接着连上。
+	//
+	// 取值语义：nil = 未显式配置 → 交由代码按「默认开启」处理；
+	// true = 开启；false = 关闭。
+	//
+	// 为什么用 *bool 而不是 bool + gorm:"default:true"：
+	//	GORM 创建记录时，对于带 default 标签的字段，若 Go 侧零值(false)
+	//	会被【默认值覆盖】——即显式写入 false 也会被改成 true，开关永远关不掉。
+	//	改用指针后：nil 走默认开启、显式 false 如实落库、显式 true 落库为 true，
+	//	语义清晰且可精确控制。读取端统一用 CarryOverEnabled() 归一化。
+	CarryOverPrevMonth *bool `json:"carry_over_prev_month"`
 	// 规则3 补充：是否允许超出月度出勤天数（0 不允许 / 1 允许）
 	AllowExceedMonthDays bool      `json:"allow_exceed_month_days" gorm:"default:true"`
 	UpdatedBy            string    `json:"updated_by" gorm:"size:64"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+// CarryOverEnabled 返回「跨月衔接」开关的最终取值。
+//
+// 规则9 默认开启（用户诉求：「上个月连续上6天，这个月初就要最少休一天」），
+// 因此未显式配置（nil）时视为开启；只有显式写入 false 才关闭。
+// 生成器与校验器都必须走本方法，避免各处对 nil 的理解不一致。
+func (r ShiftRule) CarryOverEnabled() bool {
+	return r.CarryOverPrevMonth == nil || *r.CarryOverPrevMonth
 }
 
 // UserShiftPref 员工排班偏好：固定班次 / 不参与倒班

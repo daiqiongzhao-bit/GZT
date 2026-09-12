@@ -138,6 +138,33 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 			}
 		}
 
+		// —— 规则9：跨月衔接（上月末连上已达上限 → 本月初必须休息）——
+		// 生成阶段已在 assignRestDays 中强制月初断休；此处做兜底校验，
+		// 捕捉「因锁定上班需求/特殊工作日等无法断休」的例外情况。
+		if pi.Rule.CarryOverEnabled() && maxWork > 0 && !ix.fixed {
+			if cw, ok := pi.CarryWork[ix.name]; ok && cw > 0 {
+				// 从月初起累计「连上班数」，起始值为上月末已连上的天数。
+				// 一旦累计 > maxWork 即视为违规（本应在此之前休一天）。
+				run := cw
+				for _, d := range daysInRange(from, to) {
+					if !isWork(d) {
+						break // 遇到休息 → 跨月连续上班被断开，合规
+					}
+					run++
+					if run > maxWork {
+						vs = append(vs, Violation{
+							Date: dateKey(d), Person: ix.name,
+							Rule: "carry_over_work_streak", Label: "跨月连续上班超限", Level: "error",
+							Reason: fmt.Sprintf(
+								"上月末已连续上班 %d 天，本月 %s 又接着上班，累计 %d 天超过上限 %d 天；本月月初应先安排休息",
+								cw, dateKey(d), run, maxWork),
+						})
+						break
+					}
+				}
+			}
+		}
+
 		// —— 规则5：休假前早班 / 休假后晚班 ——
 		// 仅当部门配了早/晚代表班次且二者不同才有意义
 		if pi.Morning != "" && pi.Evening != "" && pi.Morning != pi.Evening && !ix.fixed {
