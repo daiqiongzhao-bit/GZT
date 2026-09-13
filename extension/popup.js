@@ -55,7 +55,7 @@ function timeOf(t) {
 // 先渲染缓存（秒开），再后台刷新
 async function load() {
   const token = await getToken()
-  if (!token) { fillFromCache(null); show('login'); return }
+  if (!token) { show('login'); return }
   // 尝试先展示上次的缓存
   chrome.storage.local.get(['swb_cache'], (r) => {
     if (r.swb_cache) render(r.swb_cache)
