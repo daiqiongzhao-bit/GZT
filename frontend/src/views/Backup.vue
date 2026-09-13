@@ -41,7 +41,7 @@
           <span class="dim">{{ fmtSize(b.size) }}</span>
           <span>
             <span class="chip">{{ scopeLabel(b.scope) }}</span>
-            <span class="chip">{{ b.type === "auto" ? "自动" : "手动" }}
+            <span class="chip">{{ b.type === "auto" ? "自动" : "手动" }}</span>
             <span v-if="b.remote" class="chip remote">异地</span>
           </span>
           <span class="op">
