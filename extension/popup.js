@@ -156,6 +156,8 @@ function render(data) {
     const who = meName ? (meNo ? meName + '（' + meNo + '）' : meName) : ''
     meLine.textContent = who
     meLine.title = who
+    const meHeader = $('me-header')
+    if (meHeader) meHeader.textContent = who
   }
 
   // 班次卡片
