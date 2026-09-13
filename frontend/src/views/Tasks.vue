@@ -109,20 +109,21 @@
       <div class="fg2">
         <div>
           <label class="fld">类型</label>
-          <select v-model="form.type" class="glass-input">
-            <option value="daily">每周</option>
+          <select v-model="form.type" class="glass-input" @change="onTypeChange">
+            <option value="daily">每日</option>
+            <option value="weekly">每周（指定星期）</option>
             <option value="monthly">每月</option>
             <option value="once">单次</option>
           </select>
         </div>
         <div>
-          <label class="fld">{{ form.type === 'daily' ? '执行时间' : '截止时间' }}</label>
-          <input v-if="form.type === 'daily'" v-model="form.time" type="time" class="glass-input" />
+          <label class="fld">{{ (form.type === 'daily' || form.type === 'weekly') ? '执行时间' : '截止时间' }}</label>
+          <input v-if="form.type === 'daily' || form.type === 'weekly'" v-model="form.time" type="time" class="glass-input" />
           <input v-else v-model="form.deadline" type="datetime-local" class="glass-input" />
         </div>
       </div>
-      <div v-if="form.type === 'daily'" class="fg1">
-        <label class="fld">按周执行 <em class="faint">（勾选星期才做，不勾选=每天都执行）</em></label>
+      <div v-if="form.type === 'weekly'" class="fg1">
+        <label class="fld">按周执行 <em class="faint">（勾选星期，至少选一个）</em></label>
         <div class="wd-pick">
           <label v-for="d in [1, 2, 3, 4, 5, 6, 7]" :key="d" class="wd-chip" :class="{ on: form.weekdays.includes(d) }">
             <input type="checkbox" :value="d" v-model="form.weekdays" />
@@ -133,9 +134,9 @@
       <div class="fg1">
         <label class="fld">负责人 <em class="faint">（单人/多人，可空；空=部门公共任务）</em></label>
         <div class="wd-pick ap-pick">
-          <label v-for="u in userOptions" :key="u.id" class="wd-chip ap" :class="{ on: form.assignees.includes(u.name) }">
+          <label v-for="u in userOptions" :key="u.id" class="wd-chip ap" :class="{ on: form.assignees.includes(u.name) }" :title="u.dept ? u.name + '（' + u.dept.name + '）' : u.name">
             <input type="checkbox" :value="u.name" v-model="form.assignees" />
-            <span>{{ u.name }}<em v-if="u.dept">（{{ u.dept.name }}）</em></span>
+            <span>{{ u.name }}</span>
           </label>
           <span v-if="!userOptions.length" class="faint">所选部门暂无人员，请先在「设置-人员」中添加后再指派</span>
         </div>
@@ -168,7 +169,7 @@
         <button class="btn ghost form-close" @click="showImport = false">收起</button>
       </div>
       <textarea v-model="importText" class="glass-input import-ta" rows="9"
-        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 晚班 / 早晚（默认全员）&#10;类型：每周 / 每月 / 单次（默认每周）&#10;时间/截止：每周填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每周 | 09:00&#10;晚班盘点 | 晚班 | 每周 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
+        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 晚班 / 早晚（默认全员）&#10;类型：每日 / 每周 / 每月 / 单次（默认每日）&#10;时间/截止：每周填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每周 | 09:00&#10;晚班盘点 | 晚班 | 每周 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
       <div class="import-tip">将识别 {{ importCount }} 条有效任务</div>
       <div class="import-file">
         <span class="fld">导入到部门 <em class="req">必选</em></span>
@@ -213,7 +214,7 @@
                 <button class="check" :class="{ on: t.status === 'done' }" @click.stop="toggle(t)" v-html="icons.check"></button>
               </td>
               <td v-if="auth.isSuper" class="col-dept"><span class="dept-tag">{{ deptName(t.dept_id) }}</span></td>
-              <td class="col-type"><span class="chip" :class="typeClass(t.type)">{{ typeText(t.type) }}</span></td>
+              <td class="col-type"><span class="chip" :class="typeClass(t.type)">{{ typeText(t) }}</span></td>
               <td class="col-shift"><span class="chip" :class="shiftClass(t.shift)">{{ shiftLabel(t) }}</span></td>
               <td class="col-title">
                 <div class="t-title-row">
@@ -550,7 +551,14 @@ function startingTitle(t) {
   }
   return '即将到点，请准备执行'
 }
-function typeText(t) { return { daily: '每周', monthly: '每月', once: '单次' }[t] || t }
+function typeText(t) {
+  const type = typeof t === 'string' ? t : (t && t.type)
+  if (type === 'daily') {
+    const wd = (t && typeof t === 'object') ? String(t.week_days || '') : ''
+    return wd ? '每周' : '每日'
+  }
+  return { monthly: '每月', once: '单次' }[type] || type
+}
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高', medium: '中', low: '低' }[p] || '中' }
@@ -664,7 +672,7 @@ function openEdit(t) {
   let wds = []
   if (t.week_days) wds = String(t.week_days).split(',').map((s) => parseInt(s, 10)).filter((n) => n >= 1 && n <= 7)
   Object.assign(form, {
-    title: t.title, type: t.type, shift: t.shift || '全员',
+    title: t.title, type: (t.type === 'daily' && wds.length) ? 'weekly' : t.type, shift: t.shift || '全员',
     time: t.time || '', deadline: t.deadline || '',
     priority: t.priority || 'medium', note: t.note || '',
     dept_id: t.dept_id || auth.user.dept_id,
@@ -679,17 +687,22 @@ function fillDueTime(type, deadline) {
   if (type === 'monthly' && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) return deadline + 'T09:00'
   return deadline
 }
+function onTypeChange() {
+  if (form.type !== 'weekly') form.weekdays = []
+}
 async function save() {
   if (!form.title) { alert('任务内容不能为空'); return }
   if (!form.dept_id) { alert('请选择所属部门'); return }
+  if (form.type === 'weekly' && !form.weekdays.length) { alert('「每周」请至少勾选一个星期'); return }
   saving.value = true
   try {
+    const isDailyLike = form.type === 'daily' || form.type === 'weekly'
     const payload = {
-      title: form.title, type: form.type, shift: form.shift, time: form.time,
+      title: form.title, type: isDailyLike ? 'daily' : form.type, shift: form.shift, time: form.time,
       deadline: fillDueTime(form.type, form.deadline),
       priority: form.priority, note: form.note, dept_id: form.dept_id,
       assignees: form.assignees,
-      week_days: form.type === 'daily' && form.weekdays.length ? form.weekdays.join(',') : ''
+      week_days: isDailyLike && form.weekdays.length ? form.weekdays.join(',') : ''
     }
     if (editId.value) await api.put(`/tasks/${editId.value}`, payload)
     else await api.post('/tasks', payload)
@@ -914,13 +927,14 @@ onUnmounted(() => {
 .fg1 { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .fld { font-size: 13px; color: var(--text-dim); }
 .wd-pick { display: flex; flex-wrap: wrap; gap: 8px; }
-.wd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--glass-border); cursor: pointer; font-size: 13px; color: var(--text-dim); background: transparent; }
+.wd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--glass-border); cursor: pointer; font-size: 13px; color: var(--text-dim); background: transparent; white-space: nowrap; }
 .wd-chip input { display: none; }
 .wd-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .wd-chip em { font-style: normal; opacity: 0.75; font-size: 12px; }
 .t-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .t-tag { font-size: 12px; color: var(--text-dim); background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 999px; padding: 1px 8px; }
 .ap-pick .wd-chip.on { background: var(--ok); border-color: var(--ok); }
+.ap-pick { max-height: 148px; overflow-y: auto; padding-right: 4px; }
 
 @media (max-width: 820px) {
   .overview { grid-template-columns: 1fr; }

@@ -724,11 +724,7 @@ func CreateHandover(c *gin.Context) {
 		if due != nil {
 			content += "期望完成时间：" + due.Format("2006-01-02 15:04") + "。"
 		}
-		db.DB.Create(&models.Notification{
-			UserID: u.ID, Kind: "user", Title: title,
-			Content: content,
-			ActorID: cl.UserID, ActorName: cl.Username,
-		})
+		notifyUser(u.ID, "user", title, content, cl.UserID, cl.Username)
 	}
 	addLog(c, cl.UserID, cl.Username, "创建交接→"+strings.Join(orderedNames, "、")+": "+hv.Title)
 	c.JSON(http.StatusOK, hv)
@@ -806,10 +802,7 @@ func UpdateHandoverStatus(c *gin.Context) {
 			title = "交接被退回：「" + hv.Title + "」"
 			content = cl.Username + " 退回了这份交接，原因：" + strings.TrimSpace(req.Note)
 		}
-		db.DB.Create(&models.Notification{
-			UserID: hv.SenderID, Kind: "user", Title: title, Content: content,
-			ActorID: cl.UserID, ActorName: cl.Username,
-		})
+		notifyUser(hv.SenderID, "user", title, content, cl.UserID, cl.Username)
 	}
 	addLog(c, cl.UserID, cl.Username, "交接["+hv.Title+"]状态→"+hv.Status)
 	c.JSON(http.StatusOK, hv)
