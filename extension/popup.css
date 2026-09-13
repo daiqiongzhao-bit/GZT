@@ -71,7 +71,7 @@ body {
 
 /* 今日班次 + 更新时间 */
 .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.me-line { font-size: 12px; font-weight: 600; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-line { display: none; font-size: 12px; font-weight: 600; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .upd { font-size: 11px; color: #9aa3b2; flex: none; }
 
 /* v0.17.0 今日班次卡片：一眼看到「我是谁 + 什么班 + 几点到几点」 */
@@ -163,7 +163,7 @@ h3 { font-size: 12px; color: #6b7280; margin: 6px 0 8px; font-weight: 600; }
   .shift-chip { background: #1b2742; color: #93b4ff; }
   .shift-chip.none { background: #161d2e; color: #6b7689; }
   /* v0.17.0 深色模式：班次卡片 / 错误横幅 / 班次标签 */
-  .me-line { color: #c6cede; }
+  .me-line { display: none; color: #c6cede; }
   .me-header { color: #9ca3af; }
   .shift-card.on { background: #1b2742; border-color: #2a3550; color: #a5b4fc; }
   .shift-card.off { background: #161d2e; border-color: #2a3550; color: #6b7689; }
