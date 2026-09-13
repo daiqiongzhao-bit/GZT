@@ -277,6 +277,44 @@
         </div>
         <p v-else class="empty">本月暂无特殊工作日。</p>
       </section>
+
+      <section class="panel">
+        <h3 class="section-title">特殊休息日 <span class="section-sub">全员休息日 · 法定节假日 / 店休日等，全员默认休息</span></h3>
+        <p class="hint">员工若已提交<b>已锁定</b>的上班需求，该日仍按全员休息处理（生成时会提示人工复核）。</p>
+        <div class="sp-form">
+          <div>
+            <label class="fld">日期</label>
+            <input v-model="spRestForm.date" type="date" class="glass-input" />
+          </div>
+          <div>
+            <label class="fld">事由</label>
+            <input v-model="spRestForm.name" class="glass-input" placeholder="如：国庆 / 元旦 / 店休" />
+          </div>
+          <div>
+            <label class="fld">全员休息</label>
+            <select v-model="spRestForm.all_staff" class="glass-input">
+              <option :value="true">是（默认休息）</option>
+              <option :value="false">否（仅标记）</option>
+            </select>
+          </div>
+          <div class="sp-btn">
+            <button class="btn primary" :disabled="!canOperate || savingSpRest" @click="saveSpecialRestDay">{{ savingSpRest ? '保存中…' : '添加' }}</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="section-title">本月特殊休息日 <span class="section-sub">{{ year }} 年 {{ month }} 月</span></h3>
+        <div v-if="specialRestDays.length" class="sp-list">
+          <div v-for="s in specialRestDays" :key="s.id" class="sp-item">
+            <b>{{ s.date }}</b>
+            <span>{{ s.name }}</span>
+            <span class="chip" :class="s.all_staff ? 'ok' : ''">{{ s.all_staff ? '全员休息' : '仅标记' }}</span>
+            <button v-if="canOperate" class="del" @click="delSpecialRestDay(s)" title="删除">×</button>
+          </div>
+        </div>
+        <p v-else class="empty">本月暂无特殊休息日。</p>
+      </section>
     </template>
 
     <!-- ============================================================
@@ -349,7 +387,7 @@
                 <tr>
                   <th class="mx-name">姓名</th>
                   <th v-for="d in dayList" :key="d.d" class="mx-day"
-                      :class="{ wk: d.weekend, sp: !!specialMap[d.key], dgr: dayHasViolation(d.key) }"
+                      :class="{ wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], dgr: dayHasViolation(d.key) }"
                       :title="(specialMap[d.key] ? specialMap[d.key] + ' · ' : '') + d.key">
                     {{ d.d }}<em>{{ d.wk }}</em>
                   </th>
@@ -365,7 +403,7 @@
                     <span v-if="p.is_fixed" class="mx-fixed" :title="'固定班次：' + p.fixed_shift">固</span>
                   </td>
                   <td v-for="d in dayList" :key="d.key" class="mx-cell"
-                      :class="[shiftCls(cellOf(p.name, d.key)), { wk: d.weekend, sp: !!specialMap[d.key], vio: hasCellViolation(p.name, d.key) }]"
+                      :class="[shiftCls(cellOf(p.name, d.key)), { wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], vio: hasCellViolation(p.name, d.key) }]"
                       :title="cellTitle(p.name, d)"
                       @click="cycleCell(p.name, d.key)">
                     {{ cellLabel(cellOf(p.name, d.key)) }}
@@ -731,6 +769,7 @@ async function loadSpecial() {
   if (!deptId.value) return
   try {
     specialDays.value = (await api.get('/special-workdays', { dept_id: deptId.value, from: monthRange().from, to: monthRange().to })) || []
+    await loadSpecialRest()
   } catch (e) {
     toast(e, '特殊工作日加载失败')
   }
@@ -755,6 +794,49 @@ async function delSpecialDay(s) {
   try {
     await api.del(`/special-workdays/${s.id}`)
     await loadSpecial()
+    invalidatePlan()
+  } catch (e) {
+    toast(e, '删除失败')
+  }
+}
+
+// ---------- 特殊休息日 ----------
+const specialRestDays = ref([])
+const spRestForm = reactive({ date: '', name: '', all_staff: true })
+const savingSpRest = ref(false)
+const specialRestMap = computed(() => {
+  const m = {}
+  for (const s of specialRestDays.value) m[s.date] = s.name
+  return m
+})
+async function loadSpecialRest() {
+  if (!deptId.value) return
+  try {
+    specialRestDays.value = (await api.get('/special-restdays', { dept_id: deptId.value, from: monthRange().from, to: monthRange().to })) || []
+  } catch (e) {
+    toast(e, '特殊休息日加载失败')
+  }
+}
+async function saveSpecialRestDay() {
+  if (!spRestForm.date) { alert('请选择日期'); return }
+  if (!spRestForm.name.trim()) { alert('请填写事由'); return }
+  savingSpRest.value = true
+  try {
+    await api.post('/special-restdays', { dept_id: deptId.value, date: spRestForm.date, name: spRestForm.name.trim(), all_staff: spRestForm.all_staff })
+    spRestForm.name = ''
+    await loadSpecialRest()
+    invalidatePlan()
+  } catch (e) {
+    toast(e, '添加失败')
+  } finally {
+    savingSpRest.value = false
+  }
+}
+async function delSpecialRestDay(s) {
+  if (!confirm(`删除特殊休息日「${s.date} ${s.name}」？`)) return
+  try {
+    await api.del(`/special-restdays/${s.id}`)
+    await loadSpecialRest()
     invalidatePlan()
   } catch (e) {
     toast(e, '删除失败')
@@ -994,7 +1076,8 @@ function cellLabel(s) {
 function cellTitle(name, d) {
   const s = cellOf(name, d.key)
   const sp = specialMap.value[d.key] ? `特殊工作日：${specialMap.value[d.key]}\n` : ''
-  return `${sp}${name} · ${d.key}\n班次：${s === '休息' ? '休息' : s}\n点击可修改`
+  const rs = specialRestMap.value[d.key] ? `特殊休息日：${specialRestMap.value[d.key]}\n` : ''
+  return `${sp}${rs}${name} · ${d.key}\n班次：${s === '休息' ? '休息' : s}\n点击可修改`
 }
 function workDaysOf(name) {
   return dayList.value.filter((d) => {
@@ -1127,7 +1210,7 @@ const miniCells = computed(() => {
   for (let d = 1; d <= lastDay; d++) {
     const key = `${year.value}-${String(month.value).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     out.push({
-      key, day: d, inMonth: true, sp: specialDays.value.find((s) => s.date === key) || null,
+      key, day: d, inMonth: true, sp: specialDays.value.find((s) => s.date === key) || specialRestDays.value.find((s) => s.date === key) || null,
       isToday: today.getFullYear() === year.value && today.getMonth() + 1 === month.value && today.getDate() === d
     })
   }

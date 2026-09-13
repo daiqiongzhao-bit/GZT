@@ -98,6 +98,8 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 	days := daysInRange(pi.First, pi.Last)
 	// forcedWork: 特殊工作日要求上班的名单（date → []姓名），阶段2 不得将其排为休息
 	forcedWork := map[string][]string{}
+	// forcedRest: 特殊休息日要求休息的名单（date → []姓名），最终强制阶段必为休息
+	forcedRest := map[string][]string{}
 
 	// 分类人员
 	var fixed, rotating []PlanPerson
@@ -160,6 +162,35 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 				forcedWork[k] = append(forcedWork[k], p.Name)
 				res.Notes = append(res.Notes,
 					fmt.Sprintf("%s 为特殊工作日（%s），%s 已自动安排上班", k, pi.Special[k], p.Name))
+			}
+		}
+	}
+
+	// —— 阶段1c'：特殊休息日（全员休息）——
+	// 全员休息：把当天人员保持休息；若员工有锁定上班需求覆盖该日，视为冲突生成 Warning，
+	// 但仍以「全员休息」为准。固定/倒班人员一视同仁。
+	for _, p := range pi.People {
+		for _, d := range days {
+			if !pi.isSpecialRestDay(d) {
+				continue
+			}
+			k := dateKey(d)
+			lockedWork := false
+			for _, r := range pi.ReqByUser[p.UserID] {
+				if r.Status == models.PrefStatusLocked && r.Type == models.PrefTypeWork && requestCovers(r, d) {
+					lockedWork = true
+					break
+				}
+			}
+			if lockedWork {
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%s 为特殊休息日（%s），但 %s 已锁定上班需求，已按全员休息处理（请人工复核）", k, pi.Rest[k], p.Name))
+			}
+			forcedRest[k] = append(forcedRest[k], p.Name)
+			if !isRestShift(lookPlan(plan, k, p.Name)) {
+				setPlan(plan, k, p.Name, RestShift)
+				res.Notes = append(res.Notes, fmt.Sprintf(
+					"%s 为特殊休息日（%s），%s 已自动安排休息", k, pi.Rest[k], p.Name))
 			}
 		}
 	}
@@ -324,6 +355,7 @@ func (pi *PlanInfo) GeneratePlan() (*GenResult, error) {
 
 	// 强制还原锁定需求（规则4 兜底）
 	res.Notes = append(res.Notes, pi.enforceLocks(plan)...)
+	res.Notes = append(res.Notes, pi.enforceSpecialRest(plan, forcedRest)...)
 
 	// 校验
 	res.Violations = pi.validatePlan(plan)
@@ -2130,4 +2162,20 @@ func (pi *PlanInfo) applyAdjacencyRules(plan map[string]map[string]string, rotat
 			}
 		}
 	}
+}
+
+
+// enforceSpecialRest 最终强制阶段：特殊休息日上，无论中间阶段如何赋值，都将相关人员还原为休息。
+// 与 enforceLocks 同机制，保证「全员休息」不被后续排班/补给阶段覆盖。
+func (pi *PlanInfo) enforceSpecialRest(plan map[string]map[string]string, forcedRest map[string][]string) []string {
+	var notes []string
+	for k, names := range forcedRest {
+		for _, name := range names {
+			if !isRestShift(lookPlan(plan, k, name)) {
+				setPlan(plan, k, name, RestShift)
+				notes = append(notes, fmt.Sprintf("%s 为特殊休息日，%s 已强制还原为休息", k, name))
+			}
+		}
+	}
+	return notes
 }

@@ -210,6 +210,19 @@ type SpecialWorkDay struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// SpecialRestDay 特殊休息日（全员休息日）。
+// 与 SpecialWorkDay（规则6 全员上班日）对称：可设置某一天全员休息（如法定节假日、店休日），
+// 员工无特殊上班需求则默认休息；生成器强制休息、校验器对仍排班者报错。
+type SpecialRestDay struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Date      string    `json:"date" gorm:"size:10;index;not null"` // YYYY-MM-DD
+	DeptID    uint      `json:"dept_id" gorm:"index"`               // 0 = 全部部门
+	Name      string    `json:"name" gorm:"size:64"`                // 事由：国庆 / 元旦
+	AllStaff  bool      `json:"all_staff" gorm:"default:true"`      // 是否全员休息
+	Note      string    `json:"note" gorm:"size:255"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Task 任务：每日/每周/每月/临时单次，支持逾期。
 // Shift 班次归属：早班/中班/晚班/早晚/全员（谁当班谁负责）
 // WeekDays 为「按周执行」：Type=daily 时可勾选星期几触发（1=周一…7=周日，空=每天都执行）

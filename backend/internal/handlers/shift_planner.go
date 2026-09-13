@@ -379,6 +379,26 @@ func loadSpecialDays(deptID uint, from, to string) map[string]string {
 	return out
 }
 
+// loadSpecialRestDays 载入区间内该部门（含全局 dept_id=0）的特殊休息日。
+func loadSpecialRestDays(deptID uint, from, to string) map[string]string {
+	var list []models.SpecialRestDay
+	q := db.DB.Where("date >= ? AND date <= ?", from, to)
+	if deptID > 0 {
+		q = q.Where("dept_id = ? OR dept_id = 0", deptID)
+	}
+	q.Find(&list)
+	out := map[string]string{}
+	for _, s := range list {
+		if !s.AllStaff {
+			continue
+		}
+		if _, exists := out[s.Date]; !exists {
+			out[s.Date] = s.Name
+		}
+	}
+	return out
+}
+
 // PlanInfo 一次性装配的生成 / 校验上下文。
 type PlanInfo struct {
 	DeptID    uint
@@ -392,6 +412,7 @@ type PlanInfo struct {
 	Evening   string   // 「晚班」代表
 	People    []PlanPerson
 	Special   map[string]string // 特殊工作日 date→事由
+	Rest     map[string]string // 特殊休息日 date→事由
 	ReqByUser map[uint][]models.ShiftRequest
 	// CarryWork：姓名 → 截至上月末的「连续上班天数」。
 	// 由上月已发布班表（schedules）回溯得出，用于规则9 跨月衔接：
@@ -442,6 +463,7 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		Evening:   evening,
 		People:    people,
 		Special:   loadSpecialDays(deptID, dateKey(first), dateKey(last)),
+		Rest:     loadSpecialRestDays(deptID, dateKey(first), dateKey(last)),
 		ReqByUser: byUser,
 		CarryWork: carryWork,
 		carryHint: carryHint,
@@ -616,6 +638,11 @@ func (pi *PlanInfo) requestOn(userID uint, day time.Time) (models.ShiftRequest, 
 // isSpecialWorkDay 当天是否特殊工作日（规则6）。
 func (pi *PlanInfo) isSpecialWorkDay(day time.Time) bool {
 	_, ok := pi.Special[dateKey(day)]
+	return ok
+}
+
+func (pi *PlanInfo) isSpecialRestDay(day time.Time) bool {
+	_, ok := pi.Rest[dateKey(day)]
 	return ok
 }
 

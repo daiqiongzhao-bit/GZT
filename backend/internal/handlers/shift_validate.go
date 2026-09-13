@@ -63,6 +63,21 @@ func (pi *PlanInfo) validatePlan(plan map[string]map[string]string) []Violation 
 	from, to := pi.First, pi.Last
 	maxRest, maxWork := pi.Rule.MaxRestStreak, pi.Rule.MaxWorkStreak
 
+	// 特殊休息日（全员休息）：该日被排为上班班次即违规
+	for d, reason := range pi.Rest {
+		for _, p := range pi.People {
+			if !isRestShift(lookPlan(plan, d, p.Name)) {
+				vs = append(vs, Violation{
+					Date:   d,
+					Person: p.Name,
+					Rule:   "special_rest",
+					Label:  "特殊休息日仍排班",
+					Reason: fmt.Sprintf("%s 为特殊休息日（%s），%s 不应被排班", d, reason, p.Name),
+					Level:  "error",
+				})
+			}
+		}
+	}
 	// 按人建立索引加速
 	type pIdx struct {
 		name  string

@@ -194,6 +194,10 @@ func main() {
 			auth.POST("/special-workdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialWorkDay)
 			auth.DELETE("/special-workdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialWorkDay)
 
+			auth.GET("/special-restdays", handlers.ListSpecialRestDays)
+			auth.POST("/special-restdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialRestDay)
+			auth.DELETE("/special-restdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialRestDay)
+
 			auth.POST("/schedules/generate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GenerateSchedule)
 			auth.POST("/schedules/validate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ValidatePlan)
 			auth.POST("/schedules/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlan)

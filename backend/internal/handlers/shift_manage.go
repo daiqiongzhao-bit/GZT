@@ -741,6 +741,132 @@ func DeleteSpecialWorkDay(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// ---------- 特殊休息日（全员休息日）----------
+
+// ListSpecialRestDays GET /special-restdays?dept_id=&from=&to=
+func ListSpecialRestDays(c *gin.Context) {
+	deptQ, _ := strconv.Atoi(c.Query("dept_id"))
+	deptID := uint(deptQ)
+	if deptID == 0 {
+		cl := currentClaims(c)
+		deptID = cl.DeptID
+	}
+	if !canViewDept(c, deptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该部门"})
+		return
+	}
+	var list []models.SpecialRestDay
+	q := db.DB.Order("date asc")
+	if deptID > 0 {
+		q = q.Where("dept_id = ? OR dept_id = 0", deptID)
+	}
+	if f := strings.TrimSpace(c.Query("from")); f != "" {
+		q = q.Where("date >= ?", f)
+	}
+	if t := strings.TrimSpace(c.Query("to")); t != "" {
+		q = q.Where("date <= ?", t)
+	}
+	q.Find(&list)
+	c.JSON(http.StatusOK, list)
+}
+
+// UpsertSpecialRestDay POST /special-restdays 新增或更新
+func UpsertSpecialRestDay(c *gin.Context) {
+	var req specialDayReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	cl := currentClaims(c)
+	if req.ID > 0 {
+		var old models.SpecialRestDay
+		if err := db.DB.First(&old, req.ID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "特殊休息日不存在"})
+			return
+		}
+		if old.DeptID == 0 {
+			if cl.Role != models.RoleSuperAdmin {
+				c.JSON(http.StatusForbidden, gin.H{"error": "全局特殊休息日仅超级管理员可修改"})
+				return
+			}
+		} else if !canManageDept(c, old.DeptID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权修改该部门特殊休息日"})
+			return
+		}
+		if d, ok := parseDateKey(req.Date); ok {
+			old.Date = dateKey(d)
+		}
+		if n := strings.TrimSpace(req.Name); n != "" {
+			old.Name = n
+		}
+		old.AllStaff = req.AllStaff
+		old.Note = strings.TrimSpace(req.Note)
+		if err := db.DB.Save(&old).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		addLog(c, cl.UserID, cl.Username, "修改特殊休息日："+old.Date+" "+old.Name)
+		c.JSON(http.StatusOK, old)
+		return
+	}
+	deptID, ok := planDeptID(c, req.DeptID)
+	if !ok {
+		return
+	}
+	d, ok2 := parseDateKey(req.Date)
+	if !ok2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "日期格式应为 YYYY-MM-DD"})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写事由（如：国庆、元旦）"})
+		return
+	}
+	var cnt int64
+	db.DB.Model(&models.SpecialRestDay{}).Where("date = ? AND dept_id = ?", dateKey(d), deptID).Count(&cnt)
+	if cnt > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该日期已存在特殊休息日设置"})
+		return
+	}
+	s := models.SpecialRestDay{
+		Date: dateKey(d), DeptID: deptID, Name: name,
+		AllStaff: req.AllStaff, Note: strings.TrimSpace(req.Note),
+	}
+	if err := db.DB.Create(&s).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	addLog(c, cl.UserID, cl.Username, "新增特殊休息日："+s.Date+" "+s.Name)
+	c.JSON(http.StatusOK, s)
+}
+
+// DeleteSpecialRestDay DELETE /special-restdays/:id
+func DeleteSpecialRestDay(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var s models.SpecialRestDay
+	if err := db.DB.First(&s, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "特殊休息日不存在"})
+		return
+	}
+	cl := currentClaims(c)
+	if s.DeptID == 0 {
+		if cl.Role != models.RoleSuperAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "全局特殊休息日仅超级管理员可删除"})
+			return
+		}
+	} else if !canManageDept(c, s.DeptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权删除该部门特殊休息日"})
+		return
+	}
+	if err := db.DB.Delete(&models.SpecialRestDay{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	addLog(c, cl.UserID, cl.Username, "删除特殊休息日："+s.Date+" "+s.Name)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // ---------- 生成 / 校验 / 应用 ----------
 
 type generateReq struct {
