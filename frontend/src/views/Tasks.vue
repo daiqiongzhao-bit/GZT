@@ -133,13 +133,31 @@
       </div>
       <div class="fg1">
         <label class="fld">负责人 <em class="faint">（单人/多人，可空；空=部门公共任务）</em></label>
-        <div class="wd-pick ap-pick">
-          <label v-for="u in userOptions" :key="u.id" class="wd-chip ap" :class="{ on: form.assignees.includes(u.name) }" :title="u.dept ? u.name + '（' + u.dept.name + '）' : u.name">
-            <input type="checkbox" :value="u.name" v-model="form.assignees" />
-            <span>{{ u.name }}</span>
-          </label>
-          <span v-if="!userOptions.length" class="faint">所选部门暂无人员，请先在「设置-人员」中添加后再指派</span>
+        <div class="ap-sel" :class="{ open: apOpen }">
+          <div class="ap-ctrl" @click="apOpen = !apOpen">
+            <span v-if="!form.assignees.length" class="ap-ph">点击选择负责人（可多选）</span>
+            <span v-else class="ap-chosen">
+              <span v-for="n in form.assignees" :key="n" class="ap-tag">{{ n }}<i class="ap-x" @click.stop="removeAssignee(n)">×</i></span>
+            </span>
+            <span class="ap-caret" aria-hidden="true">▾</span>
+          </div>
+          <div v-if="apOpen" class="ap-panel">
+            <input class="ap-search" v-model="apKw" type="text" placeholder="搜索姓名…" />
+            <div class="ap-list">
+              <label v-for="u in apFiltered" :key="u.id" class="ap-item" :class="{ on: form.assignees.includes(u.name) }">
+                <input type="checkbox" :value="u.name" v-model="form.assignees" />
+                <span class="ap-nm">{{ u.name }}</span>
+                <em v-if="u.dept" class="ap-dp">{{ u.dept.name }}</em>
+              </label>
+              <div v-if="!apFiltered.length" class="ap-empty">所选部门暂无匹配人员</div>
+            </div>
+            <div class="ap-foot">
+              <button type="button" class="ap-btn" @click="form.assignees = []">清空</button>
+              <button type="button" class="ap-btn primary" @click="apOpen = false">完成</button>
+            </div>
+          </div>
         </div>
+        <span v-if="!userOptions.length" class="faint" style="font-size:12px">所选部门暂无人员，请先在「设置-人员」中添加后再指派</span>
       </div>
       <div class="fg2">
         <div>
@@ -322,6 +340,21 @@ const userOptions = computed(() => {
   if (did) list = list.filter((u) => u.dept_id === did || (u.dept && u.dept.parent_id === did))
   return list
 })
+// v0.21.15：负责人改为「下拉多选」——收起时只显示已选人，点开才出搜索+勾选列表。
+// 原实现把部门全部人员铺成 chip 墙，浅色主题下 chip 边框仅 10% 黑几乎不可见，看着像"一坨文字"。
+const apOpen = ref(false)
+const apKw = ref('')
+const apFiltered = computed(() => {
+  const kw = apKw.value.trim().toLowerCase()
+  if (!kw) return userOptions.value
+  return userOptions.value.filter((u) =>
+    String(u.name || '').toLowerCase().includes(kw) ||
+    (u.dept && u.dept.name && String(u.dept.name).toLowerCase().includes(kw)))
+})
+function removeAssignee(n) {
+  form.assignees = form.assignees.filter((x) => x !== n)
+}
+function closeAp() { apOpen.value = false; apKw.value = '' }
 const emptyForm = { title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null, weekdays: [], assignees: [] }
 // 当前表单所选部门的班次（含时间）
 const deptShifts = computed(() => {
@@ -662,6 +695,7 @@ function toggleAdd() {
   if (showAdd.value) {
     editId.value = null
     Object.assign(form, { ...emptyForm, dept_id: auth.isSuper ? (departments.value[0]?.id || null) : (auth.user.dept_id || null) })
+    closeAp()
   }
 }
 function openEdit(t) {
@@ -678,6 +712,7 @@ function openEdit(t) {
     dept_id: t.dept_id || auth.user.dept_id,
     weekdays: wds, assignees: names
   })
+  closeAp()
   showAdd.value = true
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -709,6 +744,7 @@ async function save() {
     showAdd.value = false
     editId.value = null
     Object.assign(form, emptyForm)
+    closeAp()
     await load()
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { saving.value = false }
@@ -927,14 +963,38 @@ onUnmounted(() => {
 .fg1 { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .fld { font-size: 13px; color: var(--text-dim); }
 .wd-pick { display: flex; flex-wrap: wrap; gap: 8px; }
-.wd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--glass-border); cursor: pointer; font-size: 13px; color: var(--text-dim); background: transparent; white-space: nowrap; }
+.wd-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--glass-border-strong); cursor: pointer; font-size: 13px; color: var(--text-dim); background: var(--overlay); white-space: nowrap; }
 .wd-chip input { display: none; }
 .wd-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .wd-chip em { font-style: normal; opacity: 0.75; font-size: 12px; }
 .t-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .t-tag { font-size: 12px; color: var(--text-dim); background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 999px; padding: 1px 8px; }
-.ap-pick .wd-chip.on { background: var(--ok); border-color: var(--ok); }
-.ap-pick { max-height: 148px; overflow-y: auto; padding-right: 4px; }
+/* 负责人下拉多选（v0.21.15） */
+.ap-sel { display: flex; flex-direction: column; }
+.ap-ctrl { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 5px 10px; border: 1px solid var(--glass-border-strong); border-radius: 10px; background: var(--overlay); cursor: pointer; transition: 0.15s; }
+.ap-ctrl:hover { border-color: var(--accent); }
+.ap-sel.open .ap-ctrl { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ap-ph { color: var(--text-faint); font-size: 13px; }
+.ap-chosen { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.ap-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 9px; border-radius: 999px; background: var(--ok); color: #fff; font-size: 12.5px; white-space: nowrap; }
+.ap-x { font-style: normal; cursor: pointer; opacity: 0.85; font-size: 14px; line-height: 1; padding: 0 2px; }
+.ap-x:hover { opacity: 1; }
+.ap-caret { margin-left: auto; color: var(--text-dim); font-size: 12px; transition: transform 0.15s; }
+.ap-sel.open .ap-caret { transform: rotate(180deg); }
+.ap-panel { margin-top: 8px; border: 1px solid var(--glass-border-strong); border-radius: 12px; background: var(--overlay); overflow: hidden; }
+.ap-search { width: 100%; box-sizing: border-box; border: 0; border-bottom: 1px solid var(--glass-border); background: transparent; padding: 9px 12px; font-size: 13px; color: var(--text); outline: none; }
+.ap-list { max-height: 216px; overflow-y: auto; padding: 4px; }
+.ap-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-dim); }
+.ap-item:hover { background: var(--accent-soft); }
+.ap-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ap-item input { display: none; }
+.ap-item.on .ap-nm::after { content: ' ✓'; }
+.ap-dp { margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--text-faint); }
+.ap-empty { padding: 14px; text-align: center; font-size: 12.5px; color: var(--text-faint); }
+.ap-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--glass-border); }
+.ap-btn { border: 1px solid var(--glass-border-strong); background: transparent; color: var(--text-dim); border-radius: 8px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
+.ap-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ap-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 @media (max-width: 820px) {
   .overview { grid-template-columns: 1fr; }
