@@ -217,7 +217,13 @@ func Dashboard(c *gin.Context) {
 			}
 		}
 	}
+	// v0.21.17：三个列表统一排序。此前这里没有任何排序，返回顺序取决于数据库物理行序
+	// （≈ 创建顺序），因此「20:00 的晚班任务」因为创建得晚被排到了 21:50 的后面。
+	sortTasksByUrgency(todayTasks)
+	sortTasksByUrgency(monthTasks)
+	sortTasksByUrgency(monthlyTasks)
 	attachAssigneeInfo(todayTasks)
+
 	attachAssigneeInfo(monthTasks)
 	attachAssigneeInfo(monthlyTasks)
 

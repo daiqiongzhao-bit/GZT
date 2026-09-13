@@ -244,6 +244,11 @@ func taskUrgencyKey(t models.Task, nowStr string) string {
 			k = time.Now().Format("2006-01-02") + "T" + t.Time
 		}
 	}
+	// 没有截止时间的任务（每日 / 每周等周期任务）按「今天的到点时点」参与排序，
+	// 否则它们会因为没有 deadline 被一律沉到列表最底（插件与首页的今日待办尤其明显）。
+	if k == "" && t.Time != "" {
+		k = time.Now().Format("2006-01-02") + "T" + t.Time
+	}
 	if k == "" {
 		return "9999-12-31T23:59"
 	}
@@ -572,7 +577,40 @@ func weekDaysLabel(s string) string {
 	return strings.Join(out, "/")
 }
 
+// sortTasksByUrgency 统一任务列表排序：任务页、首页与浏览器插件的「今日待办」共用同一套规则，
+// 避免同一批任务在不同入口顺序不一致。规则：
+//  1. 未完成在前；已完成按完成时间新→旧沉底
+//  2. 未完成中「需马上处理」（正在执行 / 逾期 / 即将逾期）优先
+//  3. 其余按截止（或到点）时间正序；无时间的排最后
+//  4. 同键按创建时间正序，保证顺序稳定可预期
+func sortTasksByUrgency(list []models.Task) {
+	if len(list) < 2 {
+		return
+	}
+	nowStr := time.Now().Format("2006-01-02T15:04")
+	sort.SliceStable(list, func(a, b int) bool {
+		ta, tb := list[a], list[b]
+		doneA, doneB := ta.Status == models.TaskStatusDone, tb.Status == models.TaskStatusDone
+		if doneA != doneB {
+			return !doneA
+		}
+		if doneA && doneB {
+			return ta.CompletedAt.After(tb.CompletedAt)
+		}
+		actA, actB := ta.Running || ta.Overdue || ta.SoonOverdue, tb.Running || tb.Overdue || tb.SoonOverdue
+		if actA != actB {
+			return actA
+		}
+		keyA, keyB := taskUrgencyKey(ta, nowStr), taskUrgencyKey(tb, nowStr)
+		if keyA != keyB {
+			return keyA < keyB
+		}
+		return ta.CreatedAt.Before(tb.CreatedAt)
+	})
+}
+
 func ListTasks(c *gin.Context) {
+
 	ResetRecurringTasks() // 周期任务跨日/跨月自动回到待办（幂等，同一周期只落库一次）
 	scope := deptScopeIDs(c)
 	var list []models.Task
@@ -603,28 +641,7 @@ func ListTasks(c *gin.Context) {
 			list[i].StartingIn = startingInMinutes(list[i])
 		}
 	}
-	now := time.Now()
-	nowStr := now.Format("2006-01-02T15:04")
-	sort.SliceStable(list, func(a, b int) bool {
-		ta, tb := list[a], list[b]
-		doneA, doneB := ta.Status == models.TaskStatusDone, tb.Status == models.TaskStatusDone
-		if doneA != doneB {
-			return !doneA // 未完成排前面，已完成沉底
-		}
-		if doneA && doneB {
-			return ta.CompletedAt.After(tb.CompletedAt) // 已完成的按完成时间新→旧
-		}
-		// 未完成：优先「需要马上处理」的（正在执行 / 逾期 / 即将逾期），再按截止时间正序
-		actA, actB := ta.Running || ta.Overdue || ta.SoonOverdue, tb.Running || tb.Overdue || tb.SoonOverdue
-		if actA != actB {
-			return actA
-		}
-		keyA, keyB := taskUrgencyKey(ta, nowStr), taskUrgencyKey(tb, nowStr)
-		if keyA != keyB {
-			return keyA < keyB
-		}
-		return ta.CreatedAt.Before(tb.CreatedAt)
-	})
+	sortTasksByUrgency(list)
 	c.JSON(http.StatusOK, list)
 }
 
