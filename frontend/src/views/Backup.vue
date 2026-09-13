@@ -100,7 +100,7 @@ const savingCfg = ref(false)
 const cfg = reactive({ frequency: 'none', retention: 7, remote_dir: '' })
 
 function toast(t, type = 'success') { $msg ? $msg[type](t) : alert(t) }
-function scopeLabel(s) { const m = { all://u5168/u90e8/, schedule://u6392/u73ed/, task://u4efb/u52a1/, user://u4eba/u5458/, knowledge://u77e5/u8bc6/u5e93/ }; return m[s] || s }
+function scopeLabel(s) { const m = { all:"全部", schedule:"排班", task:"任务", user:"人员", knowledge:"知识库" }; return m[s] || s }
 
 function fmtSize(n) {
   if (!n) return '0 B'
