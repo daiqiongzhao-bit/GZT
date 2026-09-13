@@ -233,7 +233,7 @@ func main() {
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
-			auth.GET("/workspace/knowledge/export", handlers.ExportKnowledge)
+			auth.GET("/workspace/knowledge/export", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledge)
 			auth.GET("/workspace/export/bundle", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportWorkspaceBundle)
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
 			auth.GET("/workspace/knowledge/:id/history", handlers.ListKnowledgeHistory)
@@ -266,8 +266,8 @@ func main() {
 			auth.GET("/workspace/knowledge/templates/:id", handlers.ApplyKnowledgeTemplate)
 			auth.DELETE("/workspace/knowledge/templates/:id", handlers.DeleteKnowledgeTemplate)
 			auth.POST("/workspace/knowledge/import", handlers.ImportKnowledge)
-			auth.GET("/workspace/knowledge/export/markdown", handlers.ExportKnowledgeMarkdown)
-			auth.GET("/workspace/knowledge/export/doc", handlers.ExportKnowledgeDoc)
+			auth.GET("/workspace/knowledge/export/markdown", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeMarkdown)
+			auth.GET("/workspace/knowledge/export/doc", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeDoc)
 
 			auth.GET("/workspace/logs", handlers.ListWorkLogs)
 			auth.POST("/workspace/logs", handlers.CreateWorkLog)

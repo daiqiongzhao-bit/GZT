@@ -11,7 +11,19 @@
             ⬆ 导入备份还原
             <input type="file" accept=".db" :disabled="importing" @change="importBackup" hidden />
           </label>
-          <button v-if="auth.isSuper" class="btn primary" :disabled="creating" @click="doBackup">
+          <div v-if="auth.isSuper" class="fg2" style="margin-bottom:10px">
+          <div>
+            <label class="fld">备份范围</label>
+            <select v-model="backupScope" class="glass-input">
+              <option value="all">全部备份（含知识库+后续新增功能）</option>
+              <option value="schedule">仅排班</option>
+              <option value="task">仅任务</option>
+              <option value="user">仅人员</option>
+              <option value="knowledge">仅知识库</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn primary" :disabled="creating" @click="doBackup">
             {{ creating ? '备份中…' : '立即备份' }}
           </button>
         </div>
@@ -21,14 +33,15 @@
 
       <div class="table">
         <div class="thead">
-          <span>名称</span><span>创建时间</span><span>大小</span><span>类型</span><span class="op">操作</span>
+          <span>名称</span><span>创建时间</span><span>大小</span><span>范围</span><span>类型</span><span class="op">操作</span>
         </div>
         <div v-for="b in backups" :key="b.id" class="trow">
           <span class="mono">{{ b.name }}</span>
           <span class="dim">{{ b.created_at }}</span>
           <span class="dim">{{ fmtSize(b.size) }}</span>
           <span>
-            <span class="chip">{{ b.type === 'auto' ? '自动' : '手动' }}</span>
+            <span class="chip">{{ scopeLabel(b.scope) }}</span>
+            <span class="chip">{{ b.type === "auto" ? "自动" : "手动" }}
             <span v-if="b.remote" class="chip remote">异地</span>
           </span>
           <span class="op">
@@ -87,6 +100,8 @@ const savingCfg = ref(false)
 const cfg = reactive({ frequency: 'none', retention: 7, remote_dir: '' })
 
 function toast(t, type = 'success') { $msg ? $msg[type](t) : alert(t) }
+function scopeLabel(s) { const m = { all://u5168/u90e8/, schedule://u6392/u73ed/, task://u4efb/u52a1/, user://u4eba/u5458/, knowledge://u77e5/u8bc6/u5e93/ }; return m[s] || s }
+
 function fmtSize(n) {
   if (!n) return '0 B'
   const u = ['B', 'KB', 'MB', 'GB']
@@ -104,7 +119,7 @@ async function loadCfg() {
 
 async function doBackup() {
   creating.value = true
-  try { await api.post('/backups'); toast('备份已创建'); await loadList() }
+  try { await api.post('/backups?scope=' + backupScope.value); toast('备份已创建'); await loadList() }
   catch (e) { toast(e.response?.data?.error || '备份失败', 'error') }
   finally { creating.value = false }
 }
@@ -168,7 +183,7 @@ onMounted(async () => { await Promise.all([loadList(), loadCfg()]) })
 .chip { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; background: var(--overlay-2); color: var(--text-dim); }
 .chip.remote { background: rgba(56,189,248,0.15); color: var(--accent-2); margin-left: 6px; }
 .table { display: flex; flex-direction: column; }
-.thead, .trow { display: grid; grid-template-columns: 2.2fr 1.6fr 1fr 1.2fr 2fr; gap: 10px; align-items: center; padding: 11px 12px; }
+.thead, .trow { display: grid; grid-template-columns: 2fr 1.5fr 0.9fr 0.9fr 1fr 2fr; gap: 10px; align-items: center; padding: 11px 12px; }
 .thead { font-size: 12px; color: var(--text-faint); border-bottom: 1px solid var(--glass-border); }
 .trow { border-bottom: 1px solid var(--hairline); font-size: 13px; }
 .trow .dim { color: var(--text-faint); }

@@ -37,7 +37,7 @@ type BackupInfo struct {
 // backupScopeTag 备份范围 → 文件名中的短标签；校验合法范围，非法回退 all。
 func backupScopeTag(scope string) string {
 	switch scope {
-	case "schedule", "task", "user":
+	case "schedule", "task", "user", "knowledge":
 		return scope
 	default:
 		return "all"
@@ -52,7 +52,7 @@ func parseScopeTag(name string) string {
 		rest = rest[len(backupPrefix):]
 	}
 	// rest 开头是 scope 或直接是 auto-/时间戳（旧版）
-	for _, s := range []string{"schedule", "task", "user", "all"} {
+	for _, s := range []string{"schedule", "task", "user", "knowledge", "all"} {
 		if len(rest) > len(s) && rest[:len(s)] == s && (rest[len(s)] == '-' || rest[len(s)] == '_') {
 			return s
 		}
