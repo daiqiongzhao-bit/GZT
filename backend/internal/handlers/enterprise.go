@@ -281,7 +281,6 @@ func importTasksFromCSVText(c *gin.Context, text string, cl *models.Claims, dept
 	}
 	super := cl.Role == models.RoleSuperAdmin
 	typeMap := map[string]string{"每日": "daily", "每天": "daily", "daily": "daily", "每月": "monthly", "monthly": "monthly", "单次": "once", "临时": "once", "once": "once"}
-	shiftMap := map[string]string{"早班": "早班", "晚班": "晚班", "早晚": "早晚", "早晚班": "早晚", "全员": "全员", "所有人": "全员"}
 	created, failed := 0, 0
 	var errs []string
 	started := false
@@ -301,8 +300,10 @@ func importTasksFromCSVText(c *gin.Context, text string, cl *models.Claims, dept
 		if title == "" {
 			continue
 		}
-		shift := shiftMap[strings.TrimSpace(getCol(row, 1))]
-		if shift == "" {
+		// v0.21.17：与 Excel 导入共用同一张班次表。原表只有「早班/晚班/早晚/全员」，
+		// 「中班」「夜班」等查不到时会静默变成「全员」→ 任务被当成全员提醒、@ 到所有人。
+		shift, sok := shiftMap(strings.TrimSpace(getCol(row, 1)))
+		if !sok {
 			shift = "全员"
 		}
 		typ := typeMap[strings.TrimSpace(getCol(row, 2))]
