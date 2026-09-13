@@ -83,6 +83,10 @@ func taskStartTime(t models.Task) time.Time {
 //
 // 注意：宽限期配置为 0（到点即逾期）时不存在执行窗口，恒为 false。
 func isRunning(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
@@ -133,11 +137,16 @@ func runningLeftMinutes(t models.Task) int {
 // 它们已有 soon_overdue（即将逾期）覆盖同一窗口，再加「即将开始」会重复且误导。
 //
 // 四段状态机（以 09:00 任务、宽限 30 分钟为例）：
-//   ~08:29  正常（无标记）
-//   08:30~08:59  即将开始（青色，v0.14.1 新增）
-//   09:00~09:30  正在执行（蓝色，v0.14.0）
-//   09:30 之后   逾期（红色）
+//
+//	~08:29  正常（无标记）
+//	08:30~08:59  即将开始（青色，v0.14.1 新增）
+//	09:00~09:30  正在执行（蓝色，v0.14.0）
+//	09:30 之后   逾期（红色）
 func isStarting(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
@@ -181,6 +190,10 @@ func startingInMinutes(t models.Task) int {
 // —— 比如 11:00 截单、当前 10:35，距离 25 分钟，需要橙色「即将逾期」提示
 // 让使用者知道这个任务马上就要逾期了，比单纯标红更早介入
 func isSoonOverdue(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
@@ -218,9 +231,9 @@ func isSoonOverdue(t models.Task) bool {
 
 // taskUrgencyKey v0.9.2：给未完成任务算一个「截止紧迫度」排序键。
 // 归一为 YYYY-MM-DDTHH:MM 字符串，字符串越小越紧迫：
-//  - 单次/月度任务用 deadline；daily 用当天 time
-//  - 解析失败或无截止时间的放到最后（用 nowStr，保证排在同窗但靠后），
-//    但已逾期/即将逾期已在排序第一步被提到最前，这里只是相对序。
+//   - 单次/月度任务用 deadline；daily 用当天 time
+//   - 解析失败或无截止时间的放到最后（用 nowStr，保证排在同窗但靠后），
+//     但已逾期/即将逾期已在排序第一步被提到最前，这里只是相对序。
 func taskUrgencyKey(t models.Task, nowStr string) string {
 	var k string
 	switch t.Type {
@@ -245,6 +258,10 @@ func taskUrgencyKey(t models.Task, nowStr string) string {
 
 // isOverdue 判断任务是否逾期（未完成且已超过其执行/截止时间）
 func isOverdue(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
@@ -285,6 +302,10 @@ func isOverdue(t models.Task) bool {
 
 // isDueToday 判断任务今天是否应当处理
 func isDueToday(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
@@ -312,6 +333,10 @@ func isDueToday(t models.Task) bool {
 // 不再过滤已完成状态——本月的「完成率」需要分子分母都包含已完成项
 // （isDueToday/isOverdue 仍过滤已完成，已完成的不是「待办」也不是「逾期」，语义不同）
 func isDueThisMonth(t models.Task) bool {
+	// v0.21.16 冻结任务不参与任何提醒
+	if t.Frozen {
+		return false
+	}
 	now := time.Now()
 	switch t.Type {
 	case models.TaskTypeDaily, models.TaskTypeMonthly:
@@ -789,6 +814,11 @@ func ToggleTask(c *gin.Context) {
 	if target != models.TaskStatusDone && target != models.TaskStatusTodo {
 		target = "" // 未指定 → 翻转
 	}
+	// v0.21.16：冻结中的任务不可勾选完成，须先解冻
+	if t.Frozen && target != models.TaskStatusTodo {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "任务已冻结，请先解冻后再完成"})
+		return
+	}
 	// 幂等：意图与当前状态一致时直接返回现状，不做任何重复写入
 	if target == t.Status {
 		c.JSON(http.StatusOK, t)
@@ -960,4 +990,54 @@ func fillCompletionNames(list []models.TaskCompletion) {
 			list[i].UserName = fmt.Sprintf("%s（%s）", u.Name, u.Username)
 		}
 	}
+}
+
+// FreezeTask POST /api/tasks/:id/freeze 冻结 / 解冻任务（v0.21.16）
+//
+// 语义：冻结后该任务彻底静默 —— 不参与到点推送、每日 09:00 汇总、手动「推送今日任务提醒」、
+// Webhook 自动 @、邮件通知，也不计入导航角标的「今日/逾期/待处理」数量。
+// 请求体可带 {"frozen":true|false} 明确指定；缺省则翻转当前状态。
+func FreezeTask(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var t models.Task
+	if err := db.DB.First(&t, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		return
+	}
+	if !canManageDept(c, t.DeptID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作其他部门任务"})
+		return
+	}
+	// 未传 frozen 时按「翻转」处理，前端一个按钮即可切换
+	var req struct {
+		Frozen *bool `json:"frozen"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	target := !t.Frozen
+	if req.Frozen != nil {
+		target = *req.Frozen
+	}
+	// 幂等：目标状态与当前一致时直接返回，不重复写库
+	if target == t.Frozen {
+		c.JSON(http.StatusOK, t)
+		return
+	}
+	cl := currentClaims(c)
+	if target {
+		t.Frozen = true
+		t.FrozenAt = time.Now()
+		t.FrozenBy = cl.Username
+	} else {
+		t.Frozen = false
+		t.FrozenAt = time.Time{}
+		t.FrozenBy = ""
+	}
+	db.DB.Save(&t)
+
+	verb := "冻结"
+	if !t.Frozen {
+		verb = "解冻"
+	}
+	addLog(c, cl.UserID, cl.Username, verb+"任务: "+t.Title)
+	c.JSON(http.StatusOK, t)
 }

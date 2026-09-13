@@ -85,6 +85,10 @@ func ResetRecurringTasks() (int, int) {
 		var list []models.Task
 		db.DB.Where("type = ? AND status = ?", models.TaskTypeDaily, models.TaskStatusDone).Find(&list)
 		for _, t := range list {
+			// v0.21.16 冻结任务不参与周期重置，保持静止；解冻后由下一次重置自然归位
+			if t.Frozen {
+				continue
+			}
 			// 今天内完成的视为「本周期已做」，保留；其余（昨天及更早 / 无完成时间）一律重置
 			if completedIn(t.CompletedAt, "2006-01-02", today) {
 				continue
@@ -103,6 +107,10 @@ func ResetRecurringTasks() (int, int) {
 		var list []models.Task
 		db.DB.Where("type = ?", models.TaskTypeMonthly).Find(&list)
 		for _, t := range list {
+			// v0.21.16 冻结任务不参与周期重置，保持静止；解冻后由下一次重置自然归位
+			if t.Frozen {
+				continue
+			}
 			changed := map[string]interface{}{}
 			// 1) 截止日早于本月 → 推进到当月（保持「几号」与时刻，月末自动取最后一天）
 			if len(t.Deadline) >= 7 && t.Deadline[:7] < thisMonth {

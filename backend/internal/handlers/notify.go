@@ -653,6 +653,10 @@ func pushDueTasks(now time.Time) {
 	onDuty := todayOnDuty(nil) // 全部门班表：按任务部门匹配 Webhook
 	inGroup := inGroupSet()
 	for _, t := range tasks {
+		// v0.21.16 冻结任务不做任何到点推送
+		if t.Frozen {
+			continue
+		}
 		due := false
 		switch t.Type {
 		case models.TaskTypeDaily:

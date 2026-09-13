@@ -224,19 +224,19 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="t in filtered" :key="t.id" :class="{ done: t.status === 'done' }" class="clickable" @click="batchMode ? toggleSelect(t) : toggle(t)">
+            <tr v-for="t in filtered" :key="t.id" :class="{ done: t.status === 'done', frozen: t.frozen }" class="clickable" @click="batchMode ? toggleSelect(t) : toggle(t)">
               <td v-if="batchMode" class="col-sel">
                 <input type="checkbox" :checked="selectedIds.includes(t.id)" @click.stop="toggleSelect(t)" />
               </td>
               <td class="col-check">
-                <button class="check" :class="{ on: t.status === 'done' }" @click.stop="toggle(t)" v-html="icons.check"></button>
+                <button class="check" :class="{ on: t.status === 'done' }" :disabled="t.frozen" :title="t.frozen ? '任务已冻结，请先解冻' : ''" @click.stop="toggle(t)" v-html="icons.check"></button>
               </td>
               <td v-if="auth.isSuper" class="col-dept"><span class="dept-tag">{{ deptName(t.dept_id) }}</span></td>
               <td class="col-type"><span class="chip" :class="typeClass(t.type)">{{ typeText(t) }}</span></td>
               <td class="col-shift"><span class="chip" :class="shiftClass(t.shift)">{{ shiftLabel(t) }}</span></td>
               <td class="col-title">
                 <div class="t-title-row">
-                  <span class="t-title">{{ t.title }}</span>
+                  <span class="t-title">{{ t.title }}</span><span v-if="t.frozen" class="chip frozen" :title="frozenTitle(t)">已冻结</span>
                   <span v-if="t.starting && t.status !== 'done'" class="chip starting" :title="startingTitle(t)">即将开始</span>
                   <span v-if="t.soon_overdue && t.status !== 'done'" class="chip soon" title="距截止 30 分钟内，请尽快处理">即将逾期</span>
                   <span v-if="t.running && t.status !== 'done'" class="chip running" :title="runningTitle(t)">正在执行</span>
@@ -265,7 +265,7 @@
                         <button class="menu-item" @click="closeRowMenu(); openRecord(t)">
                           <span class="mi-ico">📋</span><span>完成记录</span>
                         </button>
-                        <template v-if="auth.canManage">
+                        <template v-if="auth.canManage"><button class="menu-item" @click="closeRowMenu(); setFrozen(t, !t.frozen)"><span class="mi-ico">{{ t.frozen ? '☀️' : '❄️' }}</span><span>{{ t.frozen ? '解冻任务' : '冻结任务' }}</span></button>
                           <button class="menu-item" @click="closeRowMenu(); openEdit(t)">
                             <span class="mi-ico">✏️</span><span>编辑任务</span>
                           </button>
@@ -544,19 +544,19 @@ const isMonthlyTask = (t) => t.type === 'monthly' && t.due_this_month
 
 const counts = computed(() => ({
   today: visibleTasks.value.filter((t) => t.due_today && t.status !== 'done').length,
-  month: visibleTasks.value.filter((t) => isMonthlyTask(t) && t.status !== 'done').length,
+  month: visibleTasks.value.filter((t) => isMonthlyTask(t) && t.status !== 'done' && !t.frozen).length,
   overdue: visibleTasks.value.filter((t) => t.overdue && t.status !== 'done').length
 }))
 
 const todayAll = computed(() => visibleTasks.value.filter((t) => t.due_today))
 const todayDone = computed(() => todayAll.value.filter((t) => t.status === 'done').length)
-const todayPending = computed(() => todayAll.value.filter((t) => t.status !== 'done').length)
+const todayPending = computed(() => todayAll.value.filter((t) => t.status !== 'done' && !t.frozen).length)
 const todayOverdue = computed(() => todayAll.value.filter((t) => t.overdue && t.status !== 'done').length)
 const monthAll = computed(() => visibleTasks.value.filter(isMonthlyTask))
 const monthDone = computed(() => monthAll.value.filter((t) => t.status === 'done').length)
-const monthPending = computed(() => monthAll.value.filter((t) => t.status !== 'done').length)
+const monthPending = computed(() => monthAll.value.filter((t) => t.status !== 'done' && !t.frozen).length)
 const allDone = computed(() => visibleTasks.value.filter((t) => t.status === 'done').length)
-const allPending = computed(() => visibleTasks.value.filter((t) => t.status !== 'done').length)
+const allPending = computed(() => visibleTasks.value.filter((t) => t.status !== 'done' && !t.frozen).length)
 const allOverdue = computed(() => visibleTasks.value.filter((t) => t.overdue && t.status !== 'done').length)
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0) + '%'
 
@@ -633,7 +633,31 @@ function fmtFull(s) {
   return `${d.getFullYear()}年${p(d.getMonth() + 1)}月${p(d.getDate())}日 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+// v0.21.16 冻结：冻结后该任务不再产生任何提醒或通知
+async function setFrozen(t, next) {
+  const verb = next ? '冻结' : '解冻'
+  const tip = next ? '\n冻结后该任务不再产生任何提醒与通知（到点推送、每日汇总、导航角标均会跳过）。' : ''
+  if (!confirm(`${verb}任务「${t.title}」？${tip}`)) return
+  try {
+    const updated = await api.post(`/tasks/${t.id}/freeze`, { frozen: next })
+    t.frozen = !!updated.frozen
+    t.frozen_at = updated.frozen_at || ''
+    t.frozen_by = updated.frozen_by || ''
+    if (t.frozen) {
+      // 服务端已不再返回这些瞬态标记，本地同步清掉，避免旧红标残留
+      t.overdue = false; t.due_today = false; t.soon_overdue = false; t.running = false; t.starting = false
+    }
+  } catch (e) {
+    alert(e.response?.data?.error || '操作失败')
+  }
+}
+function frozenTitle(t) {
+  if (t.frozen_by) return `由 ${t.frozen_by} 于 ${fmtDone(t.frozen_at)} 冻结，期间不产生任何提醒与通知`
+  return '已冻结：不产生任何提醒与通知'
+}
+
 async function toggle(t) {
+  if (t.frozen) { alert('该任务已冻结，请先解冻后再操作。'); return }
   const toDone = t.status !== 'done'
   const msg = toDone ? `确认完成任务「${t.title}」？` : `确认将任务「${t.title}」重新打开？`
   if (!confirm(msg)) return
@@ -884,6 +908,8 @@ onUnmounted(() => {
 .task-table tbody tr.clickable { cursor: pointer; }
 .task-table tbody tr:hover { background: var(--overlay); }
 .task-table tbody tr:last-child td { border-bottom: none; }
+.task-table tbody tr.frozen { opacity: 0.62; }
+.task-table tbody tr.frozen .t-title { font-style: italic; }
 .task-table tbody tr.done { opacity: 0.45; }
 .task-table tbody tr.done .t-title { text-decoration: line-through; }
 .t-done-by { margin-top: 4px; font-size: 12px; color: var(--ok); }
@@ -949,6 +975,7 @@ onUnmounted(() => {
 .check :deep(svg) { width: 16px; height: 16px; opacity: 0; }
 .check.on { background: var(--accent); color: #fff; }
 .check.on :deep(svg) { opacity: 1; }
+.check:disabled { cursor: not-allowed; opacity: 0.45; }
 
 .col-title { min-width: 200px; }
 .t-title-row { display: flex; align-items: center; gap: 8px; }

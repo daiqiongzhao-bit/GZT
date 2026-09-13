@@ -214,20 +214,24 @@ type SpecialWorkDay struct {
 // Shift 班次归属：早班/中班/晚班/早晚/全员（谁当班谁负责）
 // WeekDays 为「按周执行」：Type=daily 时可勾选星期几触发（1=周一…7=周日，空=每天都执行）
 type Task struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	Title        string    `json:"title" gorm:"size:255;not null"`
-	Type         string    `json:"type" gorm:"size:16;not null"`
-	Shift        string    `json:"shift" gorm:"size:16;default:all"` // 早班/中班/晚班/早晚/全员
-	Time         string    `json:"time" gorm:"size:8"`               // 每日任务执行时间 HH:MM
-	Deadline     string    `json:"deadline" gorm:"size:16"`          // 截止时间 YYYY-MM-DDTHH:MM
-	WeekDays     string    `json:"week_days" gorm:"size:32"`         // 按周执行：逗号分隔的星期，如 "1,3,5"（1=周一…7=周日）；空=每天
-	Assignee     string    `json:"assignee" gorm:"size:64"`          // 负责人姓名展示（多人用顿号连接；兼容旧数据）
-	AssigneeID   uint      `json:"assignee_id"`                      // 负责人用户ID（首个，0=未分配/部门公共；权限判断用）
-	Assignees    string    `json:"assignees" gorm:"type:text"`       // 负责人（单人/多人）姓名：JSON 数组 ["甲","乙"]
-	AssigneeIDs  string    `json:"assignee_ids" gorm:"type:text"`    // 负责人用户ID：JSON 数组 [1,2]
-	CompletedBy  string    `json:"completed_by" gorm:"size:64"`      // 完成人姓名（谁打的☑️）
-	CompletedAt  time.Time `json:"completed_at"`                     // 最近一次完成时间
-	Status       string    `json:"status" gorm:"size:16;not null;default:todo"`
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	Title       string    `json:"title" gorm:"size:255;not null"`
+	Type        string    `json:"type" gorm:"size:16;not null"`
+	Shift       string    `json:"shift" gorm:"size:16;default:all"` // 早班/中班/晚班/早晚/全员
+	Time        string    `json:"time" gorm:"size:8"`               // 每日任务执行时间 HH:MM
+	Deadline    string    `json:"deadline" gorm:"size:16"`          // 截止时间 YYYY-MM-DDTHH:MM
+	WeekDays    string    `json:"week_days" gorm:"size:32"`         // 按周执行：逗号分隔的星期，如 "1,3,5"（1=周一…7=周日）；空=每天
+	Assignee    string    `json:"assignee" gorm:"size:64"`          // 负责人姓名展示（多人用顿号连接；兼容旧数据）
+	AssigneeID  uint      `json:"assignee_id"`                      // 负责人用户ID（首个，0=未分配/部门公共；权限判断用）
+	Assignees   string    `json:"assignees" gorm:"type:text"`       // 负责人（单人/多人）姓名：JSON 数组 ["甲","乙"]
+	AssigneeIDs string    `json:"assignee_ids" gorm:"type:text"`    // 负责人用户ID：JSON 数组 [1,2]
+	CompletedBy string    `json:"completed_by" gorm:"size:64"`      // 完成人姓名（谁打的☑️）
+	CompletedAt time.Time `json:"completed_at"`                     // 最近一次完成时间
+	Status      string    `json:"status" gorm:"size:16;not null;default:todo"`
+	// v0.21.16 冻结：暂停该任务的一切提醒与通知（到点推送 / 每日汇总 / 手动推送 / 邮件 / 导航角标）
+	Frozen       bool      `json:"frozen" gorm:"default:false;index"`
+	FrozenAt     time.Time `json:"frozen_at"`
+	FrozenBy     string    `json:"frozen_by" gorm:"size:64"`
 	Priority     string    `json:"priority" gorm:"size:16;default:medium"` // high/medium/low
 	Note         string    `json:"note" gorm:"type:text"`
 	DeptID       uint      `json:"dept_id" gorm:"index"`

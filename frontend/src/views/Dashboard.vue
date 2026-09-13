@@ -104,7 +104,7 @@
                   <td class="col-title">
                     <div class="t-title-row">
                       <span class="t-title">{{ t.title }}</span>
-                      <span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
+                      <span v-if="t.frozen" class="chip frozen">已冻结</span><span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
                       <span v-if="t.running && t.status !== 'done'" class="chip running">正在执行</span>
                       <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                     </div>
@@ -150,7 +150,7 @@
                   <td class="col-title">
                     <div class="t-title-row">
                       <span class="t-title">{{ t.title }}</span>
-                      <span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
+                      <span v-if="t.frozen" class="chip frozen">已冻结</span><span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
                       <span v-if="t.running && t.status !== 'done'" class="chip running">正在执行</span>
                       <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                     </div>
@@ -199,7 +199,7 @@
                   <td class="col-title">
                     <div class="t-title-row">
                       <span class="t-title">{{ t.title }}</span>
-                      <span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
+                      <span v-if="t.frozen" class="chip frozen">已冻结</span><span v-if="t.starting && t.status !== 'done'" class="chip starting">即将开始</span>
                       <span v-if="t.running && t.status !== 'done'" class="chip running">正在执行</span>
                       <span v-if="t.overdue && t.status !== 'done'" class="chip danger">逾期</span>
                     </div>

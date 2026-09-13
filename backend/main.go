@@ -211,6 +211,7 @@ func main() {
 			auth.POST("/tasks", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateTask)
 			auth.PUT("/tasks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateTask)
 			auth.POST("/tasks/:id/toggle", handlers.ToggleTask)
+			auth.POST("/tasks/:id/freeze", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.FreezeTask)
 			auth.GET("/tasks/:id/completions", handlers.ListTaskCompletions)
 			auth.DELETE("/tasks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteTask)
 			auth.POST("/tasks/batch-delete", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchDeleteTasks)
