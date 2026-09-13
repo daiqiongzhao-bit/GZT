@@ -64,7 +64,7 @@ func Init() error {
 		JWTSecret:  []byte(jwtV),
 		AESKey:     []byte(padKey(aesV)),
 		DBPath:     dbPath,
-		AppVersion: "v0.21.10",
+		AppVersion: "v0.21.11",
 		BackupDir:  getEnv("BACKUP_DIR", "backups"),
 	}
 	return nil
