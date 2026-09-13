@@ -526,13 +526,19 @@ func NotifyTodayHandler(c *gin.Context) {
 	}
 	mobiles := peopleMobiles(allPeople)
 
+	// v0.21.17：手动推送同样可能@不到人，机器人消息里说明原因（邮件保持原正文）
+	hookContent := content
+	if len(mobiles) == 0 {
+		hookContent += "\n⚠️ 未@到人：今日无可@的当班人员（请检查「排班表」与人员的「已入群 / 手机号」）"
+	}
+
 	// 兼容祖先部门：物流部的 webhook 也能收到子部门（三亚预订仓）的任务提醒
 	hooks := webhooksForScope(scope)
 
 	sent := 0
 	var errs []string
 	for _, h := range hooks {
-		if err := sendToHook(h, content, mobiles); err != nil {
+		if err := sendToHook(h, hookContent, mobiles); err != nil {
 			errs = append(errs, h.Name+":"+err.Error())
 			continue
 		}
@@ -638,6 +644,19 @@ func reminderMobiles(scope []uint) []string {
 	return peopleMobiles(allPeople)
 }
 
+// atMissHint 说明本次推送为什么@不到人。
+// 企业微信 @ 需要「已在通知群(in_group)」且填了手机号，任一缺失都会静默失败。
+func atMissHint(t models.Task, people []string) string {
+	shift := strings.TrimSpace(t.Shift)
+	if len(people) == 0 {
+		if shift == "" || shift == "全员" {
+			return "\n⚠️ 未@到人：没有可@的人员（请检查人员是否已入群并填写手机号）"
+		}
+		return fmt.Sprintf("\n⚠️ 未@到人：今日班表里没有「%s」的当班记录（请核对排班表，或把任务班次改成实际在用的班次）", shift)
+	}
+	return "\n⚠️ 未@到人：相关人员未加入通知群或未填写手机号（设置 → 人员 可补全）"
+}
+
 // pushDueTasks 推送当前分钟到点的任务提醒（部门隔离：任务只推给本部门的 Webhook）
 func pushDueTasks(now time.Time) {
 	ResetRecurringTasks() // 周期任务跨日/跨月自动回到待办（幂等，同一周期只落库一次）
@@ -709,6 +728,13 @@ func pushDueTasks(now time.Time) {
 		}
 		if len(listed) > 0 {
 			b.WriteString("当班：" + strings.Join(displayPeople(listed), "、"))
+		}
+		// v0.21.17：@不到人时在消息里说明原因——原来这里什么都不写，
+		// 用户只看到「没有艾特到人」却无从判断是没排班、没入群还是没填手机号。
+		if len(mobiles) == 0 {
+			hint := atMissHint(t, people)
+			b.WriteString(hint)
+			_ = db.DB.Create(&models.Log{Action: "任务到点未@到人：" + t.Title + "（" + hint + "）"}).Error
 		}
 		content := b.String()
 		for _, h := range hooks {

@@ -95,7 +95,7 @@
           <select v-model="form.shift" class="glass-input">
             <option value="全员">全员</option>
             <option value="早晚">早晚都执行</option>
-            <option v-for="sc in deptShifts" :key="sc.id" :value="sc.name">{{ sc.name }}（{{ sc.start_time }}-{{ sc.end_time }}）</option>
+            <option v-for="sc in deptShifts" :key="sc.id" :value="sc.name">{{ sc.label }}</option>
           </select>
         </div>
         <div>
@@ -187,7 +187,7 @@
         <button class="btn ghost form-close" @click="showImport = false">收起</button>
       </div>
       <textarea v-model="importText" class="glass-input import-ta" rows="9"
-        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 晚班 / 早晚（默认全员）&#10;类型：每日 / 每周 / 每月 / 单次（默认每日）&#10;时间/截止：每周填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每周 | 09:00&#10;晚班盘点 | 晚班 | 每周 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
+        placeholder="每行一个任务，格式：标题 | 班次 | 类型 | 时间/截止&#10;班次：全员 / 早班 / 中班 / 晚班 / 夜班 / 早晚（默认全员）&#10;类型：每日 / 每周 / 每月 / 单次（默认每日）&#10;时间/截止：每周填 08:00；每月或单次填 2026-08-30T18:00&#10;示例：&#10;开门检查 | 早班 | 每周 | 09:00&#10;晚班盘点 | 晚班 | 每周 | 21:00&#10;月底对账 | 早晚 | 每月 | 2026-08-31T17:00"></textarea>
       <div class="import-tip">将识别 {{ importCount }} 条有效任务</div>
       <div class="import-file">
         <span class="fld">导入到部门 <em class="req">必选</em></span>
@@ -357,9 +357,27 @@ function removeAssignee(n) {
 function closeAp() { apOpen.value = false; apKw.value = '' }
 const emptyForm = { title: '', type: 'daily', shift: '全员', time: '', deadline: '', priority: 'medium', note: '', dept_id: null, weekdays: [], assignees: [] }
 // 当前表单所选部门的班次（含时间）
+// v0.21.17：除「班次设置」外，并入班表 / 任务里实际在用的班次名。
+// 背景：新建部门时班次设置只默认建了「早班 / 晚班」，而班表（Excel 导入）常见
+// 「中班」「夜班」；任务班次与班表班次名对不上时，@当班人会一个都@不到。
+const SHIFT_SPECIAL = ['全员', '早晚', '早晚班', '休息']
 const deptShifts = computed(() => {
   const did = form.dept_id || auth.user.dept_id
-  return shiftConfigs.value.filter((sc) => sc.dept_id === did)
+  const cfg = shiftConfigs.value.filter((sc) => sc.dept_id === did)
+  const known = new Set(cfg.map((sc) => sc.name))
+  const out = cfg.map((sc) => ({ id: 'cfg-' + sc.id, name: sc.name, label: `${sc.name}（${sc.start_time}-${sc.end_time}）` }))
+  const addUsed = (rows) => {
+    for (const r of rows || []) {
+      if (r.dept_id !== did) continue
+      const n = String(r.shift || '').trim()
+      if (!n || known.has(n) || SHIFT_SPECIAL.includes(n)) continue
+      known.add(n)
+      out.push({ id: 'used-' + n, name: n, label: n })
+    }
+  }
+  addUsed(tasks.value)
+  addUsed(schedules.value)
+  return out
 })
 
 // 批量导入状态
@@ -458,7 +476,7 @@ async function exportTasks() {
   finally { exporting.value = false }
 }
 const typeMap = { '每周': 'daily', '每日': 'daily', '每天': 'daily', '每月': 'monthly', '单次': 'once', '临时': 'once', 'daily': 'daily', 'monthly': 'monthly', 'once': 'once' }
-const shiftMap = { '早班': '早班', '晚班': '晚班', '早晚': '早晚', '早晚班': '早晚', '全员': '全员', '所有人': '全员' }
+const shiftMap = { '早班': '早班', '早': '早班', '中班': '中班', '中': '中班', '晚班': '晚班', '晚': '晚班', '夜班': '夜班', '夜': '夜班', '休息': '休息', '早晚': '早晚', '早晚班': '早晚', '全员': '全员', '所有人': '全员' }
 // 解析导入文本 -> 任务对象列表（标题 | 班次 | 类型 | 时间）
 const parsedTasks = computed(() => {
   const out = []
@@ -468,7 +486,9 @@ const parsedTasks = computed(() => {
     const parts = line.split('|').map((s) => s.trim())
     const title = parts[0]
     if (!title) continue
-    const shift = shiftMap[parts[1]] || '全员'
+    // v0.21.17：未识别的班次名不再兜底成「全员」（那会 @ 全部人），保留原值
+    const rawShift = (parts[1] || '').trim()
+    const shift = shiftMap[rawShift] || rawShift || '全员'
     const type = typeMap[parts[2]] || 'daily'
     const when = parts[3] || ''
     const t = { title, shift, type }
