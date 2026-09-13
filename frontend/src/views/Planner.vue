@@ -931,7 +931,7 @@ async function loadDraft(d) {
 async function removeDraft(d) {
   if (!confirm(`删除草稿「${d.name}」？`)) return
   try {
-    await api.delete(`/shift-drafts/${d.id}`)
+    await api.del(`/shift-drafts/${d.id}`)
     await fetchDrafts()
   } catch (e) {
     alert(e.response?.data?.error || '删除失败')

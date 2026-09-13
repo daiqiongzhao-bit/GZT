@@ -515,12 +515,13 @@
       <p class="hint" style="color:var(--text-dim); font-size:13px; margin:0 0 14px; line-height:1.6;">手动备份可生成当前数据库的完整快照；还原操作危险，会立即覆盖当前数据并自动重启连接。</p>
       <div class="form-col">
         <div>
-          <label class="fld">立即备份 <span style="font-weight:400;color:var(--text-faint)">（手动备份为全量快照，此选项用于分类标记；分类明细可另用各模块的导出）</span></label>
+          <label class="fld">立即备份 <span style="font-weight:400;color:var(--text-faint)">（手动备份为全量快照，均含知识库附件；「全部」自动包含知识库及后续新增功能，范围仅作分类标记）</span></label>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button class="btn ghost" :class="{ active: backupScope === 'all' }" @click="backupScope = 'all'">全部</button>
             <button class="btn ghost" :class="{ active: backupScope === 'schedule' }" @click="backupScope = 'schedule'">班表</button>
             <button class="btn ghost" :class="{ active: backupScope === 'task' }" @click="backupScope = 'task'">任务</button>
             <button class="btn ghost" :class="{ active: backupScope === 'user' }" @click="backupScope = 'user'">人员</button>
+            <button class="btn ghost" :class="{ active: backupScope === 'knowledge' }" @click="backupScope = 'knowledge'">知识库</button>
             <button class="btn primary" :disabled="backupCreating" @click="createBackup">{{ backupCreating ? '备份中…' : '创建备份' }}</button>
             <label class="btn ghost imp" style="cursor:pointer;">
               ⬆ 导入备份还原
@@ -1153,9 +1154,9 @@ const backups = ref([])
 const backupLoading = ref(false)
 const backupCreating = ref(false)
 const backupImporting = ref(false)
-const backupScope = ref('all') // v0.2.0：手动备份分类（all/schedule/task/user）
+const backupScope = ref('all') // 手动备份分类（all/schedule/task/user/knowledge）
 const backupCfg = reactive({ frequency: 'none', retention: 10, remote_dir: '' })
-const scopeNameMap = { all: '全部', schedule: '班表', task: '任务', user: '人员' }
+const scopeNameMap = { all: '全部', schedule: '班表', task: '任务', user: '人员', knowledge: '知识库' }
 function scopeName(s) { return scopeNameMap[s] || '全部' }
 const backupCfgSaving = ref(false)
 async function loadBackups() { backupLoading.value = true; try { const r = await api.get('/backups'); backups.value = Array.isArray(r) ? r : [] } catch { backups.value = [] } finally { backupLoading.value = false } }
@@ -1387,6 +1388,7 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .scope-chip.s-schedule { background: rgba(56,189,248,.12); color: var(--accent-2, #0ea5e9); }
 .scope-chip.s-task { background: rgba(217,119,6,.12); color: var(--warn, #d97706); }
 .scope-chip.s-user { background: rgba(5,150,105,.12); color: var(--ok, #059669); }
+.scope-chip.s-knowledge { background: rgba(139,92,246,.14); color: #8b5cf6; }
 .b-actions { display: flex; gap: 6px; align-items: center; }
 .b-actions .btn { padding: 6px 12px; font-size: 12.5px; }
 .b-actions .del { width: 24px; height: 24px; }
