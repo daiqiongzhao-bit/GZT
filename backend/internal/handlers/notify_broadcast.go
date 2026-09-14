@@ -324,7 +324,7 @@ func DownloadNotifAttachment(c *gin.Context) {
 		c.Header("Content-Type", meta.Mime)
 	}
 	if found && meta.FileName != "" {
-		c.Header("Content-Disposition", "inline; filename*=UTF-8''"+url.QueryEscape(meta.FileName))
+		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"; filename*=UTF-8''%s", safeDispName(meta.FileName), url.QueryEscape(meta.FileName)))
 	}
 	c.File(p)
 }

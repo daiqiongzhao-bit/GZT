@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -55,7 +56,7 @@ func getUserTemplateXLSX() *excelize.File {
 func DownloadUserTemplateXLSX(c *gin.Context) {
 	f := getUserTemplateXLSX()
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", "人员导入模板.xlsx"))
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", safeDispName("人员导入模板.xlsx"), url.QueryEscape("人员导入模板.xlsx")))
 	_ = f.Write(c.Writer)
 }
 

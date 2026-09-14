@@ -664,7 +664,7 @@ func ExportSchedulesXLSX(c *gin.Context) {
 
 	// Parse year-month from first date
 	ym := dates[0][:7] // YYYY-MM
-	fname := fmt.Sprintf("%s_%s_排班表.xlsx", deptName, strings.Replace(ym, "-", "", -1))
+	fname := fmt.Sprintf("班表矩阵_%s_%s.xlsx", deptName, strings.Replace(ym, "-", "", -1))
 
 	f := excelize.NewFile()
 	sheet := "排班"
@@ -824,6 +824,14 @@ func contentDispositionRFC5987(filename string) string {
 		return r
 	}, filename)
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, ascii, url.QueryEscape(filename))
+}
+
+// safeDispName 去除会破坏 Content-Disposition 头的特殊字符（引号/分号/控制符），保留中文
+func safeDispName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '"' || r == ';' || r == '\r' || r == '\n' { return -1 }
+		return r
+	}, name)
 }
 
 type batchReq struct {
