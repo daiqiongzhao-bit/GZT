@@ -135,3 +135,5 @@ cd /root/GZT && docker compose --env-file /opt/swb/swb.env up -d
 **修复（开发过程中发现并修掉的真实缺陷）**：`PlanPerson` 原无 json tag，且 `IsFixed()` 是 Go 方法不参与 JSON 序列化，导致前端读到的「是否固定班次」恒为空，固定人员标「固」与格子锁死全部失效。现为该结构补上显式 json tag 并导出派生字段 `is_fixed`，把接口契约固定下来。插件随 AppVersion 自动打包为 0.18.0。 |
 
 | v0.23.0 | 修复：已完成任务点击不再弹“重新打开”确认框（编辑/冻结本就直达）；导出中文文件名沿用 RFC5987 | 2026-09-14 |
+
+| v0.23.1 | 修复：导出文件名 filename= 也携带 UTF-8 中文（兼容只读 filename= 的客户端/Excel/下载工具），双写法确保各端均显示中文名 | 2026-09-14 |

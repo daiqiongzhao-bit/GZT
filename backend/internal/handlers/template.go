@@ -131,13 +131,11 @@ func writeXLSX(c *gin.Context, f *excelize.File, filename string) {
 		c.JSON(500, gin.H{"error": "模板生成失败"})
 		return
 	}
-	// RFC 5987: ASCII fallback + UTF-8 encoded filename — fixes garbled Chinese on Windows
-	asciiFn := strings.Map(func(r rune) rune {
-		if r > 127 { return '_' }
-		return r
-	}, filename)
+	// filename= 同时携带原始 UTF-8 中文名，兼容只认 filename= 的旧客户端/Excel/下载工具
+	// filename*=UTF-8'' 为标准写法，现代浏览器优先采用；两段都含中文，避免显示成下划线/乱码
+	safeName := strings.NewReplacer("\"", "", ";", "", "\r", "", "\n", "").Replace(filename)
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiFn, url.QueryEscape(filename)))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safeName, url.QueryEscape(filename)))
 	c.Data(200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }
 
