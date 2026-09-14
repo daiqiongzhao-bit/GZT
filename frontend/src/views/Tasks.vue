@@ -83,8 +83,14 @@
       </div>
     </transition>
 
-    <section v-if="showAdd && auth.canManage" class="panel add-form">
-      <div v-if="editId" class="edit-tip">✏️ 正在编辑任务 #{{ editId }}，保存后到点提醒将按新设置生效</div>
+    <!-- 任务编辑/新建弹窗（v0.22.0：改为 modal，不再滚动到页面顶部） -->
+    <div v-if="showAdd && auth.canManage" class="modal-mask" @click.self="closeEdit">
+      <div class="modal edit-modal">
+        <div class="modal-head">
+          <span>{{ editId ? '编辑任务 #' + editId : '新建任务' }}<em v-if="editId" class="faint" style="font-size:12px"> · 保存后到点提醒按新设置生效</em></span>
+          <button class="x" @click="closeEdit">×</button>
+        </div>
+        <div class="modal-body">
       <div class="fg2">
         <div>
           <label class="fld">任务内容 *</label>
@@ -174,10 +180,12 @@
         </div>
       </div>
       <div class="form-actions">
-        <button class="btn ghost" @click="showAdd = false; editId = null">取消</button>
+        <button class="btn ghost" @click="closeEdit">取消</button>
         <button class="btn primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : (editId ? '保存修改' : '保存') }}</button>
       </div>
-    </section>
+        </div>
+      </div>
+    </div>
 
     <!-- 批量导入 -->
     <section v-if="showImport && auth.canManage" class="panel add-form">
@@ -735,12 +743,11 @@ async function openRecord(t) {
   }
 }
 function toggleAdd() {
-  showAdd.value = !showAdd.value
-  if (showAdd.value) {
-    editId.value = null
-    Object.assign(form, { ...emptyForm, dept_id: auth.isSuper ? (departments.value[0]?.id || null) : (auth.user.dept_id || null) })
-    closeAp()
-  }
+  if (showAdd.value) { closeEdit(); return }
+  editId.value = null
+  Object.assign(form, { ...emptyForm, dept_id: auth.isSuper ? (departments.value[0]?.id || null) : (auth.user.dept_id || null) })
+  closeAp()
+  showAdd.value = true
 }
 function openEdit(t) {
   editId.value = t.id
@@ -757,8 +764,14 @@ function openEdit(t) {
     weekdays: wds, assignees: names
   })
   closeAp()
-  showAdd.value = true
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  showAdd.value = true // 弹窗式编辑，不再滚动到页面顶部
+}
+// 关闭编辑弹窗（取消 / 保存后统一调用）
+function closeEdit() {
+  showAdd.value = false
+  editId.value = null
+  Object.assign(form, emptyForm)
+  closeAp()
 }
 // 月度任务：只填了日期没填时间时，默认截止到当天 09:00
 // （当天 9 点前完成都算准时，9 点后仍未完成才算逾期）
@@ -785,10 +798,7 @@ async function save() {
     }
     if (editId.value) await api.put(`/tasks/${editId.value}`, payload)
     else await api.post('/tasks', payload)
-    showAdd.value = false
-    editId.value = null
-    Object.assign(form, emptyForm)
-    closeAp()
+    closeEdit()
     await load()
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { saving.value = false }
@@ -983,6 +993,13 @@ onUnmounted(() => {
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--glass-border); font-weight: 600; font-size: 14px; }
 .modal-head .x { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--overlay-2); color: var(--text-dim); cursor: pointer; font-size: 16px; }
 .modal-body { padding: 14px 18px; max-height: 60vh; overflow-y: auto; }
+.edit-modal { width: min(560px, 94vw); }
+.edit-modal .modal-body { max-height: 82vh; }
+.edit-modal .fg2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.edit-modal .fg1 { margin-bottom: 12px; }
+.edit-modal .fld { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+.edit-modal .glass-input { width: 100%; }
+.edit-modal .edit-tip { font-size: 12px; color: var(--accent); margin-bottom: 10px; }
 .rec-loading, .rec-empty { color: var(--text-dim); font-size: 13px; padding: 12px 0; text-align: center; }
 .rec-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .rec-list li { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 10px; background: var(--overlay); font-size: 13px; }

@@ -387,9 +387,9 @@
                 <tr>
                   <th class="mx-name">姓名</th>
                   <th v-for="d in dayList" :key="d.d" class="mx-day"
-                      :class="{ wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], dgr: dayHasViolation(d.key) }"
-                      :title="(specialMap[d.key] ? specialMap[d.key] + ' · ' : '') + d.key">
-                    {{ d.d }}<em>{{ d.wk }}</em>
+                      :class="{ wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], hd: !!holidayMap[d.key], dgr: dayHasViolation(d.key) }"
+                      :title="(specialMap[d.key] ? specialMap[d.key] + ' · ' : '') + (holidayMap[d.key] ? '法定节假日：' + holidayMap[d.key].name + ' · ' : '') + d.key">
+                    {{ d.d }}<em>{{ d.wk }}</em><i v-if="holidayMap[d.key]" class="hd-tag" :class="holidayMap[d.key].type" :title="holidayMap[d.key].name">{{ holidayMap[d.key].type === 'rest' ? '假' : '调' }}</i>
                   </th>
                   <th v-for="s in shiftNames" :key="'h' + s" class="mx-sum" :title="s + '（全月天数）'">{{ cellLabel(s) }}</th>
                   <th class="mx-sum" title="休息（全月天数）">休</th>
@@ -403,7 +403,7 @@
                     <span v-if="p.is_fixed" class="mx-fixed" :title="'固定班次：' + p.fixed_shift">固</span>
                   </td>
                   <td v-for="d in dayList" :key="d.key" class="mx-cell"
-                      :class="[shiftCls(cellOf(p.name, d.key)), { wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], vio: hasCellViolation(p.name, d.key) }]"
+                      :class="[shiftCls(cellOf(p.name, d.key)), { wk: d.weekend, sp: !!specialMap[d.key] || !!specialRestMap[d.key], hd: !!holidayMap[d.key], vio: hasCellViolation(p.name, d.key) }]"
                       :title="cellTitle(p.name, d)"
                       @click="cycleCell(p.name, d.key)">
                     {{ cellLabel(cellOf(p.name, d.key)) }}
@@ -843,6 +843,26 @@ async function delSpecialRestDay(s) {
   }
 }
 
+// ---------- 法定节假日提示（只读标注，不进入生成逻辑） ----------
+// 用户约束：节假日联动只在排班/班表「体现」，绝不强制员工必休或必上。
+// 仅把后端 /holidays 的只读数据透出为角标，排班引擎本身完全不感知节假日。
+const holidays = ref({ rest: {}, work: {} })
+const holidayMap = computed(() => {
+  const m = {}
+  for (const [d, n] of Object.entries(holidays.value.rest || {})) m[d] = { type: 'rest', name: n }
+  for (const [d, n] of Object.entries(holidays.value.work || {})) m[d] = { type: 'work', name: n }
+  return m
+})
+async function loadHolidays() {
+  try {
+    const r = await api.get('/holidays', { year: year.value })
+    holidays.value = {
+      rest: Object.fromEntries((r.rest || []).map((x) => [x.date, x.name])),
+      work: Object.fromEntries((r.work || []).map((x) => [x.date, x.name]))
+    }
+  } catch { /* 节假日仅为提示，失败不影响排班 */ }
+}
+
 // ---------- 生成 / 校验 / 发布 ----------
 const generating = ref(false)
 const validing = ref(false)
@@ -1211,6 +1231,7 @@ const miniCells = computed(() => {
     const key = `${year.value}-${String(month.value).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     out.push({
       key, day: d, inMonth: true, sp: specialDays.value.find((s) => s.date === key) || specialRestDays.value.find((s) => s.date === key) || null,
+      holiday: holidayMap.value[key] || null,
       isToday: today.getFullYear() === year.value && today.getMonth() + 1 === month.value && today.getDate() === d
     })
   }
@@ -1240,7 +1261,7 @@ async function loadBase() {
 
 async function refreshDeptData() {
   if (!deptId.value) return
-  await Promise.all([loadRule(), loadPrefs(), loadRequests(), loadSpecial()])
+  await Promise.all([loadRule(), loadPrefs(), loadRequests(), loadSpecial(), loadHolidays()])
 }
 
 function onDeptChange() {
@@ -1268,6 +1289,8 @@ watch(tab, (t) => {
   if (t === 'requests') loadRequests()
   if (t === 'special') loadSpecial()
 })
+// 年份变化时刷新节假日标注（节假日数据按年加载，全月覆盖）
+watch(year, loadHolidays)
 </script>
 
 <style scoped>
@@ -1393,12 +1416,17 @@ thead .mx-name { background: var(--glass-strong); font-weight: 700; }
 .mx-day.wk { color: var(--warn); }
 .mx-day.sp { background: rgba(5, 150, 105, .13); }
 .mx-day.dgr { box-shadow: inset 0 -2px 0 var(--danger); }
+.mx-day.hd { background: rgba(239, 68, 68, .12); color: #e11d48; }
+.hd-tag { display: inline-flex; align-items: center; justify-content: center; margin-left: 2px; width: 13px; height: 13px; border-radius: 4px; font-size: 9px; font-weight: 700; font-style: normal; color: #fff; vertical-align: middle; }
+.hd-tag.rest { background: #e11d48; }
+.hd-tag.work { background: #ea580c; }
 .mx-sum { position: sticky; right: 0; z-index: 2; background: var(--glass-strong); min-width: 48px; font-weight: 700; padding: 6px 8px !important; }
 .mx-cell { cursor: pointer; height: 27px; transition: .12s; border-right: 1px solid transparent; }
 .mx-cell:hover { filter: brightness(1.14); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .mx-cell.wk { background: rgba(217, 119, 6, .05); }
 .mx-cell.sp { background: rgba(5, 150, 105, .10); }
 .mx-cell.vio { box-shadow: inset 0 0 0 1.5px var(--danger); }
+.mx-cell.hd { background: rgba(239, 68, 68, .07); }
 .mx-cell.accent { background: rgba(79, 70, 229, .16); color: #4f46e5; font-weight: 600; }
 .mx-cell.ok { background: rgba(5, 150, 105, .15); color: #059669; font-weight: 600; }
 .mx-cell.warn { background: rgba(217, 119, 6, .16); color: #b45309; font-weight: 600; }

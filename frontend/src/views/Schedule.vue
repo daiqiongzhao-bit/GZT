@@ -105,7 +105,7 @@
           v-for="cell in cells"
           :key="cell.key"
           class="day"
-          :class="{ out: !cell.inMonth, today: cell.isToday, sel: cell.key === selectedKey, drop: dragOverKey === cell.key }"
+          :class="{ out: !cell.inMonth, today: cell.isToday, sel: cell.key === selectedKey, drop: dragOverKey === cell.key, hd: cell.holiday }"
           @click="onDayClick(cell)"
           @dragover.prevent="onDayDragOver(cell)"
           @dragleave="onDayDragLeave(cell)"
@@ -113,6 +113,7 @@
         >
           <div class="day-top">
             <span class="day-num">{{ cell.day }}</span>
+            <span v-if="cell.holiday" class="hd-badge" :class="cell.holiday.type" :title="cell.holiday.name">{{ cell.holiday.type === 'rest' ? '休' : '班' }}</span>
             <span v-if="auth.canManage && cell.inMonth" class="day-add" title="新增排班" @click.stop="openAdd(cell.date)">+</span>
           </div>
           <div class="day-shifts">
@@ -159,7 +160,7 @@
               <th class="sticky-col seq">序号</th>
               <th class="sticky-col name">姓名</th>
               <th class="sticky-col emp">工号</th>
-              <th v-for="d in matrixDays" :key="d" class="day-col" :class="{ wknd: matrixIsWeekend(d) }">{{ d }}<i v-if="matrixIsWeekend(d)" class="wknd-tag">休</i></th>
+              <th v-for="d in matrixDays" :key="d" class="day-col" :class="{ wknd: matrixIsWeekend(d), hd: holidayOfDay(d) }">{{ d }}<i v-if="matrixIsWeekend(d)" class="wknd-tag">休</i><i v-if="holidayOfDay(d)" class="hd-tag" :class="holidayOfDay(d).type" :title="holidayOfDay(d).name">{{ holidayOfDay(d).type === 'rest' ? '假' : '调' }}</i></th>
               <th class="sum-col">早</th>
               <th class="sum-col">中</th>
               <th class="sum-col">晚</th>
@@ -173,7 +174,7 @@
               <td class="sticky-col">{{ ri + 1 }}</td>
               <td class="sticky-col name">{{ row.name }}</td>
               <td class="sticky-col emp">{{ row.emp_no }}</td>
-              <td v-for="d in matrixDays" :key="d" class="day-cell" :class="{ wknd: matrixIsWeekend(d) }">
+              <td v-for="d in matrixDays" :key="d" class="day-cell" :class="{ wknd: matrixIsWeekend(d), hd: holidayOfDay(d) }">
                 <span v-if="row.cells[d]" class="mc" :class="shiftColor(row.cells[d])" :style="matrixCustomStyle(row.cells[d]) || null">{{ matrixCode(row.cells[d]) }}</span>
               </td>
               <td class="sum-cell">{{ row.tot.early }}</td>
@@ -431,7 +432,8 @@ const cells = computed(() => {
       inMonth: m2 === m,
       isToday: key === todayKey,
       items: byDate[key] || [],
-      isRest: !byDate[key] && (d.getDay() === 0 || d.getDay() === 6) && m2 === m
+      isRest: !byDate[key] && (d.getDay() === 0 || d.getDay() === 6) && m2 === m,
+      holiday: holidayByDate.value[key] || null
     })
   }
   return out
@@ -658,6 +660,31 @@ async function load() {
   if (!form.dept_id) form.dept_id = auth.user.dept_id || departments.value[0]?.id || null
 }
 
+// ---------- 法定节假日提示（只读标注，不进入生成逻辑） ----------
+// 用户约束：节假日联动只在班表/排班「体现」，绝不强制员工必休或必上。
+// 因此这里仅把后端 /holidays 的只读数据透出为标注，供日历/矩阵显示「休/班」角标。
+const holidays = ref({ rest: {}, work: {} })
+const holidayByDate = computed(() => {
+  const m = {}
+  for (const [d, n] of Object.entries(holidays.value.rest || {})) m[d] = { type: 'rest', name: n }
+  for (const [d, n] of Object.entries(holidays.value.work || {})) m[d] = { type: 'work', name: n }
+  return m
+})
+async function loadHolidays() {
+  try {
+    const r = await api.get('/holidays', { year: viewYear.value })
+    holidays.value = {
+      rest: Object.fromEntries((r.rest || []).map((x) => [x.date, x.name])),
+      work: Object.fromEntries((r.work || []).map((x) => [x.date, x.name]))
+    }
+  } catch { /* 节假日仅为提示，拉取失败不影响班表 */ }
+}
+// 矩阵视图按「日」取节假日信息（date 由年/月/日拼接）
+function holidayOfDay(d) {
+  const key = `${viewYear.value}-${String(viewMonth.value + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  return holidayByDate.value[key] || null
+}
+
 // ---------- 整月部门矩阵（v0.2.0） ----------
 const matrixMode = ref(false)
 const matrixDeptId = ref(0)
@@ -801,7 +828,10 @@ const matrixTot = computed(() => {
 onMounted(() => {
   if (!auth.isSuper && auth.user?.dept_id) importDeptId.value = auth.user.dept_id
   load()
+  loadHolidays()
 })
+// 切换年份时刷新节假日标注（月份不变，节假日数据按年加载）
+watch(viewYear, loadHolidays)
 </script>
 
 <style scoped>
@@ -1011,4 +1041,24 @@ onMounted(() => {
   .day-add { width: 14px; height: 14px; font-size: 11px; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 法定节假日提示角标（只读，不强制） ---------- */
+.day.hd { background: rgba(239, 68, 68, 0.07); }
+.day.hd .day-num { color: #e11d48; font-weight: 700; }
+.hd-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 15px; padding: 0 3px; border-radius: 5px;
+  font-size: 10px; font-weight: 700; line-height: 1; color: #fff;
+}
+.hd-badge.rest { background: #e11d48; }
+.hd-badge.work { background: #ea580c; }
+.matrix-tbl .day-col.hd, .matrix-tbl .day-cell.hd { background: rgba(239, 68, 68, 0.09); }
+.matrix-tbl .day-col.hd .hd-tag { color: #e11d48; }
+.hd-tag {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 2px; width: 14px; height: 14px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; font-style: normal; color: #fff;
+}
+.hd-tag.rest { background: #e11d48; }
+.hd-tag.work { background: #ea580c; }
 </style>

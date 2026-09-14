@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"net/url"
 	"time"
 
 	"shiftworkbench/internal/db"
@@ -130,8 +131,13 @@ func writeXLSX(c *gin.Context, f *excelize.File, filename string) {
 		c.JSON(500, gin.H{"error": "模板生成失败"})
 		return
 	}
+	// RFC 5987: ASCII fallback + UTF-8 encoded filename — fixes garbled Chinese on Windows
+	asciiFn := strings.Map(func(r rune) rune {
+		if r > 127 { return '_' }
+		return r
+	}, filename)
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", filename))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiFn, url.QueryEscape(filename)))
 	c.Data(200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }
 

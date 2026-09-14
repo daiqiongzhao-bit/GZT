@@ -1131,8 +1131,9 @@ async function downloadAuth(path) {
     if (!r.ok) { alert('下载失败：' + r.status); return }
     const blob = await r.blob()
     const cd = r.headers.get('content-disposition') || ''
-    const m = cd.match(/filename="?([^"]+)"?/)
-    const fn = m ? decodeURIComponent(m[1]) : 'download.csv'
+    // 匹配 RFC 5987 filename*=UTF-8''... 或 fallback filename="..."
+    const m = cd.match(/filename\*=UTF-8''([^;\s]+)|filename="?([^";]+)"?/)
+    const fn = (m && (m[1] || m[2])) ? decodeURIComponent(m[1] || m[2]) : ('download.xlsx')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = fn

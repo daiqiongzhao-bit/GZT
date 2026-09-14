@@ -158,10 +158,7 @@ func DownloadTemplate(c *gin.Context) {
 		}
 	}
 
-	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", fname))
-	c.Status(200)
-	_ = f.Write(c.Writer)
+	writeXLSX(c, f, fname)
 }
 
 // csvBOM 为 CSV 添加 UTF-8 BOM，避免 Excel 中文乱码
@@ -610,7 +607,7 @@ func ExportLogsXLSX(c *gin.Context) {
 	writeXLSX(c, f, "操作日志_"+time.Now().Format("20060102_1504")+".xlsx")
 }
 
-// ExportSchedulesXLSX GET /api/schedules/export 导出当前可见部门班表为 Excel(.xlsx)
+// ExportSchedulesXLSX GET /api/schedules/export 导出当前可见部门班表为 Excel(.xlsx) — 整月排班矩阵
 func ExportSchedulesXLSX(c *gin.Context) {
 	scope := deptScopeIDs(c)
 	q := db.DB.Order("date asc")
@@ -622,24 +619,200 @@ func ExportSchedulesXLSX(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	f := excelize.NewFile()
-	sheet := "班表"
-	f.SetSheetName("Sheet1", sheet)
-	heads := []string{"ID", "日期", "班次", "人员"}
-	for j, h := range heads {
-		col, _ := excelize.CoordinatesToCellName(1+j, 1)
-		f.SetCellValue(sheet, col, h)
+
+	// Build date → shift→people map
+	type cellInfo struct{ Shift string; People []string }
+	byDate := make(map[string][]cellInfo)
+	dates := []string{}
+	for _, sc := range list {
+		var ppl []string
+		_ = json.Unmarshal([]byte(sc.People), &ppl)
+		byDate[sc.Date] = append(byDate[sc.Date], cellInfo{Shift: sc.Shift, People: ppl})
+		found := false
+		for _, d := range dates { if d == sc.Date { found = true; break } }
+		if !found { dates = append(dates, sc.Date) }
 	}
-	for i, s := range list {
-		var people []string
-		_ = json.Unmarshal([]byte(s.People), &people)
-		row := []interface{}{s.ID, s.Date, s.Shift, strings.Join(people, ";")}
-		for j, v := range row {
-			col, _ := excelize.CoordinatesToCellName(1+j, 2+i)
-			f.SetCellValue(sheet, col, v)
+	if len(dates) == 0 {
+		c.JSON(200, gin.H{"message": "无数据"})
+		return
+	}
+
+	// Collect all rotating users (dedup, preserve order from first date)
+	userSet := make(map[string]struct{})
+	userOrder := []string{}
+	for _, di := range byDate[dates[0]] {
+		for _, p := range di.People {
+			if _, ok := userSet[p]; !ok { userSet[p] = struct{}{}; userOrder = append(userOrder, p) }
 		}
 	}
-	writeXLSX(c, f, "班表_"+time.Now().Format("200601")+".xlsx")
+
+	// Collect all shifts (dedup)
+	shiftSet := map[string]struct{}{}
+	shiftList := []string{}
+	for _, cells := range byDate {
+		for _, ci := range cells {
+			if _, ok := shiftSet[ci.Shift]; !ok { shiftSet[ci.Shift] = struct{}{}; shiftList = append(shiftList, ci.Shift) }
+		}
+	}
+
+	// Resolve department name
+	deptName := "全部"
+	if len(scope) == 1 {
+		var dept models.Department
+		if db.DB.First(&dept, scope[0]).Error == nil { deptName = dept.Name }
+	}
+
+	// Parse year-month from first date
+	ym := dates[0][:7] // YYYY-MM
+	fname := fmt.Sprintf("%s_%s_排班表.xlsx", deptName, strings.Replace(ym, "-", "", -1))
+
+	f := excelize.NewFile()
+	sheet := "排班"
+	f.SetSheetName("Sheet1", sheet)
+
+	// Row 1: header — 序号 | 姓名 | 工号 | day1 | day2 | ... | 早 | 中 | 晚 | 夜 | 休息
+	headers := []string{"序号", "姓名", "工号"}
+	dayNums := []string{}
+	for _, d := range dates {
+		dayNums = append(dayNums, d[8:]) // DD
+		headers = append(headers, d[8:])
+	}
+	// Append shift summary columns
+	for _, sh := range shiftList { headers = append(headers, sh) }
+	headers = append(headers, "休息")
+
+	styleHeader, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Size: 10},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Fill:      excelize.Fill{Type: "pattern", Color: []string{"#D9E1F2"}, Pattern: 1},
+	})
+	for j, h := range headers {
+		col, _ := excelize.CoordinatesToCellName(1+j, 1)
+		f.SetCellValue(sheet, col, h)
+		f.SetCellStyle(sheet, col, col, styleHeader)
+	}
+
+	// Lookup: person → row index of their schedule on a given date
+	cellOf := func(date, person string) string {
+		for _, ci := range byDate[date] {
+			for _, p := range ci.People { if p == person { return ci.Shift } }
+		}
+		return ""
+	}
+
+	// Short label for display
+	shiftLabel := func(sh string) string {
+		switch sh {
+		case "早班": return "早"
+		case "中班": return "中"
+		case "晚班": return "晚"
+		case "夜班": return "夜"
+		case "休息": return "休"
+		default: return sh
+		}
+	}
+
+	// Style maps
+	styleRest, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Color: "999999"},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	styleMorning, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Color: "E65100", Bold: true},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	styleMid, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Color: "6A1B9A", Bold: true},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	styleEvening, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Color: "1565C0", Bold: true},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	styleNight, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Color: "2E7D32", Bold: true},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+
+	cellStyle := func(shift string) int {
+		switch shift {
+		case "早班": return styleMorning
+		case "中班": return styleMid
+		case "晚班": return styleEvening
+		case "夜班": return styleNight
+		case "休息": return styleRest
+		default: return 0
+		}
+	}
+
+	// Data rows: one per user
+	for idx, person := range userOrder {
+		row := 2 + idx
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), idx+1)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), person)
+		// TODO: 工号 if available; leave blank for now
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), "")
+
+		shiftCounts := map[string]int{}
+		restCount := 0
+		for di, d := range dates {
+			colIdx := 3 + di
+			sh := cellOf(d, person)
+			label := ""
+			if sh != "" { label = shiftLabel(sh) }
+			cell, _ := excelize.CoordinatesToCellName(colIdx+1, row)
+			f.SetCellValue(sheet, cell, label)
+			if st := cellStyle(sh); st != 0 { f.SetCellStyle(sheet, cell, cell, st) }
+
+			if sh == "休息" || sh == "" { restCount++ } else { shiftCounts[sh]++ }
+		}
+		// Summary columns
+		sumCol := 3 + len(dates)
+		for _, sh := range shiftList {
+			sc, _ := excelize.CoordinatesToCellName(sumCol, row)
+			f.SetCellValue(sheet, sc, shiftCounts[sh])
+			sumCol++
+		}
+		rc, _ := excelize.CoordinatesToCellName(sumCol, row)
+		f.SetCellValue(sheet, rc, restCount)
+	}
+
+	// Summary rows: per-shift daily counts
+	sumRow := 2 + len(userOrder)
+	f.SetCellValue(sheet, fmt.Sprintf("A%d", sumRow), "")
+	f.SetCellValue(sheet, fmt.Sprintf("B%d", sumRow), "当班统计")
+	for di, d := range dates {
+		colIdx := 3 + di
+		sc := map[string]int{}
+		for _, ci := range byDate[d] { sc[ci.Shift] += len(ci.People) }
+		// Show first non-rest shift count or empty
+		label := ""
+		for _, sh := range shiftList {
+			if cnt, ok := sc[sh]; ok && cnt > 0 { label = strconv.Itoa(cnt); break }
+		}
+		cell, _ := excelize.CoordinatesToCellName(colIdx+1, sumRow)
+		f.SetCellValue(sheet, cell, label)
+	}
+	// Per-shift totals
+	sumCol := 3 + len(dates)
+	for _, sh := range shiftList {
+		total := 0
+		for _, cells := range byDate { for _, ci := range cells { if ci.Shift == sh { total += len(ci.People) } } }
+		sc, _ := excelize.CoordinatesToCellName(sumCol, sumRow)
+		f.SetCellValue(sheet, sc, total)
+		sumCol++
+	}
+
+	// Set column widths
+	f.SetColWidth(sheet, "A", "A", 5)
+	f.SetColWidth(sheet, "B", "B", 10)
+	f.SetColWidth(sheet, "C", "C", 8)
+	for i := 0; i < len(dates); i++ {
+		name, _ := excelize.ColumnNumberToName(4 + i)
+		f.SetColWidth(sheet, name, name, 3.5)
+	}
+
+	writeXLSX(c, f, fname)
 }
 
 // contentDispositionRFC5987 生成中文文件名安全的 Content-Disposition（RFC 5987）
