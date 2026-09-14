@@ -9,6 +9,7 @@ import (
 
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
+	"shiftworkbench/internal/data"
 )
 
 // ============ 排班计划引擎（v0.18.0）============
@@ -413,6 +414,8 @@ type PlanInfo struct {
 	People    []PlanPerson
 	Special   map[string]string // 特殊工作日 date→事由
 	Rest     map[string]string // 特殊休息日 date→事由
+	HolidayRest map[string]string // 法定节假日休息日 date→事由（软偏好，非强制）
+	HolidayWork map[string]string // 调休补班日（周末上班）date→事由（软偏好，非强制）
 	ReqByUser map[uint][]models.ShiftRequest
 	// CarryWork：姓名 → 截至上月末的「连续上班天数」。
 	// 由上月已发布班表（schedules）回溯得出，用于规则9 跨月衔接：
@@ -451,6 +454,7 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		assignCarryHints(carryWork, carryHint, rule.MaxWorkStreak, people)
 	}
 
+	holidayRest, holidayWork := data.HolidaysInRange(dateKey(first), dateKey(last))
 	return &PlanInfo{
 		DeptID:    deptID,
 		Year:      year,
@@ -464,6 +468,9 @@ func buildPlanInfo(deptID uint, year, month int, userIDs []uint) *PlanInfo {
 		People:    people,
 		Special:   loadSpecialDays(deptID, dateKey(first), dateKey(last)),
 		Rest:     loadSpecialRestDays(deptID, dateKey(first), dateKey(last)),
+		// 法定节假日（内置只读源）：区间内 rest/work，仅作软偏好，不强制。
+		HolidayRest: holidayRest,
+		HolidayWork: holidayWork,
 		ReqByUser: byUser,
 		CarryWork: carryWork,
 		carryHint: carryHint,

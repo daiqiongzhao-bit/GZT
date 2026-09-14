@@ -197,6 +197,7 @@ func main() {
 			auth.GET("/special-restdays", handlers.ListSpecialRestDays)
 			auth.POST("/special-restdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialRestDay)
 			auth.DELETE("/special-restdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialRestDay)
+			auth.GET("/holidays", handlers.ListHolidays) // 法定节假日（内置只读，非强制）
 
 			auth.POST("/schedules/generate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GenerateSchedule)
 			auth.POST("/schedules/validate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ValidatePlan)
