@@ -268,21 +268,6 @@
               <td class="col-act">
                 <div class="row-ops" @click.stop>
                   <button class="rec row-ops-btn" @click.stop="toggleRowMenu(t, $event)" :title="'更多操作 · ' + t.title" aria-label="更多操作">⋯</button>
-                  <transition name="pop">
-                      <div v-if="rowMenuId === t.id" class="row-ops-menu" @click.stop>
-                        <button class="menu-item" @click="closeRowMenu(); openRecord(t)">
-                          <span class="mi-ico">📋</span><span>完成记录</span>
-                        </button>
-                        <template v-if="auth.canManage"><button class="menu-item" @click="closeRowMenu(); setFrozen(t, !t.frozen)"><span class="mi-ico">{{ t.frozen ? '☀️' : '❄️' }}</span><span>{{ t.frozen ? '解冻任务' : '冻结任务' }}</span></button>
-                          <button class="menu-item" @click="closeRowMenu(); openEdit(t)">
-                            <span class="mi-ico">✏️</span><span>编辑任务</span>
-                          </button>
-                          <button class="menu-item danger" @click="closeRowMenu(); remove(t)">
-                            <span class="mi-ico">🗑</span><span>删除任务</span>
-                          </button>
-                        </template>
-                      </div>
-                    </transition>
                 </div>
               </td>
             </tr>
@@ -291,6 +276,31 @@
       </div>
       <EmptyState v-if="!filtered.length" :title="emptyText" desc="去新建一条任务，或切换到其它标签页查看。" :action-text="auth.canManage ? '新建任务' : ''" :icon="calIcon" @action="showAdd = true" />
     </section>
+
+    <!-- 行内操作菜单：用 Teleport 渲染到 body，脱离 <tr> 的 opacity 堆叠上下文。
+         已完成/冻结行（opacity<1 会生成 stacking context）原本会把 absolute 定位的下拉菜单
+         压在下一行之下，导致点击「编辑」等命中下一行任务（穿透）；同时脱离 .table-wrap 的
+         滚动裁剪，最后一行菜单也不会被切掉。（v0.25.0 修复） -->
+    <Teleport to="body">
+      <transition name="pop">
+        <div v-if="rowMenuId != null && activeRow" ref="menuEl" class="row-ops-menu" :style="menuStyle" @click.stop>
+          <button class="menu-item" @click="onMenuRecord">
+            <span class="mi-ico">📋</span><span>完成记录</span>
+          </button>
+          <template v-if="auth.canManage">
+            <button class="menu-item" @click="onMenuFreeze">
+              <span class="mi-ico">{{ activeRow.frozen ? '☀️' : '❄️' }}</span><span>{{ activeRow.frozen ? '解冻任务' : '冻结任务' }}</span>
+            </button>
+            <button class="menu-item" @click="onMenuEdit">
+              <span class="mi-ico">✏️</span><span>编辑任务</span>
+            </button>
+            <button class="menu-item danger" @click="onMenuRemove">
+              <span class="mi-ico">🗑</span><span>删除任务</span>
+            </button>
+          </template>
+        </div>
+      </transition>
+    </Teleport>
 
     <!-- 固定底部的水平滚动条（始终可见，不随垂直滚动消失） -->
     <div v-show="tableWrapEl && hasHScroll" class="sticky-hscroll" @scroll="onStickyScroll">
@@ -518,13 +528,43 @@ const recordTaskTitle = ref('')
 
 // 行内操作菜单（⋯ 按钮弹出的下拉）
 const rowMenuId = ref(null)
-function toggleRowMenu(t) { rowMenuId.value = rowMenuId.value === t.id ? null : t.id }
+// v0.25.0：菜单改用 Teleport 渲染到 body，这里只记录「⋯」按钮的视口坐标用于 fixed 定位
+const menuPos = reactive({ x: 0, y: 0 })
+const menuEl = ref(null)
+let btnRect = null
+const activeRow = computed(() => filtered.value.find((t) => t.id === rowMenuId.value) || null)
+const menuStyle = computed(() => ({ top: menuPos.y + 'px', left: menuPos.x + 'px' }))
+// 菜单渲染后按真实高度修正：底部空间不足时翻转到按钮上方，并夹紧左右边界避免溢出视口
+function repositionMenu() {
+  if (!menuEl.value || !btnRect) return
+  const m = menuEl.value.getBoundingClientRect()
+  const h = m.height || 180
+  const below = btnRect.bottom + h + 8 <= window.innerHeight
+  if (below) menuPos.y = btnRect.bottom + 6
+  else if (btnRect.top > h + 8) menuPos.y = Math.max(6, btnRect.top - h - 6)
+  else menuPos.y = Math.max(6, window.innerHeight - h - 6) // 极端：上下都不够，贴底
+  // 水平：以按钮右缘为锚，translateX(-100%) 向左展开；夹紧到视口内
+  const minX = 160
+  menuPos.x = Math.max(minX, Math.min(btnRect.right, window.innerWidth - 8))
+}
+function toggleRowMenu(t, e) {
+  if (rowMenuId.value === t.id) { rowMenuId.value = null; return }
+  const r = (e && e.currentTarget && e.currentTarget.getBoundingClientRect) ? e.currentTarget.getBoundingClientRect() : null
+  if (r) { btnRect = r; menuPos.x = Math.min(r.right, window.innerWidth - 8); menuPos.y = r.bottom + 6 }
+  rowMenuId.value = t.id
+  nextTick(repositionMenu)
+}
 function closeRowMenu() { rowMenuId.value = null }
+// 菜单项点击：先抓住当前任务对象（rowMenuId 置空后 activeRow 会变 null），再关闭菜单
+function onMenuRecord() { const t = activeRow.value; closeRowMenu(); if (t) openRecord(t) }
+function onMenuFreeze() { const t = activeRow.value; closeRowMenu(); if (t) setFrozen(t, !t.frozen) }
+function onMenuEdit() { const t = activeRow.value; closeRowMenu(); if (t) openEdit(t) }
+function onMenuRemove() { const t = activeRow.value; closeRowMenu(); if (t) remove(t) }
 // 点击页面其它位置关闭菜单
 function onDocClick(e) {
   if (rowMenuId.value == null) return
-  // 已经在 row-ops 内会被 stopPropagation 拦掉，这里只兜住外部点击
-  if (e.target.closest && e.target.closest('.row-ops')) return
+  // 已经在 row-ops / 菜单内会被 stopPropagation 拦掉，这里只兜住外部点击
+  if (e.target.closest && (e.target.closest('.row-ops') || e.target.closest('.row-ops-menu'))) return
   rowMenuId.value = null
 }
 
@@ -862,11 +902,16 @@ onMounted(() => {
   useAutoRefresh(load, true)
   window.addEventListener('resize', updateStickyScroll)
   document.addEventListener('click', onDocClick)
+  // v0.25.0：菜单已 Teleport 到 body（fixed 定位），滚动/缩放时视口坐标失效，直接关闭
+  window.addEventListener('scroll', closeRowMenu, true)
+  window.addEventListener('resize', closeRowMenu)
 })
 onUnmounted(() => {
   useAutoRefresh(load, false)
   window.removeEventListener('resize', updateStickyScroll)
   document.removeEventListener('click', onDocClick)
+  window.removeEventListener('scroll', closeRowMenu, true)
+  window.removeEventListener('resize', closeRowMenu)
 })
 </script>
 
@@ -957,12 +1002,12 @@ onUnmounted(() => {
 }
 .row-ops-btn:hover { color: var(--text); border-color: var(--accent); }
 .row-ops-menu {
-  position: absolute; right: 0; top: calc(100% + 6px);
+  position: fixed; left: 0; top: 0; transform: translateX(-100%);
   background: var(--glass-strong, rgba(255,255,255,0.96));
   border: 1px solid var(--glass-border);
   border-radius: 12px; padding: 6px;
   box-shadow: 0 8px 24px rgba(15,23,42,0.16);
-  min-width: 150px; z-index: 40;
+  min-width: 150px; z-index: 1000;
   display: flex; flex-direction: column; gap: 2px;
 }
 .menu-item {
@@ -975,9 +1020,9 @@ onUnmounted(() => {
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover { background: rgba(225,29,72,0.08); }
 .mi-ico { font-size: 14px; line-height: 1; opacity: 0.85; }
-/* 行内菜单展开/收折叠动画 */
-.pop-enter-active, .pop-leave-active { transition: opacity .12s ease, transform .12s ease; }
-.pop-enter-from, .pop-leave-to { opacity: 0; transform: translateY(-4px); }
+/* 行内菜单展开/收折叠动画（仅用 opacity，避免 transform 与菜单 translateX(-100%) 对齐冲突） */
+.pop-enter-active, .pop-leave-active { transition: opacity .12s ease; }
+.pop-enter-from, .pop-leave-to { opacity: 0; }
 .dept-filter { width: auto; min-width: 130px; padding: 8px 10px; font-size: 13px; height: 38px; }
 .col-dept { width: 110px; }
 .dept-tag { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }

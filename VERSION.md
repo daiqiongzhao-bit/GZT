@@ -140,3 +140,5 @@ cd /root/GZT && docker compose --env-file /opt/swb/swb.env up -d
 
 | v0.23.2 | 修复：通知附件/人员导入模板也双写中文名；班表导出改名「班表矩阵_部门_年月.xlsx」；清理升级陈旧 gzt-demo 容器 | 2026-09-15 |
 | v0.24.0 | 修复：工作日志导出(filename= 由硬编码 logs.csv 改为真实中文名)、知识库/工作台附件下载(filename= 由 URL 编码乱码/字面量 attachment 改为原始中文名) 全部双写中文；删除带下划线 bug 的 contentDispositionRFC5987 死函数 | 2026-09-15 |
+
+| v0.25.0 | 修复：任务列表「⋯」行菜单改为 Teleport 渲染到 body（fixed 定位），脱离已完成/冻结行 opacity<1 生成的 stacking context，解决下拉菜单被下一行压住、点「编辑/冻结/删除」穿透到下一任务、灰蒙蒙无法点击的问题；已完成任务的冻结/编辑/删除现在无需先「放开」即可直接操作 | 2026-09-15 |
