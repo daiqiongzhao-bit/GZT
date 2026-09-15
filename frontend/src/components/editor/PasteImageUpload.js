@@ -18,6 +18,7 @@
  *   entryId = 0 → POST /workspace/temp-attachments（中转缓存，保存时由 adoptTempAttachments 转正）
  */
 import { Extension } from '@tiptap/core'
+import { Plugin } from '@tiptap/pm/state'
 
 /** data:URL → File（用于把粘贴的 base64 图片转成可上传的文件） */
 function dataURLToFile(dataURL, filename) {
@@ -124,7 +125,12 @@ export const PasteImageUpload = Extension.create({
     }
 
     return [
-      {
+      // ⚠️ 必须用 new Plugin(...) 包一层，不能直接返回裸对象。
+      //    ProseMirror 内部会读 plugin.spec.state；裸对象没有 .spec，
+      //    会在 EditorState 构造阶段抛
+      //    「Cannot read properties of undefined (reading 'state')」，
+      //    导致整个编辑器（工具栏 + 编辑区）空白 —— v0.28.0 实测踩坑。
+      new Plugin({
         key: 'kbPasteImage',
         props: {
           handlePaste: (view, event) => {
@@ -177,7 +183,7 @@ export const PasteImageUpload = Extension.create({
             return true
           },
         },
-      },
+      }),
     ]
   },
 })

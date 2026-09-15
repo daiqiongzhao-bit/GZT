@@ -9,10 +9,20 @@
  *   · Placeholder / CharacterCount / Dropcursor / Gapcursor / Focus 迁入 @tiptap/extensions
  *   · Color / FontFamily / FontSize / LineHeight / BackgroundColor 收进 TextStyleKit
  *   · Underline 已内置进 StarterKit，无需单独安装
+ *
+ * 【第 5 条 —— 会直接白屏的坑，v0.28.0 实测】
+ *   StarterKit 已经内置了 undoRedo（ProseMirror plugin key = `history$`）。
+ *   若再 `import { UndoRedo } from '@tiptap/extensions'` 并单独放进扩展数组，
+ *   由于打包后是两个不同模块实例，ProseMirror 会抛
+ *   「Adding different instances of a keyed plugin (history$)」，
+ *   Tiptap 的 createView 直接中断 —— 表现为：工具栏与编辑区双双空白，
+ *   只有一条 console error，页面其余部分完全正常（很难一眼看出是编辑器挂了）。
+ *   正确做法：撤销栈只在 StarterKit.configure({ undoRedo: {...} }) 里配。
+ *   同理，Table 等凡 StarterKit/Kit 已内置的能力，都不要重复注册。
  */
 import StarterKit from '@tiptap/starter-kit'
 import { TextStyleKit } from '@tiptap/extension-text-style'
-import { Placeholder, CharacterCount, UndoRedo } from '@tiptap/extensions'
+import { Placeholder, CharacterCount } from '@tiptap/extensions'
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table'
 import TextAlign from '@tiptap/extension-text-align'
 import Highlight from '@tiptap/extension-highlight'
@@ -42,6 +52,12 @@ export function buildExtensions({ placeholder, onImageUpload, onUploadError, isE
       codeBlock: { HTMLAttributes: { class: 'kb-codeblock' } },
       // 关掉内置 Link，改用下方独立配置（需要 openOnClick:false 以便点击编辑而非跳转）
       link: false,
+      // ⚠️ 撤销栈只能配在这里，不要再 import UndoRedo 单独加一遍！
+      //    StarterKit 已内置 undoRedo（plugin key = history$）。
+      //    若再从 @tiptap/extensions 引一个 UndoRedo 并放进数组，
+      //    ProseMirror 会报「Adding different instances of a keyed plugin (history$)」，
+      //    整块编辑器直接白屏（v0.28.0 实测踩坑，见 extensions.js 头注释第 5 条）。
+      undoRedo: { depth: 200, newGroupDelay: 500 },
       // bulletList/orderedList/listItem/listKeymap/underline/strike/bold/italic/code/blockquote 用默认
     }),
 
@@ -98,8 +114,6 @@ export function buildExtensions({ placeholder, onImageUpload, onUploadError, isE
 
     Placeholder.configure({ placeholder: () => placeholder || '在这里输入内容…' }),
     CharacterCount,
-    // 撤销栈深度加大：长文档编辑可回退更多步
-    UndoRedo.configure({ depth: 200, newGroupDelay: 500 }),
   ]
 }
 

@@ -20,26 +20,26 @@
     </div>
 
     <!-- ========== 迷你知识库 ========== -->
+    <!-- ========== 迷你知识库（v0.28.0 三栏布局） ========== -->
     <template v-if="tab === 'knowledge'">
-      <section class="panel">
-        <div class="panel-head">
-          <h3 class="section-title">知识条目 <span class="section-sub">{{ knowledge.length }} 条<template v-if="kbView==='trash'"> · 回收站 {{ trash.length }} 条</template></span></h3>
-          <div class="head-actions kb-actions">
-            <!-- ① 视图切换（互斥）：条目 / 统计 / 回收站 -->
-            <div class="seg-group" role="group" aria-label="视图切换">
-              <button class="seg" :class="{ on: kbView === 'list' }" @click="kbGo('list')">条目</button>
-              <button class="seg" :class="{ on: kbView === 'stats' }" @click="kbGo('stats')">📊 统计</button>
-              <button class="seg" :class="{ on: kbView === 'trash' }" @click="kbGo('trash')">🗑 回收站</button>
-            </div>
-
-            <span class="kb-div" aria-hidden="true"></span>
-
-            <!-- ② 创建：模板 / 导入 -->
+      <div class="kb-shell" :class="{ 'kb-narrow': kbNarrow }">
+        <!-- 顶栏：标题 + 全局动作 -->
+        <div class="kb-topbar">
+          <h3 class="section-title kb-title">
+            知识库
+            <span class="section-sub">{{ knowledge.length }} 条<template v-if="trash.length"> · 回收站 {{ trash.length }}</template></span>
+          </h3>
+          <div class="kb-topacts">
             <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
             <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
+            <button
+              v-if="auth.isSuper"
+              class="btn ghost sm"
+              title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移（仅超级管理员）"
+              @click="exportBundle"
+            >📦 打包 zip</button>
 
-            <!-- ③ 导出：三种格式收进一个下拉，避免平铺占位 -->
-            <div v-if="kbView === 'list'" class="kb-menu-wrap" @click.stop>
+            <div class="kb-menu-wrap" @click.stop>
               <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
                 ⬆ 导出 <i class="caret">▾</i>
               </button>
@@ -52,380 +52,148 @@
               </transition>
             </div>
 
-            <!-- ④ 危险操作 / 主操作 -->
-            <button v-if="kbView === 'trash'" class="btn ghost sm danger" @click="emptyTrash">清空回收站</button>
-            <button v-if="kbView === 'list'" class="btn primary" @click="openNewK">+ 新建</button>
-            <button v-else class="btn ghost" @click="kbGo('list')">← 返回列表</button>
+            <button class="kb-nav-toggle" title="显示 / 隐藏导航栏" @click="kbNavOpen = !kbNavOpen">☰</button>
           </div>
         </div>
 
-        <!-- 统计看板 -->
-        <div v-if="kbView==='stats'" class="kb-stats">
-          <div v-if="statsLoading" class="dim" style="padding:20px 0">加载统计中…</div>
-          <template v-else-if="stats">
-            <div class="stat-grid">
-              <div class="stat-card"><div class="stat-num">{{ stats.total }}</div><div class="stat-lbl">知识总数</div></div>
-              <div class="stat-card"><div class="stat-num">{{ stats.recent_30d }}</div><div class="stat-lbl">近 30 天新增</div></div>
-              <div class="stat-card"><div class="stat-num">{{ stats.my_starred }}</div><div class="stat-lbl">我的收藏</div></div>
-            </div>
-            <div class="stat-block">
-              <div class="stat-h">分类分布</div>
-              <div class="bar-chart">
-                <div v-for="c in stats.categories" :key="c.name" class="bar-row">
-                  <span class="bar-name">{{ c.name }}</span>
-                  <span class="bar-track"><span class="bar-fill" :style="{width: barPct(c.count, stats.categories)}"></span></span>
-                  <span class="bar-cnt">{{ c.count }}</span>
-                </div>
-                <div v-if="!stats.categories.length" class="dim">暂无分类数据</div>
-              </div>
-            </div>
-            <div class="stat-block">
-              <div class="stat-h">热门标签</div>
-              <div class="tag-cloud">
-                <span v-for="t in stats.tags" :key="t.name" class="tag-pill" :style="{fontSize: tagSize(t.count, stats.tags)+'px'}" @click="kTag=t.name;kbView='list';loadK()">#{{ t.name }} <i>{{ t.count }}</i></span>
-                <span v-if="!stats.tags.length" class="dim">暂无标签</span>
-              </div>
-            </div>
-            <div class="stat-block">
-              <div class="stat-h">贡献者</div>
-              <div class="author-list">
-                <span v-for="a in stats.authors" :key="a.name" class="author-pill">{{ a.name }} <i>{{ a.count }}</i></span>
-                <span v-if="!stats.authors.length" class="dim">暂无</span>
-              </div>
-            </div>
+        <!-- 三栏主体 -->
+        <div class="kb-3col" :class="{ 'on-detail': kbNarrow && (selectedKId || editingK) }">
+          <!-- 左栏：导航（窄屏可折叠） -->
+          <KnowledgeNav
+            v-show="kbNavOpen"
+            :view="kbView"
+            :total="knowledge.length"
+            :trash-count="trash.length"
+            :tree="kTree"
+            :parent-id="kParent"
+            :categories="categories"
+            :category="kCategory"
+            :tags="allTags"
+            :tag="kTag"
+            :mine="kMine"
+            :starred="kStarred"
+            @view="kbGo"
+            @pick-parent="onPickParent"
+            @pick-category="(c) => { kCategory = c; loadK() }"
+            @pick-tag="(t) => { kTag = t; kbView = 'list'; loadK() }"
+            @toggle-mine="kMine = !kMine; loadK()"
+            @toggle-starred="kStarred = !kStarred; loadK()"
+          />
+
+          <!-- 中栏 + 右栏：按视图切换 -->
+          <template v-if="kbView === 'stats'">
+            <KnowledgeStats
+              class="kb-span2"
+              :stats="stats"
+              :loading="statsLoading"
+              @pick-tag="(t) => { kTag = t; kbView = 'list'; loadK() }"
+            />
           </template>
-        </div>
 
-        <!-- 回收站 -->
-        <div v-else-if="kbView==='trash'" class="kb-trash">
-          <div v-if="!trash.length" class="empty">回收站是空的</div>
-          <div v-else class="trash-list">
-            <div v-for="t in trash" :key="t.id" class="trash-item">
-              <div class="trash-main">
-                <span class="trash-title">{{ t.title }}</span>
-                <span class="dim">{{ t.category || '未分类' }} · 删除于 {{ fmtTime(t.deleted_at) }}</span>
-              </div>
-              <div class="trash-ops">
-                <button class="btn sm ok" @click="restoreK(t.id)">恢复</button>
-                <button class="btn sm danger" @click="purgeK(t.id)">彻底删除</button>
-              </div>
-            </div>
-          </div>
-        </div>
+          <template v-else-if="kbView === 'trash'">
+            <KnowledgeTrash
+              class="kb-span2"
+              :items="trash"
+              :fmt-time="fmtTime"
+              @restore="restoreK"
+              @purge="purgeK"
+              @empty="emptyTrash"
+            />
+          </template>
 
-        <!-- 列表视图 -->
-        <template v-else>
-          <!-- 内联新增/编辑表单 -->
-          <form v-if="editingK" class="edit-form" @submit.prevent="saveK">
-            <div class="fg2">
-              <div>
-                <label class="fld">标题 *</label>
-                <input v-model="kForm.title" class="glass-input" required placeholder="如：周年庆小红书发布 SOP" />
-              </div>
-              <div>
-                <label class="fld">分类</label>
-                <input v-model="kForm.category" class="glass-input" list="kCats" placeholder="如：活动SOP / 检查流程 / 话术" />
-                <datalist id="kCats">
-                  <option v-for="c in categories" :key="c" :value="c" />
-                </datalist>
-              </div>
-            </div>
-            <div class="fg2">
-              <div>
-                <label class="fld">所属父级（目录树）</label>
-                <select v-model.number="kForm.parent_id" class="glass-input">
-                  <option :value="0">（顶级，无父级）</option>
-                  <option v-for="p in parentCandidates" :key="p.id" :value="p.id">{{ p.title }}</option>
-                </select>
-              </div>
-              <div>
-                <label class="fld">状态</label>
-                <select v-model="kForm.status" class="glass-input">
-                  <option value="published">已发布</option>
-                  <option value="draft">草稿（仅自己可见）</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label class="fld">标签</label>
-              <div class="tag-edit">
-                <span v-for="(t,i) in kForm.tags" :key="t" class="chip pick-chip">{{ t }}<button type="button" class="x" @click="kForm.tags.splice(i,1)" aria-label="移除">×</button></span>
-                <input v-model="kTagDraft" @keydown.enter.prevent="addKTag" class="glass-input tag-input" placeholder="输入标签后回车添加" />
-              </div>
-            </div>
-            <div>
-              <label class="fld">内容</label>
-              <RichTextEditor
-                v-model="kForm.content"
-                :entry-id="kForm.id || 0"
-                placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接 / 表格 / 代码块"
-              />
-            </div>
-            <!-- 附件区：编辑现有条目显示正式附件；新建未保存时先进「中转缓存」，保存后转正 -->
-            <div class="edit-attach">
-              <div class="att-head">
-                <span class="att-title">附件（{{ kForm.id ? kAtts.length : pendingAtts.length }}）</span>
-                <div class="att-upload">
-                  <span v-if="uploading" class="dim up-txt">上传中…</span>
-                  <label class="btn sm">+ 上传文件
-                    <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
-                  </label>
-                </div>
-              </div>
-              <p class="att-hint dim">{{ kForm.id ? '支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB' : '编辑时即可上传；保存前文件暂存，保存后自动生效（单文件 ≤ 100MB）' }}</p>
-              <div v-if="kForm.id && kAtts.length" class="att-list">
-                <div v-for="a in kAtts" :key="a.id" class="att-item">
-                  <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
-                  <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                  <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                  <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
-                  <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
-                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                  <button class="del danger" @click="removeAtt(a)">删除</button>
-                </div>
-              </div>
-              <div v-else-if="kForm.id" class="empty att-empty">还没有附件</div>
-              <div v-else-if="pendingAtts.length" class="att-list">
-                <div v-for="a in pendingAtts" :key="a.tempId" class="att-item">
-                  <span v-if="a.mime && a.mime.startsWith('image/')" class="att-thumb">{{ fileIcon(a.fileName) }}</span>
-                  <span v-else class="att-ico">{{ fileIcon(a.fileName) }}</span>
-                  <span class="att-name">{{ a.fileName }}</span>
-                  <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                  <span class="dim">待保存</span>
-                  <button class="del danger" @click="removePendingAtt(a)">移除</button>
-                </div>
-              </div>
-            </div>
-            <div v-if="canSetEditors" class="collab-box">
-              <label class="fld">协作者（可查看并编辑本条目的同事）</label>
-              <div class="tag-edit">
-                <span v-for="(nm,i) in collabNames" :key="'c'+i" class="chip pick-chip">{{ nm }}<button type="button" class="x" @click="kForm.editor_ids.splice(i,1)" aria-label="移除">×</button></span>
-                <button type="button" class="btn ghost sm" @click="showCollabPicker = !showCollabPicker">{{ showCollabPicker ? '收起名单' : '+ 添加协作者' }}</button>
-              </div>
-              <div v-if="showCollabPicker" class="picker-list">
-                <label v-for="u in collabCandidates" :key="u.id" class="picker-row">
-                  <input type="checkbox" :checked="kForm.editor_ids.includes(u.id)" @change="toggleCollab(u.id)" />
-                  <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
-                </label>
-                <div v-if="!collabCandidates.length" class="dim picker-empty">没有可选的同事</div>
-              </div>
-              <p class="att-hint dim">协作者不受「可见范围」限制：即使条目设为「仅自己可见」，TA 也能看到并编辑。名单仅创建者与超级管理员可调整；删除、置顶仍限创建者与超级管理员。</p>
-            </div>
-            <div class="fg2 bot">
-              <div class="scope-switch">
-                <label class="fld">可见范围</label>
-                <select v-model="kForm.scope" class="glass-input">
-                  <option value="public" v-if="auth.isSuper">全公司可见</option>
-                  <option value="department">同部门共享</option>
-                  <option value="private">仅自己可见</option>
-                </select>
-              </div>
-              <div class="form-actions">
-                <button type="button" class="btn ghost" @click="cancelEditK">取消</button>
-                <button type="submit" class="btn primary" :disabled="savingK">{{ savingK ? '保存中…' : (kForm.id ? '保存修改' : '保存') }}</button>
-              </div>
-            </div>
-          </form>
+          <!-- 列表 + 详情：知识库主工作区 -->
+          <template v-else>
+            <KnowledgeList
+              :items="knowledge"
+              :loading="kLoading"
+              :selected-id="selectedKId"
+              v-model:query="kQuery"
+              v-model:sort="kSort"
+              :category="kCategory"
+              :tag="kTag"
+              :parent-title="parentTitle"
+              v-model:mine="kMine"
+              v-model:starred="kStarred"
+              :current-user-id="auth.user?.id || 0"
+              :current-user-name="auth.user?.username || ''"
+              :can-edit="canEditK"
+              :can-manage="canManageK"
+              :fmt-time="fmtTime"
+              :preview="kPreview"
+              :highlight="highlight"
+              :parse-tags="parseTags"
+              :scope-label="scopeLabel"
+              :scope-chip="scopeChip"
+              @open="openDetailK"
+              @create="openNewK"
+              @edit="openEditK"
+              @remove="removeK"
+              @star="toggleStar"
+              @pin="togglePin"
+              @update:query="loadK"
+              @update:sort="loadK"
+              @update:mine="loadK"
+              @update:starred="loadK"
+              @clear-filter="clearKFilter"
+            />
 
-          <!-- 筛选 -->
-          <div v-else class="filter-bar">
-            <input v-model="kQuery" class="glass-input search" placeholder="🔍 搜索标题 / 内容 / 分类 / 标签" @input="loadK" />
-            <select v-model="kCategory" class="glass-input" @change="loadK">
-              <option value="">全部分类</option>
-              <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
-            </select>
-            <select v-model="kTag" class="glass-input" @change="loadK">
-              <option value="">全部标签</option>
-              <option v-for="t in allTags" :key="t" :value="t">{{ t }}</option>
-            </select>
-            <select v-model="kSort" class="glass-input" @change="loadK">
-              <option value="recent">最近更新</option>
-              <option value="created">最新创建</option>
-              <option value="hot">最热（阅读量）</option>
-            </select>
-            <label class="chk mine"><input type="checkbox" v-model="kMine" @change="loadK" /> 只看我写的</label>
-            <label class="chk mine"><input type="checkbox" v-model="kStarred" @change="loadK" /> 只看收藏</label>
-            <button v-if="kParent" class="btn ghost sm" @click="kParent='';loadK()">目录：{{ parentTitle }} ✕</button>
-          </div>
-
-          <!-- 目录树（按 parent_id 组织） -->
-          <div v-if="!editingK && kTree.length" class="k-tree" :class="{collapsed:kTreeOpen===false}">
-            <div class="k-tree-head">
-              <span class="dim">📁 目录</span>
-              <button class="btn ghost sm" @click="kTreeOpen=!kTreeOpen">{{ kTreeOpen ? '收起' : '展开' }}</button>
-            </div>
-            <ul v-show="kTreeOpen" class="tree-ul">
-              <li class="tree-li root"><span class="tree-node" :class="{active:kParent===''}" @click="kParent='';loadK()">📄 全部条目</span></li>
-              <TreeNode v-for="n in kTree" :key="n.id" :node="n" :active="kParent" @pick="onPickParent" />
-            </ul>
-          </div>
-
-          <!-- 列表 -->
-          <div v-if="knowledge.length" class="k-grid">
-            <div v-for="k in knowledge" :key="k.id" class="k-card" :class="{ mine: k.owner_id === auth.user?.id, pinned: k.pinned }">
-              <div class="k-top">
-                <span v-if="k.pinned" class="pin-badge" title="已置顶">📌</span>
-                <span class="chip" :class="scopeChip(k.scope)">{{ scopeLabel(k.scope) }}</span>
-                <span v-if="k.category" class="chip accent">{{ k.category }}</span>
-                <span v-if="k.status==='draft'" class="chip warn">草稿</span>
-                <span class="k-owner">{{ k.owner_name === (auth.user && auth.user.username) ? '我' : k.owner_name }}</span>
-              </div>
-              <div class="k-title" v-html="highlight(k.title, kQuery)" @click="openDetailK(k)"></div>
-              <div class="k-preview" v-html="highlight(kPreview(k), kQuery)" @click="openDetailK(k)"></div>
-              <div v-if="parseTags(k.tags).length" class="k-tags">
-                <span v-for="t in parseTags(k.tags)" :key="t" class="k-tag" @click="kTag=t;loadK()">#{{ t }}</span>
-              </div>
-              <div class="k-foot">
-                <span class="dim">{{ fmtTime(k.updated_at || k.created_at) }} · 👁 {{ k.view_count || 0 }}</span>
-                <span class="k-foot-ops">
-                  <button class="icon-btn" :class="{on:k.starred}" :title="k.starred?'取消收藏':'收藏'" @click.stop="toggleStar(k)">{{ k.starred ? '★' : '☆' }}</button>
-                  <button v-if="k.owner_id===auth.user?.id || auth.isSuper" class="icon-btn" :class="{on:k.pinned}" :title="k.pinned?'取消置顶':'置顶'" @click.stop="togglePin(k)">{{ k.pinned ? '📌' : '📍' }}</button>
-                  <span v-if="canEditK(k)" class="ops">
-                    <button class="del" @click="openEditK(k)">编辑</button>
-                    <button v-if="canManageK(k)" class="del danger" @click="removeK(k)">删除</button>
-                  </span>
-                </span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty">{{ kQuery || kTag || kParent ? '没有匹配的知识条目' : '还没有知识条目，点右上「新建」沉淀第一条吧' }}</div>
-        </template>
-      </section>
-
-      <!-- 知识详情弹窗 -->
-      <div v-if="viewK" class="modal-mask" @click.self="viewK = null">
-        <div class="modal">
-          <div class="modal-head">
-            <span class="chip" :class="scopeChip(viewK.scope)">{{ scopeLabel(viewK.scope) }}</span>
-            <span v-if="viewK.category" class="chip accent">{{ viewK.category }}</span>
-            <span v-if="viewK.status==='draft'" class="chip warn">草稿</span>
-            <span v-if="parseTags(viewK.tags).length" class="chip">{{ parseTags(viewK.tags).join('、') }}</span>
-            <button class="icon-btn star" :class="{on:viewK.starred}" :title="viewK.starred?'取消收藏':'收藏'" @click="toggleStar(viewK)">{{ viewK.starred ? '★' : '☆' }}</button>
-            <button v-if="viewK.owner_id===auth.user?.id || auth.isSuper" class="icon-btn pin" :class="{on:viewK.pinned}" :title="viewK.pinned?'取消置顶':'置顶'" @click="togglePin(viewK)">{{ viewK.pinned ? '📌' : '📍' }}</button>
-            <button class="modal-close" @click="viewK = null">✕</button>
-          </div>
-          <h3 class="modal-title">{{ viewK.title }}</h3>
-          <div class="modal-meta dim">
-            {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }} · 👁 {{ viewK.view_count || 0 }}
-            <span v-if="kEditorsText(viewK)"> · ✍ 协作者：{{ kEditorsText(viewK) }}</span>
-          </div>
-
-          <!-- 子标签：正文 / 评论 / 版本 / 双链 -->
-          <div class="k-tabs">
-            <button class="k-tab" :class="{on:kTab==='content'}" @click="kTab='content'">正文</button>
-            <button class="k-tab" :class="{on:kTab==='comments'}" @click="kTab='comments';loadComments(viewK.id)">评论 ({{ kComments.length }})</button>
-            <button class="k-tab" :class="{on:kTab==='versions'}" @click="kTab='versions';loadVersions(viewK.id)">版本 ({{ kVersions.length }})</button>
-            <button class="k-tab" :class="{on:kTab==='links'}" @click="kTab='links';loadLinks(viewK.id)">双向链接</button>
-          </div>
-
-          <div class="modal-scroll">
-            <!-- 正文 -->
-            <div v-show="kTab==='content'">
-              <div class="modal-body rte-content" v-html="safeHtml(viewK.content) || '<span class=\'dim\'>（暂无内容）</span>'"></div>
-
-              <!-- 附件区 -->
-              <div v-if="viewK" class="modal-attach">
-                <div class="att-head">
-                  <span class="att-title">附件（{{ kAtts.length }}）</span>
-                  <div v-if="canEditK(viewK)" class="att-upload">
-                    <span v-if="uploading" class="dim up-txt">上传中…</span>
-                    <label class="btn sm">+ 上传文件
-                      <input type="file" multiple :disabled="uploading" @change="uploadAtts" hidden />
-                    </label>
-                  </div>
-                </div>
-                <p v-if="canEditK(viewK)" class="att-hint dim">支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB</p>
-                <div v-if="kAtts.length" class="att-list">
-                  <div v-for="a in kAtts" :key="a.id" class="att-item">
-                    <img v-if="a.mime && a.mime.startsWith('image/')" :src="thumbUrl(a)" class="att-thumb" :alt="a.file_name" @click="previewAtt(a)" title="点击预览" />
-                    <span v-else-if="isPdf(a)" class="att-ico pdf" @click="previewAtt(a)" :title="'在线阅读 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                    <span v-else class="att-ico" @click="downloadAtt(a)" :title="'下载 ' + a.file_name">{{ fileIcon(a.file_name) }}</span>
-                    <span class="att-name" :title="'下载 ' + a.file_name" @click="downloadAtt(a)">{{ a.file_name }}</span>
-                    <button v-if="isPdf(a)" class="att-read" @click="previewAtt(a)">阅读</button>
-                    <span class="att-size dim">{{ fmtSize(a.size) }}</span>
-                    <button v-if="canDelAtt(a)" class="del danger" @click="removeAtt(a)">删除</button>
-                  </div>
-                </div>
-                <div v-else class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
-              </div>
-            </div>
-
-            <!-- 评论 -->
-            <div v-show="kTab==='comments'" class="k-comments">
-              <div v-if="!kComments.length" class="dim" style="padding:10px 0">还没有评论，来写第一条吧（可用 @姓名 提醒同事）</div>
-              <div v-for="c in topComments" :key="c.id" class="comment">
-                <div class="comment-head"><b>{{ c.user_name }}</b><span class="dim">{{ fmtTime(c.created_at) }}</span></div>
-                <div class="comment-body" v-html="safeHtml(c.content)"></div>
-                <div class="comment-ops">
-                  <button class="del" @click="kReplyTo=c.id;kCommentText='@'+c.user_name+' '">回复</button>
-                  <button v-if="c.user_id===auth.user?.id || auth.isSuper" class="del danger" @click="delComment(c.id)">删除</button>
-                </div>
-                <div v-for="r in repliesOf(c.id)" :key="r.id" class="comment reply">
-                  <div class="comment-head"><b>{{ r.user_name }}</b><span class="dim">{{ fmtTime(r.created_at) }}</span></div>
-                  <div class="comment-body" v-html="safeHtml(r.content)"></div>
-                  <div class="comment-ops">
-                    <button class="del danger" @click="delComment(r.id)">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="comment-editor">
-                <textarea v-model="kCommentText" class="glass-input ta" rows="2" :placeholder="kReplyTo?(kReplyTo?'回复中…':'') : '发表评论，@姓名 可提醒对方'"></textarea>
-                <div class="comment-send">
-                  <button v-if="kReplyTo" class="btn ghost sm" @click="kReplyTo=0;kCommentText=''">取消回复</button>
-                  <button class="btn primary sm" :disabled="kCommentBusy" @click="addComment">{{ kCommentBusy ? '发送中…' : '发表评论' }}</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- 版本历史 -->
-            <div v-show="kTab==='versions'" class="k-versions">
-              <div v-if="!kVersions.length" class="dim" style="padding:10px 0">暂无历史版本（每次保存会自动快照）</div>
-              <div v-for="v in kVersions" :key="v.id" class="version-item">
-                <div class="version-head"><span class="chip accent">v{{ v.version }}</span><b>{{ v.operator_name }}</b><span class="dim">{{ fmtTime(v.created_at) }}</span></div>
-                <div class="version-meta dim">{{ v.title }} · {{ v.category || '未分类' }}</div>
-                <button v-if="canEditK(viewK)" class="btn ghost sm" @click="restoreVersion(v.id)">回滚到此版本</button>
-              </div>
-            </div>
-
-            <!-- 双向链接 -->
-            <div v-show="kTab==='links'" class="k-links">
-              <div class="link-group">
-                <div class="link-h">↗ 本条目引用的（出链）</div>
-                <div v-if="!kOutlinks.length" class="dim">正文中使用 <code>[[标题]]</code> 语法即可建立引用</div>
-                <div v-for="e in kOutlinks" :key="'o'+e.id" class="link-item" @click="openEntry(e)">{{ e.title }}</div>
-              </div>
-              <div class="link-group">
-                <div class="link-h">↘ 引用本条目的（反向链接）</div>
-                <div v-if="!kBacklinks.length" class="dim">还没有其它条目引用本条目</div>
-                <div v-for="e in kBacklinks" :key="'b'+e.id" class="link-item" @click="openEntry(e)">{{ e.title }}</div>
-              </div>
-            </div>
-
-            <!-- 变更 / 协作记录（v0.8.0） -->
-            <div v-if="viewK" class="modal-history">
-              <button class="btn ghost sm hist-toggle" @click="toggleKHist(viewK)">
-                {{ kHistOpen ? '▾ 收起变更 / 协作记录' : '▸ 变更 / 协作记录（谁、何时、改了啥）' }}
-              </button>
-              <ul v-if="kHistOpen" class="hist-list">
-                <li v-if="!kHist.length" class="dim hist-empty">暂无变更记录</li>
-                <li v-for="h in kHist" :key="h.id" class="hist-item">
-                  <div class="hist-head">
-                    <span class="chip accent hist-act">{{ histActionLabel(h.action) }}</span>
-                    <b>{{ h.operator_name }}</b>
-                    <span class="dim">{{ fmtTime(h.created_at) }}</span>
-                  </div>
-                  <div v-if="h.detail" class="hist-detail">
-                    <div v-for="(ln,i) in histLines(h.detail)" :key="i" class="hist-line" :class="ln.cls">{{ ln.text || ' ' }}</div>
-                  </div>
-                </li>
-              </ul>
-            </div>
-          </div>
-
-          <div class="modal-foot">
-            <button v-if="canEditK(viewK)" class="btn ghost" @click="editFromView">编辑</button>
-            <button class="btn primary" @click="viewK = null">关闭</button>
-          </div>
+            <KnowledgeDetail
+              :entry="viewK"
+              :editing="editingK"
+              :saving="savingK"
+              :draft="kForm"
+              :categories="categories"
+              :parent-candidates="parentCandidates"
+              :collab-candidates="collabCandidates"
+              :can-edit="!!viewK && canEditK(viewK)"
+              :can-set-editors="canSetEditors"
+              :is-super="!!auth.isSuper"
+              :current-user-id="auth.user?.id || 0"
+              :current-user-name="auth.user?.username || ''"
+              :attachments="kAtts"
+              :uploading="uploading"
+              :comments="kComments"
+              :versions="kVersions"
+              :outlinks="kOutlinks"
+              :backlinks="kBacklinks"
+              :history="kHist"
+              :comment-text="kCommentText"
+              :comment-busy="kCommentBusy"
+              :reply-to="kReplyTo"
+              :safe-html="safeHtml"
+              :fmt-time="fmtTime"
+              :fmt-size="fmtSize"
+              :parse-tags="parseTags"
+              :scope-label="scopeLabel"
+              :scope-chip="scopeChip"
+              :editors-text="kEditorsText"
+              :hist-label="histActionLabel"
+              :hist-lines="histLines"
+              :is-pdf="isPdf"
+              :file-icon="fileIcon"
+              :thumb-of="thumbUrl"
+              :can-del-att="canDelAtt"
+              @start-edit="startEditK"
+              @cancel-edit="cancelEditK"
+              @submit="saveK"
+              @create="openNewK"
+              @star="toggleStar"
+              @pin="togglePin"
+              @open-ref="openEntry"
+              @reply="(id, name) => { kReplyTo = id; kCommentText = '@' + name + ' ' }"
+              @cancel-reply="kReplyTo = 0; kCommentText = ''"
+              @del-comment="delComment"
+              @send-comment="addComment"
+              @restore="restoreVersion"
+              @sub-change="onKSubChange"
+              @upload="uploadAtts"
+              @preview-att="previewAtt"
+              @download-att="downloadAtt"
+              @remove-att="removeAtt"
+              @update:comment-text="(v) => kCommentText = v"
+              @content-error="(m) => toast(m, 'error')"
+            />
+          </template>
         </div>
       </div>
 
@@ -918,18 +686,231 @@ import http from '@/api/http'
 import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
+import KnowledgeNav from '@/components/knowledge/KnowledgeNav.vue'
+import KnowledgeList from '@/components/knowledge/KnowledgeList.vue'
+import KnowledgeDetail from '@/components/knowledge/KnowledgeDetail.vue'
+import KnowledgeStats from '@/components/knowledge/KnowledgeStats.vue'
+import KnowledgeTrash from '@/components/knowledge/KnowledgeTrash.vue'
 
 // 渲染前净化（纵深防御，与后端 sanitizeRichContent 同口径）防存储型 XSS
+//
+// v0.28.0 重要变更：旧实现最后一行直接把整个 style 属性删掉，
+// 导致「编辑时所见」与「详情页所得」不一致——正文里的居中、字号、颜色、
+// 图片对齐在详情页全部消失。本次改为「逐声明过滤」：危险的丢弃，安全的保留，
+// 白名单与后端 safeStyleKeys / safeStyleValue 保持同口径。
+// 注意：真正的唯一防线在后端（sanitizeRichContent），本函数只是纵深防御；
+// 即便这里被绕过，后端兜底。反之亦然。
+const KB_SAFE_STYLE_KEYS = new Set([
+  // 文字外观
+  'color', 'background-color', 'font-size', 'font-family', 'font-weight', 'font-style',
+  'text-decoration', 'text-decoration-color', 'text-decoration-line', 'text-shadow',
+  'letter-spacing', 'word-spacing', 'line-height', 'vertical-align', 'white-space',
+  'text-transform', 'text-indent', 'word-break', 'overflow-wrap',
+  // 段落与对齐
+  'text-align', 'direction',
+  // 盒模型
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+  'border-color', 'border-style', 'border-width', 'border-radius',
+  // 尺寸
+  'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+  // 表格 / 列表
+  'border-collapse', 'border-spacing', 'table-layout', 'list-style-type', 'list-style-position',
+])
+// 危险值：CSS 表达式 / 脚本协议 / 外部资源加载 / 注释拼接
+const KB_DANGER_VALUE = /(expression|javascript|vbscript|behavior|@import|\\|\/\*|url\s*\()/i
+// 颜色值：十六进制 / rgb(a) / hsl(a) / 命名色 / 关键字
+const KB_COLOR_VALUE = /^(#[0-9a-f]{3,8}|rgba?\([\d\s,.%]+\)|hsla?\([\d\s,.%deg]+\)|[a-z]{3,20}|transparent|currentcolor)$/i
+// 长度值：数字+单位 / 百分比 / 关键字
+const KB_LEN_VALUE = /^(-?\d+(\.\d+)?(px|pt|em|rem|%|vh|vw|ch|ex)?|auto|normal|inherit|initial|0)$/i
+const KB_WEIGHT_VALUE = /^(normal|bold|bolder|lighter|[1-9]00)$/i
+// 字体族：允许中文、字母数字、空格、逗号、单双引号、连字符
+const KB_FONTFAMILY_VALUE = /^[\p{Script=Han}\w\s,'"-]{1,120}$/u
+const KB_WORD_VALUE = /^[a-z-]{1,32}$/i
+const KB_MULTI_LEN_VALUE = /^(-?\d+(\.\d+)?(px|pt|em|rem|%|vh|vw|ch|ex)?|auto)(\s+(-?\d+(\.\d+)?(px|pt|em|rem|%|vh|vw|ch|ex)?|auto)){0,3}$/i
+
+function kbStyleValueOk(key, val) {
+  if (KB_DANGER_VALUE.test(val)) return false
+  if (key === 'font-family') return KB_FONTFAMILY_VALUE.test(val)
+  if (key === 'color' || key === 'background-color' || key === 'text-decoration-color') return KB_COLOR_VALUE.test(val)
+  if (key === 'font-weight') return KB_WEIGHT_VALUE.test(val)
+  if (key === 'font-size' || key === 'line-height' || key === 'text-indent' ||
+      key === 'letter-spacing' || key === 'word-spacing' ||
+      key === 'width' || key === 'height' || key === 'min-width' || key === 'min-height' ||
+      key === 'max-width' || key === 'max-height') return KB_LEN_VALUE.test(val)
+  if (key.startsWith('margin') || key.startsWith('padding')) return KB_MULTI_LEN_VALUE.test(val)
+  if (key.startsWith('border') || key === 'table-layout' || key === 'border-spacing') {
+    // 边框简写：允许「1px solid #ccc」这类多段值，但每段仍要过危险值检查
+    return key === 'border-radius' ? KB_MULTI_LEN_VALUE.test(val) : /^[a-z0-9()#,.%\s-]{1,64}$/i.test(val)
+  }
+  return KB_WORD_VALUE.test(val)
+}
+// 按「分号」切声明，但 style 值里可能含分号（引号包裹），做一次引号感知扫描
+function kbSplitStyleDecls(style) {
+  const out = []
+  let cur = ''
+  let quote = ''
+  for (let i = 0; i < style.length; i++) {
+    const c = style[i]
+    if (quote) {
+      if (c === quote) quote = ''
+      cur += c
+    } else if (c === '"' || c === "'") {
+      quote = c
+      cur += c
+    } else if (c === ';') {
+      out.push(cur)
+      cur = ''
+    } else {
+      cur += c
+    }
+  }
+  if (cur) out.push(cur)
+  return out
+}
+function kbFilterStyle(style) {
+  const keep = []
+  for (const decl of kbSplitStyleDecls(style)) {
+    const i = decl.indexOf(':')
+    if (i < 0) continue
+    const key = decl.slice(0, i).trim().toLowerCase()
+    const val = decl.slice(i + 1).trim()
+    if (!key || !val) continue
+    if (!KB_SAFE_STYLE_KEYS.has(key)) continue
+    if (!kbStyleValueOk(key, val)) continue
+    keep.push(key + ':' + val)
+  }
+  return keep.join(';')
+}
+// 属性级白名单（与后端 sanitizeAttrs 同口径）
+const KB_GLOBAL_ATTRS = new Set(['style', 'class', 'id', 'title', 'dir', 'lang',
+  'data-att-id', 'data-temp-id', 'data-att-name', 'data-align', 'data-indent', 'data-type'])
+const KB_TAG_ATTRS = {
+  a: new Set(['href', 'target', 'rel']),
+  img: new Set(['src', 'alt', 'width', 'height']),
+  td: new Set(['colspan', 'rowspan', 'colwidth']),
+  th: new Set(['colspan', 'rowspan', 'colwidth']),
+  col: new Set(['span', 'width']),
+  ol: new Set(['start', 'type']),
+  table: new Set(['border', 'cellpadding', 'cellspacing']),
+}
+// 标签名 → 是否允许该属性
+function kbAttrAllowed(tag, attr) {
+  attr = attr.toLowerCase()
+  if (attr.startsWith('on')) return false
+  if (KB_GLOBAL_ATTRS.has(attr)) return true
+  const per = KB_TAG_ATTRS[tag]
+  return !!(per && per.has(attr))
+}
+// 链接协议白名单：http(s) / mailto / tel / 锚点 / 站内单斜杠路径
+// 显式拒绝 `//evil.com` 这种协议相对 URL（会跳出本站）
+function kbHrefAllowed(v) {
+  v = String(v || '').trim()
+  if (!v) return false
+  if (v.startsWith('//')) return false
+  return /^(https?:\/\/|mailto:|tel:|#)/i.test(v) || /^\//.test(v)
+}
+// 引号感知的属性切分（正则处理不了 style="font-family:"Times New Roman",serif" 这种嵌套引号）
+function kbSplitAttrs(attrStr) {
+  const out = []
+  let cur = ''
+  let quote = ''
+  for (let i = 0; i < attrStr.length; i++) {
+    const c = attrStr[i]
+    if (quote) {
+      if (c === quote) quote = ''
+      cur += c
+    } else if (c === '"' || c === "'") {
+      quote = c
+      cur += c
+    } else if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      if (cur.trim()) out.push(cur.trim())
+      cur = ''
+    } else {
+      cur += c
+    }
+  }
+  if (cur.trim()) out.push(cur.trim())
+  return out
+}
+const KB_UNSAFE_TAGS = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form',
+  'svg', 'math', 'base', 'template', 'noscript', 'frame', 'frameset', 'applet',
+  'textarea', 'xmp', 'plaintext']
+function kbUnescape(s) {
+  const cp = (n) => { try { return String.fromCodePoint(n) } catch (e) { return '' } }
+  return String(s)
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => cp(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_, d) => cp(parseInt(d, 10)))
+    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'").replace(/&amp;/gi, '&')
+}
 function safeHtml(html) {
   if (!html) return ''
   let s = String(html)
-  for (const t of ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'svg', 'math']) {
+  // 0) 去注释（注释里可以藏标签，先清掉避免拼接出新标签）
+  s = s.replace(/<!--[\s\S]*?-->/g, '')
+  // 1) 删危险标签及其内容
+  for (const t of KB_UNSAFE_TAGS) {
     s = s.replace(new RegExp('<\\s*' + t + '\\b[^>]*>[\\s\\S]*?<\\s*/\\s*' + t + '\\s*>', 'gi'), '')
     s = s.replace(new RegExp('<\\s*' + t + '\\b[^>]*/?>', 'gi'), '')
   }
+  // 2) 删行内事件 on*
   s = s.replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-  s = s.replace(/(href|src|xlink:href|action|formaction)\s*=\s*(?:"|')?\s*(?:javascript|vbscript|data)\s*:/gi, '')
-  s = s.replace(/\sstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+  // 3) 重建标签：属性白名单 + style 逐声明过滤
+  s = s.replace(/<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)\s*>/g,
+    (m, slash, tagRaw, attrStr, selfClose) => {
+      const tag = tagRaw.toLowerCase()
+      // 自闭合/自闭合型标签
+      const voidTag = /^(img|br|hr|col|input|source|track|wbr)$/.test(tag)
+      const closeTag = slash === '/'
+      if (closeTag) return voidTag ? '' : `</${tag}>`
+      if (voidTag) {
+        // 仅保留白名单属性
+        const kept = []
+        for (const a of kbSplitAttrs(attrStr)) {
+          const eq = a.indexOf('=')
+          const name = (eq < 0 ? a : a.slice(0, eq)).toLowerCase()
+          if (!kbAttrAllowed(tag, name)) continue
+          if (eq < 0) {
+            kept.push(name)
+            continue
+          }
+          let val = a.slice(eq + 1).trim()
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1)
+          }
+          // URL 类属性：解实体后再判协议（防 &#106;avascript: 绕过）
+          if (name === 'src' || name === 'href') {
+            const raw = kbUnescape(val)
+            if (name === 'href') { if (!kbHrefAllowed(raw)) continue }
+            else if (!/^(https?:\/\/|\/|data:image\/)/i.test(raw.trim())) continue
+          }
+          kept.push(name + '="' + val.replace(/"/g, '&quot;') + '"')
+        }
+        return `<${tag}${kept.length ? ' ' + kept.join(' ') : ''}>`
+      }
+      const kept = []
+      for (const a of kbSplitAttrs(attrStr)) {
+        const eq = a.indexOf('=')
+        const name = (eq < 0 ? a : a.slice(0, eq)).toLowerCase()
+        if (!kbAttrAllowed(tag, name)) continue
+        if (eq < 0) { kept.push(name); continue }
+        let val = a.slice(eq + 1).trim()
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1)
+        }
+        if (name === 'style') {
+          const filtered = kbFilterStyle(val)
+          if (filtered) kept.push('style="' + filtered.replace(/"/g, '&quot;') + '"')
+          continue
+        }
+        if (name === 'href') { if (!kbHrefAllowed(kbUnescape(val))) continue }
+        if (name === 'src' && !/^(https?:\/\/|\/|data:image\/)/i.test(kbUnescape(val).trim())) continue
+        kept.push(name + '="' + val.replace(/"/g, '&quot;') + '"')
+      }
+      return `<${tag}${kept.length ? ' ' + kept.join(' ') : ''}${selfClose && kept.length === 0 ? ' /' : ''}>`
+    })
   return s
 }
 
@@ -987,6 +968,12 @@ const kStarred = ref(false)
 const editingK = ref(false)
 const savingK = ref(false)
 const viewK = ref(null)
+// v0.28.0 三栏布局新增状态
+const selectedKId = ref('')      // 中栏高亮的条目 id
+const kLoading = ref(false)      // 列表骨架屏开关（首次加载才显示，避免搜索时闪动）
+const kbNavOpen = ref(true)      // 左栏折叠开关（<1024px 自动收起）
+const kbNarrow = ref(false)      // 是否为单栏紧凑模式（<820px），用于隐藏中栏
+let kFirstLoaded = false
 const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: 0 })
 const showCollabPicker = ref(false)
 const kTagDraft = ref('')
@@ -995,6 +982,7 @@ let kTimer = null
 async function loadK() {
   clearTimeout(kTimer)
   kTimer = setTimeout(async () => {
+    if (!kFirstLoaded) kLoading.value = true
     try {
       const params = {}
       if (kQuery.value.trim()) params.kw = kQuery.value.trim()
@@ -1005,8 +993,23 @@ async function loadK() {
       if (kStarred.value) params.starred = 1
       if (kSort.value && kSort.value !== 'recent') params.sort = kSort.value
       knowledge.value = await api.get('/workspace/knowledge', params)
+      // 列表刷新后若当前选中项已不在结果里（被筛掉/删掉），清空右栏选中态
+      if (selectedKId.value && !knowledge.value.some((x) => String(x.id) === String(selectedKId.value))) {
+        selectedKId.value = ''
+      }
     } catch (e) { toast(e.response?.data?.error || '加载失败', 'error') }
+    finally { kFirstLoaded = true; kLoading.value = false }
   }, (kMine.value || kCategory.value || kTag.value || kParent.value) ? 0 : 250)
+}
+// v0.28.0：逐个清除筛选条件（列表头部的小药丸点击）
+function clearKFilter(key) {
+  if (key === 'query') kQuery.value = ''
+  else if (key === 'category') kCategory.value = ''
+  else if (key === 'tag') kTag.value = ''
+  else if (key === 'parent') kParent.value = ''
+  else if (key === 'mine') kMine.value = false
+  else if (key === 'starred') kStarred.value = false
+  loadK()
 }
 async function loadCats() {
   try { categories.value = await api.get('/workspace/knowledge/categories') } catch {}
@@ -1082,16 +1085,33 @@ function openNewK() {
   showCollabPicker.value = false
   kAtts.value = []
   pendingAtts.value = []
+  // 新建时右栏进入编辑态；中栏取消高亮（还没有对应条目）
+  viewK.value = null
+  selectedKId.value = ''
   editingK.value = true
 }
 function openEditK(k) {
   Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published', editor_ids: Array.isArray(k.editor_id_list) ? [...k.editor_id_list] : [], owner_id: k.owner_id || 0 })
   kTagDraft.value = ''
   showCollabPicker.value = false
+  selectedKId.value = k.id
+  // v0.28.0：编辑直接在右栏进行，不再需要「关闭详情再打开表单」
+  if (!viewK.value || viewK.value.id !== k.id) viewK.value = k
   editingK.value = true
   loadKAtts(k.id)
 }
-function cancelEditK() { editingK.value = false; kAtts.value = []; pendingAtts.value = [] }
+// 从阅读态切到编辑态（右栏「✎ 编辑」按钮）
+function startEditK() {
+  if (!viewK.value) return
+  openEditK(viewK.value)
+}
+function cancelEditK() {
+  editingK.value = false
+  kAtts.value = []
+  pendingAtts.value = []
+  // 取消新建时清空右栏，避免留下一条不存在的「空条目」
+  if (!kForm.id) viewK.value = null
+}
 async function saveK() {
   savingK.value = true
   try {
@@ -1111,17 +1131,25 @@ async function saveK() {
       toast('已创建，正在打开详情…')
     }
     await refreshKnowledge()
-    if (savedId && !kForm.id) {
+    if (savedId) {
       const fresh = (knowledge.value || []).find((x) => x.id === savedId)
       editingK.value = false
+      selectedKId.value = savedId
       if (fresh) openDetailK(fresh)
+      else await openDetailKById(savedId)
     }
   } catch (e) { toast(e.response?.data?.error || '保存失败', 'error') }
   finally { savingK.value = false }
 }
+// v0.28.0：先选中条目再拉详情，保证中栏高亮与右栏内容始终同步
 async function openDetailK(k) {
+  if (!k || !k.id) return
+  selectedKId.value = k.id
+  await openDetailKById(k.id)
+}
+async function openDetailKById(id) {
   try {
-    const d = await api.get('/workspace/knowledge/' + k.id)
+    const d = await api.get('/workspace/knowledge/' + id)
     viewK.value = d
     kHistOpen.value = false
     kHist.value = []
@@ -1132,16 +1160,11 @@ async function openDetailK(k) {
     kBacklinks.value = []
     kReplyTo.value = 0
     kCommentText.value = ''
-    loadKAtts(k.id)
+    kSub.value = 'comments'
+    loadKAtts(id)
   } catch (e) { toast(e.response?.data?.error || '打开失败', 'error') }
 }
 function openEntry(e) { if (e && e.id) openDetailK(e) }
-function editFromView() {
-  if (!viewK.value) return
-  const k = viewK.value
-  viewK.value = null
-  openEditK(k)
-}
 async function togglePin(k) {
   try {
     const r = await api.post('/workspace/knowledge/' + k.id + '/pin')
@@ -1268,8 +1291,9 @@ function downloadFile(path, q, filename) {
 function exportMarkdown() { downloadFile('/workspace/knowledge/export/markdown', kbQueryString(), '知识库.md') }
 function exportDoc() { downloadFile('/workspace/knowledge/export/doc', kbQueryString(), '知识库.doc') }
 
-// ---- 详情子标签：评论 / 版本 / 双链 ----
-const kTab = ref('content')
+// ---- 详情子标签：评论 / 版本 / 双链 / 附件 / 变更记录 ----
+const kTab = ref('content')  // 兼容旧引用：正文 / 子面板互斥（子面板由 kSub 管理）
+const kSub = ref('comments') // 右栏阅读态子面板：comments | versions | links | files | history
 const kComments = ref([])
 const kCommentText = ref('')
 const kCommentBusy = ref(false)
@@ -1277,6 +1301,15 @@ const kReplyTo = ref(0)
 const kVersions = ref([])
 const kOutlinks = ref([])
 const kBacklinks = ref([])
+// 切到某个子面板时按需拉数据（避免打开详情就把 5 个接口全打一遍）
+function onKSubChange(t) {
+  if (!viewK.value) return
+  const id = viewK.value.id
+  if (t === 'comments' && !kComments.value.length) loadComments(id)
+  else if (t === 'versions' && !kVersions.value.length) loadVersions(id)
+  else if (t === 'links') loadLinks(id)
+  else if (t === 'history' && !kHistOpen.value) toggleKHist(viewK.value)
+}
 const topComments = computed(() => kComments.value.filter((c) => !c.parent_id))
 function repliesOf(id) { return kComments.value.filter((c) => c.parent_id === id) }
 async function loadComments(id) {
@@ -1901,22 +1934,33 @@ async function removeH(h) {
   catch (e) { toast(e.response?.data?.error || '删除失败', 'error') }
 }
 
-// 递归目录树节点组件（在 script setup 中内联声明）
-const TreeNode = {
-  name: 'TreeNode',
-  props: { node: { type: Object, required: true }, active: { type: [String, Number], default: '' } },
-  emits: ['pick'],
-  template: `
-    <li class="tree-li">
-      <span class="tree-node" :class="{active: String(active)===String(node.id)}" @click="$emit('pick', node.id)">
-        📄 {{ node.title }}<span v-if="node.children.length" class="tree-badge">{{ node.children.length }}</span>
-      </span>
-      <ul v-if="node.children.length" class="tree-ul sub">
-        <TreeNode v-for="c in node.children" :key="c.id" :node="c" :active="active" @pick="$emit('pick', $event)" />
-      </ul>
-    </li>
-  `
+
+// v0.28.0 三栏自适应：断点驱动，不硬编码列宽
+//   ≥1024px  三栏（左导航 + 中列表 + 右详情）
+//   820-1024 左栏自动收起（可手动展开为覆盖层），中+右两栏
+//   <820px   单栏模式，中栏隐藏，选中条目后右栏占满
+//
+// 注意：必须同时监听「两个」断点。只监听 1023px 的话，
+// 从 900px 直接调到 700px 时 1023px 查询的 matches 一直是 true、
+// 不触发 change，kbNarrow 就会停留在旧值导致单栏切换失灵。
+let kbMQ = null      // 1023px：左栏是否脱离网格
+let kbMQ2 = null     // 819px：是否进入单栏模式
+function applyKbBreakpoint() {
+  const wide = window.matchMedia('(min-width: 1024px)').matches
+  const narrow = window.matchMedia('(max-width: 819px)').matches
+  kbNarrow.value = narrow
+  // 宽屏默认展开，窄屏默认收起（用户手动改过则尊重当前值，仅断点变化时重置）
+  kbNavOpen.value = wide
 }
+// 选中条目变化时，窄屏要把右栏推到视野里
+watch(selectedKId, (id) => {
+  if (id && kbNarrow.value) {
+    nextTick(() => {
+      const el = document.querySelector('.kb-3col.on-detail')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    })
+  }
+})
 
 onMounted(() => {
   refreshKnowledge()
@@ -1925,10 +1969,20 @@ onMounted(() => {
   loadUsers() // 知识库「协作者」选择器需要部门成员列表（/users 对已登录用户开放，按部门范围返回）
   useAutoRefresh(loadK, true)
   document.addEventListener('click', onKbDocClick)
+  // 断点监听：旧浏览器（无 matchMedia）降级为固定三栏
+  if (window.matchMedia) {
+    kbMQ = window.matchMedia('(min-width: 1024px)')
+    kbMQ2 = window.matchMedia('(max-width: 819px)')
+    applyKbBreakpoint()
+    kbMQ.addEventListener('change', applyKbBreakpoint)
+    kbMQ2.addEventListener('change', applyKbBreakpoint)
+  }
 })
 onUnmounted(() => {
   useAutoRefresh(loadK, false)
   document.removeEventListener('click', onKbDocClick)
+  if (kbMQ) kbMQ.removeEventListener('change', applyKbBreakpoint)
+  if (kbMQ2) kbMQ2.removeEventListener('change', applyKbBreakpoint)
 })
 
 // 关键词/按人筛选需要显式触发（applyLogFilter）；日期用 @change 触发，
@@ -2329,5 +2383,93 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   .stat-card { min-width: 72px; padding: 8px 12px; }
   .ws-stat { min-width: 78px; padding: 8px 10px; }
   .pri-row { flex-direction: column; }
+}
+/* ================= v0.28.0 知识库三栏布局 =================
+   自适应策略：列宽用 minmax + clamp，不写死像素，
+   保证从 1024px 的旧笔记本到 3840px 的带鱼屏都不出现横向滚动。
+   -------------------------------------------------------- */
+.kb-shell {
+  display: flex;
+  flex-direction: column;
+  /* 视口高度减去顶栏/标签栏的占位，避免整页滚动 */
+  height: calc(100vh - 190px);
+  min-height: 460px;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.kb-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--overlay);
+}
+.kb-title { margin: 0; white-space: nowrap; }
+.kb-topacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kb-nav-toggle {
+  border: 1px solid var(--glass-border); background: transparent;
+  color: var(--text-dim); border-radius: 9px;
+  padding: 5px 10px; font-size: 13px; cursor: pointer; line-height: 1;
+}
+.kb-nav-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 三栏网格：左栏 clamp 自适应，中栏固定较窄，右栏吃掉剩余空间 */
+.kb-3col {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: clamp(180px, 17vw, 260px) clamp(240px, 24vw, 340px) minmax(0, 1fr);
+}
+.kb-3col > * { min-width: 0; height: 100%; }
+/* 统计/回收站跨中+右两栏 */
+.kb-3col > .kb-span2 { grid-column: 2 / -1; }
+
+/* ---------- 断点 1：1024px 以下 —— 左栏收起为滑出层 ---------- */
+@media (max-width: 1023px) {
+  .kb-shell { height: calc(100vh - 165px); }
+  .kb-3col { grid-template-columns: clamp(220px, 30vw, 300px) minmax(0, 1fr); }
+  /* 左栏脱离网格，改为覆盖层 */
+  .kb-3col > .kb-nav {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: clamp(220px, 60vw, 300px);
+    z-index: 30;
+    background: var(--bg-1);
+    border-right: 1px solid var(--glass-border);
+    box-shadow: 4px 0 18px rgba(15, 23, 42, .12);
+  }
+  .kb-3col { position: relative; }
+  .kb-3col > .kb-span2 { grid-column: 1 / -1; }
+}
+
+/* ---------- 断点 2：820px 以下 —— 单栏，只显示列表或详情 ---------- */
+@media (max-width: 819px) {
+  .kb-shell { height: calc(100vh - 150px); min-height: 380px; border-radius: 12px; }
+  .kb-topbar { padding: 9px 11px; gap: 7px; }
+  .kb-topacts .btn.sm { font-size: 11.5px; padding: 5px 9px; }
+  .kb-3col,
+  .kb-3col > .kb-span2 {
+    display: block;
+    grid-template-columns: none;
+  }
+  /* 单栏模式：列表与详情二选一，靠 .on-detail 切换 */
+  .kb-3col > .kb-list-pane { display: flex; }
+  .kb-3col > .kb-detail-pane { display: none; }
+  .kb-3col.on-detail > .kb-list-pane { display: none; }
+  .kb-3col.on-detail > .kb-detail-pane { display: flex; }
+  .kb-list-pane { border-left: none; border-right: none; }
+}
+
+@media (max-width: 640px) {
+  .kb-topbar { flex-direction: column; align-items: stretch; }
+  .kb-title { font-size: 15px; }
+  .kb-topacts { justify-content: flex-start; }
 }
 </style>
