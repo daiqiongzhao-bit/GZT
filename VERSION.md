@@ -139,3 +139,4 @@ cd /root/GZT && docker compose --env-file /opt/swb/swb.env up -d
 | v0.23.1 | 修复：导出文件名 filename= 也携带 UTF-8 中文（兼容只读 filename= 的客户端/Excel/下载工具），双写法确保各端均显示中文名 | 2026-09-14 |
 
 | v0.23.2 | 修复：通知附件/人员导入模板也双写中文名；班表导出改名「班表矩阵_部门_年月.xlsx」；清理升级陈旧 gzt-demo 容器 | 2026-09-15 |
+| v0.24.0 | 修复：工作日志导出(filename= 由硬编码 logs.csv 改为真实中文名)、知识库/工作台附件下载(filename= 由 URL 编码乱码/字面量 attachment 改为原始中文名) 全部双写中文；删除带下划线 bug 的 contentDispositionRFC5987 死函数 | 2026-09-15 |

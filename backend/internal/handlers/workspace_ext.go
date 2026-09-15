@@ -275,7 +275,7 @@ func ExportWorkLogs(c *gin.Context) {
 
 	name := fmt.Sprintf("工作日志_%s.csv", time.Now().Format("20060102"))
 	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="logs.csv"; filename*=UTF-8''%s`, url.QueryEscape(name)))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safeDispName(name), url.QueryEscape(name)))
 	c.String(http.StatusOK, buf.String())
 }
 
@@ -772,9 +772,8 @@ func DownloadWSAttachment(c *gin.Context) {
 	if strings.HasPrefix(att.Mime, "image/") || att.Mime == "application/pdf" {
 		disp = "inline"
 	}
-	enc := url.QueryEscape(att.FileName)
 	c.Header("Content-Type", att.Mime)
-	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, enc, enc))
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, safeDispName(att.FileName), url.QueryEscape(att.FileName)))
 	c.File(p)
 }
 

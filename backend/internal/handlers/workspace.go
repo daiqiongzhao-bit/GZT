@@ -1027,9 +1027,8 @@ func DownloadKnowledgeAttachment(c *gin.Context) {
 		disp = "inline"
 	}
 	// RFC 5987 编码文件名，中文可正常显示
-	enc := url.QueryEscape(att.FileName)
 	c.Header("Content-Type", att.Mime)
-	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, enc, enc))
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, safeDispName(att.FileName), url.QueryEscape(att.FileName)))
 	c.File(p)
 }
 
@@ -1182,9 +1181,8 @@ func DownloadTempAttachment(c *gin.Context) {
 	if isImage {
 		disp = "inline"
 	}
-	enc := url.QueryEscape(att.FileName)
 	c.Header("Content-Type", att.Mime)
-	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, "attachment", enc))
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disp, safeDispName(att.FileName), url.QueryEscape(att.FileName)))
 	c.File(p)
 }
 

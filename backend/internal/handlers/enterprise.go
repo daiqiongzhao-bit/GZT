@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -815,16 +814,6 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	writeXLSX(c, f, fname)
 }
 
-// contentDispositionRFC5987 生成中文文件名安全的 Content-Disposition（RFC 5987）
-func contentDispositionRFC5987(filename string) string {
-	ascii := strings.Map(func(r rune) rune {
-		if r > 127 {
-			return '_'
-		}
-		return r
-	}, filename)
-	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, ascii, url.QueryEscape(filename))
-}
 
 // safeDispName 去除会破坏 Content-Disposition 头的特殊字符（引号/分号/控制符），保留中文
 func safeDispName(name string) string {
