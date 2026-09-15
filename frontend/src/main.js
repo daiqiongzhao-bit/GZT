@@ -3,6 +3,8 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import './styles/global.css'
+// 编辑器与详情展示共用排版（.kb-prose / .kb-view），必须在 global.css 之后引入
+import './styles/editor.css'
 import { applyInitialTheme, bindApp, getInitialTheme } from './theme'
 import { darkTheme, lightTheme } from 'naive-ui'
 import { createDiscreteApi } from 'naive-ui'

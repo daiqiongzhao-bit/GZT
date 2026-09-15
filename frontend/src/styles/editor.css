@@ -1,0 +1,185 @@
+/* ============================================================
+   编辑器与详情展示共用排版样式（v0.28.0）
+   - .kb-prose ：Tiptap 编辑区内容
+   - .kb-view  ：详情阅读态 v-html 内容
+   两者**必须共用同一套规则**，否则会出现「编辑器里看得见、详情页看不见」
+   的不一致（这正是旧实现把 style 整条删掉导致的问题）。
+   因此以下所有选择器统一写成 `.kb-prose, .kb-view` 联合形态。
+   ============================================================ */
+
+.kb-prose,
+.kb-view {
+  padding: 16px 18px;
+  line-height: 1.75;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  word-break: break-word;
+}
+
+/* 阅读态容器不参与编辑交互 */
+.kb-view { cursor: default; }
+
+/* ---------- 标题 ---------- */
+.kb-prose h1, .kb-view h1 { font-size: 24px; font-weight: 700; margin: 20px 0 10px; line-height: 1.35; }
+.kb-prose h2, .kb-view h2 { font-size: 20px; font-weight: 700; margin: 18px 0 8px; line-height: 1.4; }
+.kb-prose h3, .kb-view h3 { font-size: 17px; font-weight: 700; margin: 15px 0 7px; line-height: 1.45; }
+.kb-prose h4, .kb-view h4 { font-size: 15.5px; font-weight: 700; margin: 13px 0 6px; }
+.kb-prose h1:first-child, .kb-view h1:first-child,
+.kb-prose h2:first-child, .kb-view h2:first-child { margin-top: 0; }
+
+.kb-prose p, .kb-view p { margin: 8px 0; }
+
+/* ---------- 行内标记 ---------- */
+.kb-prose strong, .kb-view strong { font-weight: 700; }
+.kb-prose em, .kb-view em { font-style: italic; }
+.kb-prose u, .kb-view u { text-decoration: underline; text-underline-offset: 2px; }
+.kb-prose s, .kb-view s { text-decoration: line-through; }
+.kb-prose sup, .kb-view sup { font-size: 0.75em; vertical-align: super; line-height: 0; }
+.kb-prose sub, .kb-view sub { font-size: 0.75em; vertical-align: sub; line-height: 0; }
+.kb-prose mark, .kb-view mark { padding: 0 2px; border-radius: 3px; color: inherit; }
+
+/* ---------- 链接 ---------- */
+.kb-prose a, .kb-view a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.kb-prose a:hover, .kb-view a:hover { opacity: 0.8; }
+
+/* ---------- 列表 ---------- */
+.kb-prose ul, .kb-view ul,
+.kb-prose ol, .kb-view ol { padding-left: 24px; margin: 8px 0; }
+.kb-prose li, .kb-view li { margin: 3px 0; }
+.kb-prose ul, .kb-view ul { list-style: disc; }
+.kb-prose ol, .kb-view ol { list-style: decimal; }
+.kb-prose li > p, .kb-view li > p { margin: 0; }
+
+/* ---------- 引用 ---------- */
+.kb-prose blockquote, .kb-view blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 4px 0 4px 12px;
+  color: var(--text-dim);
+  margin: 10px 0;
+  background: var(--overlay);
+  border-radius: 0 8px 8px 0;
+}
+
+/* ---------- 代码 ---------- */
+.kb-prose code, .kb-view code {
+  background: var(--overlay-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.kb-prose pre, .kb-view pre {
+  background: var(--overlay-2);
+  padding: 10px 12px;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.kb-prose pre code, .kb-view pre code { background: none; padding: 0; font-size: 12.5px; }
+
+/* ---------- 分割线 ---------- */
+.kb-prose hr, .kb-view hr {
+  border: 0; border-top: 1px dashed var(--glass-border);
+  margin: 16px 0;
+}
+
+/* ---------- 表格 ---------- */
+.kb-prose table, .kb-view table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+  table-layout: fixed;
+}
+.kb-prose th, .kb-view th,
+.kb-prose td, .kb-view td {
+  border: 1px solid var(--glass-border);
+  padding: 6px 10px;
+  vertical-align: top;
+  text-align: left;
+  position: relative;
+  min-width: 40px;
+}
+.kb-prose th, .kb-view th { background: var(--overlay-2); font-weight: 600; }
+.kb-prose td > p, .kb-view td > p { margin: 0; }
+/* Tiptap Table 扩展：选中单元格高亮 + 列宽拖拽手柄 */
+.kb-prose .selectedCell::after {
+  content: ''; position: absolute; inset: 0;
+  background: var(--accent-soft); pointer-events: none; z-index: 2;
+}
+.kb-prose .column-resize-handle {
+  position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px;
+  background: var(--accent); pointer-events: none;
+}
+.kb-prose .tableWrapper { overflow-x: auto; }
+
+/* ---------- 图片 ---------- */
+.kb-prose img, .kb-view img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 6px 0;
+}
+/* 对齐：用 data-align 属性（不用 float，float 属布局类样式被安全白名单禁止） */
+.kb-prose .kb-img-wrap, .kb-view .kb-img-wrap { position: relative; display: block; margin: 8px 0; }
+.kb-prose .kb-img-wrap[data-align='center'], .kb-view .kb-img-wrap[data-align='center'] { text-align: center; }
+.kb-prose .kb-img-wrap[data-align='right'], .kb-view .kb-img-wrap[data-align='right'] { text-align: right; }
+.kb-prose .kb-img-wrap[data-align='left'], .kb-view .kb-img-wrap[data-align='left'] { text-align: left; }
+
+/* 缩放手柄（仅编辑态可见） */
+.kb-prose .kb-img-resize {
+  position: absolute; right: -2px; bottom: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-1);
+  cursor: nwse-resize; opacity: 0; transition: opacity 0.15s;
+}
+.kb-prose .kb-img-wrap:hover .kb-img-resize { opacity: 1; }
+
+/* ---------- 缩进（data-indent 属性）---------- */
+.kb-prose [data-indent='1'], .kb-view [data-indent='1'] { margin-left: 2em; }
+.kb-prose [data-indent='2'], .kb-view [data-indent='2'] { margin-left: 4em; }
+.kb-prose [data-indent='3'], .kb-view [data-indent='3'] { margin-left: 6em; }
+.kb-prose [data-indent='4'], .kb-view [data-indent='4'] { margin-left: 8em; }
+.kb-prose [data-indent='5'], .kb-view [data-indent='5'] { margin-left: 10em; }
+.kb-prose [data-indent='6'], .kb-view [data-indent='6'] { margin-left: 12em; }
+.kb-prose [data-indent='7'], .kb-view [data-indent='7'] { margin-left: 14em; }
+.kb-prose [data-indent='8'], .kb-view [data-indent='8'] { margin-left: 16em; }
+
+/* ---------- 占位符（Placeholder 扩展）---------- */
+.kb-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--text-faint);
+}
+
+/* ---------- 查找高亮（Decoration，纯视觉，不落库）---------- */
+.kb-prose .kb-search-hit { background: rgba(250, 204, 21, 0.42); border-radius: 2px; }
+.kb-prose .kb-search-hit-active { background: #fb923c; color: #1f2937; }
+
+/* ---------- 只读态 ---------- */
+.kb-prose[contenteditable='false'] { background: var(--overlay); color: var(--text-dim); }
+
+/* ============================================================
+   窄屏适配：编辑区与展示区内边距与字号收敛
+   ============================================================ */
+@media (max-width: 820px) {
+  .kb-prose, .kb-view { padding: 12px 12px; font-size: 14px; }
+  .kb-prose h1, .kb-view h1 { font-size: 20px; }
+  .kb-prose h2, .kb-view h2 { font-size: 17px; }
+  .kb-prose h3, .kb-view h3 { font-size: 15.5px; }
+  .kb-prose table, .kb-view table { font-size: 12.5px; }
+  .kb-prose th, .kb-view th,
+  .kb-prose td, .kb-view td { padding: 5px 7px; }
+  /* 缩进在窄屏减半，避免内容被挤成竖排 */
+  .kb-prose [data-indent='1'], .kb-view [data-indent='1'] { margin-left: 1em; }
+  .kb-prose [data-indent='2'], .kb-view [data-indent='2'] { margin-left: 2em; }
+  .kb-prose [data-indent='3'], .kb-view [data-indent='3'] { margin-left: 3em; }
+  .kb-prose [data-indent='4'], .kb-view [data-indent='4'] { margin-left: 4em; }
+  .kb-prose [data-indent='5'], .kb-view [data-indent='5'] { margin-left: 5em; }
+  .kb-prose [data-indent='6'], .kb-view [data-indent='6'] { margin-left: 6em; }
+  .kb-prose [data-indent='7'], .kb-view [data-indent='7'] { margin-left: 7em; }
+  .kb-prose [data-indent='8'], .kb-view [data-indent='8'] { margin-left: 8em; }
+}

@@ -1,0 +1,183 @@
+/**
+ * PasteImageUpload.js —— 粘贴 / 拖拽图片上传（v0.28.0）
+ *
+ * 【为什么用扩展而不是写在组件里】
+ * 旧实现（RichTextEditor.vue:192-313）在 contenteditable 的 @paste 上做 DOM 操作，
+ * 依赖 execCommand('insertHTML')。迁移到 ProseMirror 后，插入必须走 transaction，
+ * 因此改用 Tiptap 的 handlePaste / handleDrop，用 editor.commands.insertContent 落内容。
+ *
+ * 【必须保留的能力】（用户最认可的功能：整篇 Word 复制过来）
+ *   1. 剪贴板 image blob（截图 / 复制的图片）→ 上传 → 插入
+ *   2. Word 的 file:/// 占位图 → 用剪贴板 blob 按序替换（Word 复制时每张图都在剪贴板里）
+ *   3. base64 data:image → 上传后替换 src（避免正文膨胀）
+ *   4. HTML 排版（标题/列表/粗体/对齐）保留 —— 由 Tiptap 原生解析
+ *   5. 拖拽图片文件到编辑器 → 上传插入（本次新增）
+ *
+ * 【上传端点选择】（与原实现完全一致，不可改）
+ *   entryId > 0 → POST /workspace/knowledge/:id/attachments（正式附件，用 stored_name 拼 URL 防枚举）
+ *   entryId = 0 → POST /workspace/temp-attachments（中转缓存，保存时由 adoptTempAttachments 转正）
+ */
+import { Extension } from '@tiptap/core'
+
+/** data:URL → File（用于把粘贴的 base64 图片转成可上传的文件） */
+function dataURLToFile(dataURL, filename) {
+  const m = /^data:([^;]*);base64,(.*)$/.exec(dataURL)
+  const mime = m ? m[1] : 'image/png'
+  const bin = atob(m ? m[2] : '')
+  const arr = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+  return new File([arr], filename, { type: mime })
+}
+
+/** 构造图片节点属性（含附件机制红线属性） */
+function imgAttrs(u) {
+  const attrs = { src: u.dl, alt: u.name || 'image' }
+  if (u.temp) attrs['data-temp-id'] = String(u.id)
+  else attrs['data-att-id'] = String(u.id)
+  attrs['data-att-name'] = u.name || ''
+  return attrs
+}
+
+export const PasteImageUpload = Extension.create({
+  name: 'pasteImageUpload',
+
+  addOptions() {
+    return {
+      /** 上传函数：由组件注入，返回 { dl, id, temp, name } */
+      upload: null,
+      /** 错误回调：由组件注入（用于 emit('imageUploadError') 与提示） */
+      onError: null,
+      /** 是否允许插入图片（disabled 态为 false） */
+      enabled: () => true,
+    }
+  },
+
+  addProseMirrorPlugins() {
+    const { upload, onError, enabled } = this.options
+    const editor = this.editor
+
+    /** 上传并把图片插入到当前选区 */
+    const uploadAndInsert = async (file) => {
+      try {
+        const u = await upload(file)
+        if (!u || !u.dl) return
+        editor.chain().focus().insertContent({ type: 'image', attrs: imgAttrs(u) }).run()
+      } catch (err) {
+        if (onError) onError(err)
+      }
+    }
+
+    /**
+     * 处理富文本 HTML：把内嵌图片（base64 / file:///）上传后就地替换为可访问 URL。
+     * blobs 为剪贴板里的图片文件，用于替换 Word 产生的 file:/// 占位图（按序消费）。
+     */
+    const embedImagesFromHtml = async (html, blobs) => {
+      const tpl = document.createElement('template')
+      tpl.innerHTML = html
+      const imgs = Array.from(tpl.content.querySelectorAll('img'))
+      let bi = 0
+      for (const img of imgs) {
+        const src = img.getAttribute('src') || ''
+        if (/^https?:\/\//i.test(src)) continue // 外链图片保留原样
+
+        if (/^data:image\//i.test(src)) {
+          try {
+            const u = await upload(dataURLToFile(src, 'paste-image.png'))
+            applyImgAttrs(img, u)
+          } catch {
+            /* 单张失败不影响其余 */
+          }
+          continue
+        }
+        if (/^file:\/\//i.test(src)) {
+          // Word 复制的图片常以 file:/// 引用，浏览器无法读取；用剪贴板 blob 按序替换
+          if (bi < blobs.length) {
+            try {
+              const u = await upload(blobs[bi])
+              applyImgAttrs(img, u)
+            } catch {
+              img.remove()
+            }
+            bi++
+          } else {
+            img.remove() // 无数据源，移除避免破图
+          }
+          continue
+        }
+      }
+      return { html: tpl.innerHTML, leftover: blobs.slice(bi) }
+    }
+
+    /** 给 <img> 设置上传后的地址与附件标记 */
+    const applyImgAttrs = (img, u) => {
+      img.setAttribute('src', u.dl)
+      img.removeAttribute('srcset')
+      if (u.temp) {
+        img.setAttribute('data-temp-id', String(u.id))
+        img.removeAttribute('data-att-id')
+      } else {
+        img.setAttribute('data-att-id', String(u.id))
+        img.removeAttribute('data-temp-id')
+      }
+      img.setAttribute('data-att-name', u.name || '')
+      img.setAttribute('alt', u.name || 'image')
+    }
+
+    return [
+      {
+        key: 'kbPasteImage',
+        props: {
+          handlePaste: (view, event) => {
+            if (!enabled()) return false
+            const cd = event.clipboardData
+            if (!cd) return false
+
+            const blobs = Array.from(cd.items || [])
+              .filter((it) => it.kind === 'file' && it.type && it.type.startsWith('image/'))
+              .map((it) => it.getAsFile())
+              .filter(Boolean)
+            const html = cd.getData ? cd.getData('text/html') : ''
+
+            // ① 富文本（来自 Word / 网页 / 手册）
+            if (html) {
+              event.preventDefault()
+              ;(async () => {
+                const { html: handled, leftover } = await embedImagesFromHtml(html, blobs)
+                editor.chain().focus().insertContent(handled).run()
+                // HTML 里没对应 <img> 的剩余 blob（如单独复制的一张图）补插到光标处
+                for (const b of leftover) await uploadAndInsert(b)
+              })()
+              return true
+            }
+
+            // ② 纯图片（无 HTML）：逐张上传插入
+            if (blobs.length) {
+              event.preventDefault()
+              ;(async () => {
+                for (const b of blobs) await uploadAndInsert(b)
+              })()
+              return true
+            }
+
+            // ③ 纯文本：交回默认行为
+            return false
+          },
+
+          handleDrop: (view, event) => {
+            if (!enabled()) return false
+            const dt = event.dataTransfer
+            if (!dt) return false
+            const files = Array.from(dt.files || []).filter((f) => f.type && f.type.startsWith('image/'))
+            if (!files.length) return false
+
+            event.preventDefault()
+            ;(async () => {
+              for (const f of files) await uploadAndInsert(f)
+            })()
+            return true
+          },
+        },
+      },
+    ]
+  },
+})

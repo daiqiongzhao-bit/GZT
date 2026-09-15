@@ -242,6 +242,38 @@ func TestSanitize_StyleEscapesBlocked(t *testing.T) {
 	}
 }
 
+// TestSanitize_ProtoNoFragmentResidue 回归：伪协议必须整条属性删除，不能只删前缀。
+//
+// 旧实现用 `href="javascript:` 只匹配前缀，ReplaceAllString 后留下 `alert(1)">`，
+// 会被下一次解析当成新属性名，输出 `<a alert(1)">` —— 既污染 HTML，
+// 又可能让后续检测失效。
+func TestSanitize_ProtoNoFragmentResidue(t *testing.T) {
+	cases := []string{
+		`<a href="javascript:alert(1)">x</a>`,
+		`<a href='vbscript:msgbox(1)'>x</a>`,
+		`<a href=javascript:alert(1)>x</a>`,
+		`<a href="&#106;avascript:alert(1)">x</a>`,
+		`<img src="javascript:alert(1)">`,
+		`<img src=x onerrorjavascript:alert(1)>`,
+	}
+	for _, in := range cases {
+		got := sanitizeRichContent(in)
+		low := strings.ToLower(got)
+		// ① 不得残留危险协议
+		for _, bad := range []string{"javascript:", "vbscript:"} {
+			if strings.Contains(low, bad) {
+				t.Errorf("伪协议残留\n输入: %s\n输出: %s", in, got)
+			}
+		}
+		// ② 不得出现「属性值碎片被当成新属性」的形态（如 `<a alert(`）
+		for _, frag := range []string{"<a alert", "<a msgbox", "<img alert", " alert(1)\">", " alert(1)>"} {
+			if strings.Contains(got, frag) {
+				t.Errorf("属性碎片残留（%s）\n输入: %s\n输出: %s", frag, in, got)
+			}
+		}
+	}
+}
+
 // ==================== 属性级白名单 ====================
 
 // TestSanitize_AttachmentAttrsPreserved 是「附件转正机制」的红线测试。

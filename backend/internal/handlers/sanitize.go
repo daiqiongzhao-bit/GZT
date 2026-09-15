@@ -57,12 +57,18 @@ func sanitizeRichContent(html string) string {
 	//    放在属性白名单之后，仅服务于协议检测，不影响已完成的属性裁剪。
 	s = decodeHTMLEntities(s)
 
-	// 5) 拦截伪协议（href/src 等，兼容单双引号与无引号）
-	s = reProto.ReplaceAllString(s, "")
-
-	// 6) <a href> 正向白名单：只放行 http(s)/mailto/tel/站内相对路径/锚点。
-	//    正向白名单比黑名单可靠——黑名单要穷举 JaVaScRiPt:、java\tscript: 等变体，正向只需问"是否安全前缀"。
+	// 5) 【关键顺序】<a href> 正向白名单必须**先于**伪协议拦截执行。
+	//
+	//    原因：伪协议拦截若用 `href="javascript:` 只删前缀，会留下 `alert(1)">` 碎片，
+	//    该碎片被下一次属性解析当成新属性名（输出 `<a alert(1)">`），既污染 HTML
+	//    又可能绕过后续检测。
+	//    改用正向白名单先**整条删除**非法 href，就不存在残留问题。
 	s = enforceHrefWhitelist(s)
+
+	// 6) 伪协议兜底拦截：覆盖 href 之外的载体（src/action/formaction/xlink:href），
+	//    以及白名单漏网的场景。reProtoAttr 匹配**整个属性**（属性名 + = + 值），
+	//    一次删干净，不残留碎片。
+	s = reProtoAttr.ReplaceAllString(s, "")
 
 	// 7) 收敛 style 为安全白名单（缺陷修复 + 白名单扩充 + 值级校验）
 	s = stripUnsafeStyle(s)
@@ -92,7 +98,11 @@ const maxRichContentLen = 2 * 1024 * 1024
 
 var (
 	reEventAttr = regexp.MustCompile(`(?i)\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
-	reProto     = regexp.MustCompile(`(?i)(href|src|xlink:href|action|formaction)\s*=\s*(?:"|')?\s*(?:javascript|vbscript|data|file|blob|filesystem)\s*:`)
+	// reProtoAttr 匹配**整个属性**（属性名=值），值以危险协议开头。
+	// ⚠️ 不能用「只匹配前缀」的写法（如 `href="javascript:`）——那样只删前缀会留下
+	// `alert(1)">` 碎片，被下次解析当成新属性（输出 `<a alert(1)">`）。
+	// 这里用引号感知的值捕获，保证整条删除。
+	reProtoAttr = regexp.MustCompile(`(?i)\s(href|src|xlink:href|action|formaction|poster|data|srcset|background)\s*=\s*(?:"\s*(?:javascript|vbscript|data|file|blob|filesystem)\s*:[^"]*"|'\s*(?:javascript|vbscript|data|file|blob|filesystem)\s*:[^']*'|[^\s>]*?(?:javascript|vbscript|data|file|blob|filesystem)\s*:[^\s>]*)`)
 	// 匹配开始标签（捕获标签名 + 属性串）
 	// 属性串用 [^<>]*? 保证不跨标签；内部嵌套引号由 splitTagAttrs 处理
 	reOpenTag = regexp.MustCompile(`(?is)<([a-zA-Z][a-zA-Z0-9]*)((?:\s+[^<>]*?)?)\s*(/?)>`)
