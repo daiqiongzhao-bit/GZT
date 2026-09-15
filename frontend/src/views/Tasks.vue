@@ -727,8 +727,12 @@ function frozenTitle(t) {
 async function toggle(t) {
   if (t.frozen) { alert('该任务已冻结，请先解冻后再操作。'); return }
   const toDone = t.status !== 'done'
-  // 已完成任务点击直接重开，不再弹“重新打开”确认框（编辑/冻结本就直达，无需先重开）
-  if (toDone && !confirm(`确认完成任务「${t.title}」？`)) return
+  if (toDone) {
+    if (!confirm(`确认完成任务「${t.title}」？`)) return
+  } else {
+    // 已完成任务点击"放开"重开同样需要确认，避免误操作清掉完成状态（v0.23.0 曾去掉，本次恢复）
+    if (!confirm(`确认重新打开任务「${t.title}」？`)) return
+  }
   const prev = t.status
   t.status = toDone ? 'done' : 'todo'
   try {
