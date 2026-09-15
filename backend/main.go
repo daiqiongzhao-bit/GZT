@@ -239,6 +239,7 @@ func main() {
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
+			auth.GET("/workspace/knowledge/members", handlers.ListKnowledgeMembers)
 			auth.GET("/workspace/knowledge/export", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledge)
 			auth.GET("/workspace/export/bundle", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportWorkspaceBundle)
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)

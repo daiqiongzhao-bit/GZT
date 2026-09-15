@@ -441,10 +441,16 @@ type KnowledgeEntry struct {
 	// SeedKey 系统自动种入标记（如 "manual"）；空 = 用户自行创建。
 	// 用显式、持久且客户端不可注入的标记来识别自动种入条目，
 	// 避免按 title/category/owner 等可变属性推断带来的误删（误判为用户条目）与漏删（漏判为孤儿）。
-	SeedKey   string         `json:"seed_key,omitempty" gorm:"index"`
-	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"` // 软删除（回收站）
-	UpdatedAt time.Time      `json:"updated_at"`
-	CreatedAt time.Time      `json:"created_at"`
+	SeedKey string `json:"seed_key,omitempty" gorm:"index"`
+	// —— 协作者（v0.27.0）：额外获得本条目「可见 + 编辑」权的人员 ——
+	// EditorIDs / EditorNames 存 JSON 数组字符串（如 [3,7] / ["张三","李四"]），与 WorkHandover.AssigneeIDs 同风格；
+	// EditorIDList 是查询时回填的瞬态字段（gorm:"-"），前端据此直接判断编辑权，无需自行解析 JSON。
+	EditorIDs    string         `json:"editor_ids" gorm:"type:text"`
+	EditorNames  string         `json:"editor_names" gorm:"type:text"`
+	EditorIDList []uint         `json:"editor_id_list" gorm:"-"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"` // 软删除（回收站）
+	UpdatedAt    time.Time      `json:"updated_at"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 // KnowledgeAttachment 知识条目附件：文件存服务器磁盘（与数据库同盘目录），仅存元数据

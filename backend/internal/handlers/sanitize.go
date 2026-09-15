@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,10 @@ func sanitizeRichContent(html string) string {
 		return ""
 	}
 	s := html
+
+	// 0) 删 HTML 注释：从浏览器 / Word 复制粘贴时会带入 <!--StartFragment--> / <!--EndFragment-->
+	// 这类剪贴板标记。它们在编辑器里不显示，却会被当文本存进正文、并在变更日志里露出来，提前清掉。
+	s = htmlCommentRe.ReplaceAllString(s, "")
 
 	// 1) 删危险容器及其全部内容
 	for _, tag := range []string{"script", "style", "iframe", "object", "embed", "link", "meta", "form", "svg", "math"} {
@@ -124,4 +129,79 @@ func sanitizeLink(s string) string {
 		return s
 	}
 	return ""
+}
+
+// ==================== 富文本 → 纯文本（变更日志可读化，v0.27.0） ====================
+
+// htmlCommentRe 匹配 HTML 注释。除常规注释外，重点清理从浏览器 / Word 复制时残留的
+// <!--StartFragment--> / <!--EndFragment--> 剪贴板标记——它们是历史变更记录「太乱」的元凶之一。
+var htmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// htmlSpaceRe 行内连续空白（含全角空格）压缩用；包级预编译，避免逐行重复编译
+var htmlSpaceRe = regexp.MustCompile("[\t\u00a0 ]+")
+
+// htmlToPlainText 把富文本 HTML 转成人类可读的纯文本，用于变更日志里的「修改前 / 修改后」摘录。
+// 不追求排版还原，只为让审计记录看得懂：列表成行、段落换行、解码常见实体、清掉剪贴板残留。
+// 同时兼容历史脏数据——正文里已被当作文本存下来的 <ol><li> / &nbsp; 也会被还原成正常文字。
+func htmlToPlainText(html string) string {
+	if html == "" {
+		return ""
+	}
+	s := html
+	s = htmlCommentRe.ReplaceAllString(s, "")
+	for _, tag := range []string{"script", "style"} {
+		re := regexp.MustCompile(`(?is)<\s*` + tag + `\b[^>]*>[\s\S]*?<\s*/\s*` + tag + `\s*>`)
+		s = re.ReplaceAllString(s, "")
+	}
+	// 列表项先转成带圆点的行，避免信息塌成一行
+	s = regexp.MustCompile(`(?i)<\s*li\b[^>]*>`).ReplaceAllString(s, "\n• ")
+	// 块级标签（含闭合与自闭合）统一换成换行
+	s = regexp.MustCompile(`(?i)<\s*/?\s*(br|p|div|li|tr|h[1-6]|blockquote|pre|ul|ol|table|section|article|header|footer)\b[^>]*/?>`).ReplaceAllString(s, "\n")
+	// 残余的行内标签整体去掉
+	s = regexp.MustCompile(`(?s)<[^>]*>`).ReplaceAllString(s, "")
+	s = decodeHTMLEntities(s)
+	// 归一空白：行内连续空白压成一个空格（保留换行），连续空行只留一个
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	blank := 0
+	for _, ln := range lines {
+		ln = strings.TrimSpace(htmlSpaceRe.ReplaceAllString(ln, " "))
+		if ln == "" {
+			blank++
+			if blank > 1 {
+				continue
+			}
+		} else {
+			blank = 0
+		}
+		out = append(out, ln)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// decodeHTMLEntities 解码常见 HTML 实体（命名实体 + 十进制 / 十六进制数字实体）
+func decodeHTMLEntities(s string) string {
+	named := strings.NewReplacer(
+		"&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">",
+		"&quot;", `"`, "&#39;", "'", "&apos;", "'",
+		"&mdash;", "—", "&ndash;", "–", "&hellip;", "…", "&middot;", "·",
+		"&ldquo;", "“", "&rdquo;", "”", "&lsquo;", "‘", "&rsquo;", "’",
+		"&times;", "×",
+	)
+	s = named.Replace(s)
+	s = regexp.MustCompile(`&#x([0-9a-fA-F]+);`).ReplaceAllStringFunc(s, func(m string) string {
+		v, err := strconv.ParseInt(m[3:len(m)-1], 16, 32)
+		if err != nil {
+			return m
+		}
+		return string(rune(v))
+	})
+	s = regexp.MustCompile(`&#(\d+);`).ReplaceAllStringFunc(s, func(m string) string {
+		v, err := strconv.ParseInt(m[2:len(m)-1], 10, 32)
+		if err != nil {
+			return m
+		}
+		return string(rune(v))
+	})
+	return s
 }

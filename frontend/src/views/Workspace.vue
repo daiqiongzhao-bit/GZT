@@ -196,6 +196,21 @@
                 </div>
               </div>
             </div>
+            <div v-if="canSetEditors" class="collab-box">
+              <label class="fld">协作者（可查看并编辑本条目的同事）</label>
+              <div class="tag-edit">
+                <span v-for="(nm,i) in collabNames" :key="'c'+i" class="chip pick-chip">{{ nm }}<button type="button" class="x" @click="kForm.editor_ids.splice(i,1)" aria-label="移除">×</button></span>
+                <button type="button" class="btn ghost sm" @click="showCollabPicker = !showCollabPicker">{{ showCollabPicker ? '收起名单' : '+ 添加协作者' }}</button>
+              </div>
+              <div v-if="showCollabPicker" class="picker-list">
+                <label v-for="u in collabCandidates" :key="u.id" class="picker-row">
+                  <input type="checkbox" :checked="kForm.editor_ids.includes(u.id)" @change="toggleCollab(u.id)" />
+                  <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
+                </label>
+                <div v-if="!collabCandidates.length" class="dim picker-empty">没有可选的同事</div>
+              </div>
+              <p class="att-hint dim">协作者不受「可见范围」限制：即使条目设为「仅自己可见」，TA 也能看到并编辑。名单仅创建者与超级管理员可调整；删除、置顶仍限创建者与超级管理员。</p>
+            </div>
             <div class="fg2 bot">
               <div class="scope-switch">
                 <label class="fld">可见范围</label>
@@ -265,9 +280,9 @@
                 <span class="k-foot-ops">
                   <button class="icon-btn" :class="{on:k.starred}" :title="k.starred?'取消收藏':'收藏'" @click.stop="toggleStar(k)">{{ k.starred ? '★' : '☆' }}</button>
                   <button v-if="k.owner_id===auth.user?.id || auth.isSuper" class="icon-btn" :class="{on:k.pinned}" :title="k.pinned?'取消置顶':'置顶'" @click.stop="togglePin(k)">{{ k.pinned ? '📌' : '📍' }}</button>
-                  <span v-if="k.owner_id === auth.user?.id || auth.isSuper" class="ops">
+                  <span v-if="canEditK(k)" class="ops">
                     <button class="del" @click="openEditK(k)">编辑</button>
-                    <button class="del danger" @click="removeK(k)">删除</button>
+                    <button v-if="canManageK(k)" class="del danger" @click="removeK(k)">删除</button>
                   </span>
                 </span>
               </div>
@@ -292,6 +307,7 @@
           <h3 class="modal-title">{{ viewK.title }}</h3>
           <div class="modal-meta dim">
             {{ viewK.owner_name === (auth.user && auth.user.username) ? '我' : viewK.owner_name }} · 更新于 {{ fmtTime(viewK.updated_at || viewK.created_at) }} · 👁 {{ viewK.view_count || 0 }}
+            <span v-if="kEditorsText(viewK)"> · ✍ 协作者：{{ kEditorsText(viewK) }}</span>
           </div>
 
           <!-- 子标签：正文 / 评论 / 版本 / 双链 -->
@@ -367,7 +383,7 @@
               <div v-for="v in kVersions" :key="v.id" class="version-item">
                 <div class="version-head"><span class="chip accent">v{{ v.version }}</span><b>{{ v.operator_name }}</b><span class="dim">{{ fmtTime(v.created_at) }}</span></div>
                 <div class="version-meta dim">{{ v.title }} · {{ v.category || '未分类' }}</div>
-                <button v-if="viewK.owner_id===auth.user?.id || auth.isSuper" class="btn ghost sm" @click="restoreVersion(v.id)">回滚到此版本</button>
+                <button v-if="canEditK(viewK)" class="btn ghost sm" @click="restoreVersion(v.id)">回滚到此版本</button>
               </div>
             </div>
 
@@ -398,14 +414,16 @@
                     <b>{{ h.operator_name }}</b>
                     <span class="dim">{{ fmtTime(h.created_at) }}</span>
                   </div>
-                  <pre v-if="h.detail" class="hist-detail">{{ h.detail }}</pre>
+                  <div v-if="h.detail" class="hist-detail">
+                    <div v-for="(ln,i) in histLines(h.detail)" :key="i" class="hist-line" :class="ln.cls">{{ ln.text || ' ' }}</div>
+                  </div>
                 </li>
               </ul>
             </div>
           </div>
 
           <div class="modal-foot">
-            <button v-if="viewK.owner_id === auth.user?.id" class="btn ghost" @click="editFromView">编辑</button>
+            <button v-if="canEditK(viewK)" class="btn ghost" @click="editFromView">编辑</button>
             <button class="btn primary" @click="viewK = null">关闭</button>
           </div>
         </div>
@@ -969,7 +987,8 @@ const kStarred = ref(false)
 const editingK = ref(false)
 const savingK = ref(false)
 const viewK = ref(null)
-const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published' })
+const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: 0 })
+const showCollabPicker = ref(false)
 const kTagDraft = ref('')
 
 let kTimer = null
@@ -1058,15 +1077,17 @@ function addKTag() {
 }
 
 function openNewK() {
-  Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published' })
+  Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
   kTagDraft.value = ''
+  showCollabPicker.value = false
   kAtts.value = []
   pendingAtts.value = []
   editingK.value = true
 }
 function openEditK(k) {
-  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published' })
+  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published', editor_ids: Array.isArray(k.editor_id_list) ? [...k.editor_id_list] : [], owner_id: k.owner_id || 0 })
   kTagDraft.value = ''
+  showCollabPicker.value = false
   editingK.value = true
   loadKAtts(k.id)
 }
@@ -1076,6 +1097,8 @@ async function saveK() {
   try {
     let savedId = kForm.id
     const payload = { title: kForm.title, category: kForm.category, content: kForm.content, scope: kForm.scope, tags: kForm.tags, parent_id: kForm.parent_id, status: kForm.status }
+    // 协作者名单只有创建者/超管能改；协作者本人编辑时不下发，避免越权扩权（服务端亦会二次校验）
+    if (canSetEditors.value) payload.editor_ids = [...kForm.editor_ids]
     if (kForm.id) {
       await api.put('/workspace/knowledge/' + kForm.id, payload)
       toast('已保存')
@@ -1189,7 +1212,7 @@ function openTemplates() { templateModal.value = true; loadTemplates() }
 async function applyTemplate(t) {
   try {
     const r = await api.get('/workspace/knowledge/templates/' + t.id)
-    Object.assign(kForm, { id: 0, title: r.title || t.title, category: r.category || '', content: r.content || '', scope: 'department', tags: parseTags(r.tags || t.tags), parent_id: 0, status: 'published' })
+    Object.assign(kForm, { id: 0, title: r.title || t.title, category: r.category || '', content: r.content || '', scope: 'department', tags: parseTags(r.tags || t.tags), parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
     kTagDraft.value = ''
     editingK.value = true
     templateModal.value = false
@@ -1318,7 +1341,72 @@ async function loadKAtts(id) {
   try { kAtts.value = await api.get('/workspace/knowledge/' + id + '/attachments') }
   catch (e) { toast(e.response?.data?.error || '附件加载失败', 'error') }
 }
-function canEditK(k) { return k && (auth.user?.id === k.owner_id || auth.isSuper) }
+// 条目编辑权（v0.27.0，与服务端 kCanEdit 同口径）：
+// 创建者 / 超级管理员 / 协作者 / 本部门管理员（部门管理员的改动会记进变更记录）
+function canEditK(k) {
+  if (!k || !auth.user) return false
+  if (auth.isSuper || auth.user.id === k.owner_id) return true
+  if (Array.isArray(k.editor_id_list) && k.editor_id_list.includes(auth.user.id)) return true
+  if (auth.user.role === 'dept_admin' && k.dept_id && auth.user.dept_id === k.dept_id) return true
+  return false
+}
+// 管理权（删除 / 改协作者名单）：仍限创建者与超级管理员
+function canManageK(k) { return !!k && (auth.isSuper || auth.user?.id === k.owner_id) }
+// 协作者名单可编辑：新建时人人是创建者；编辑时看归属
+const canSetEditors = computed(() => {
+  if (!auth.user) return false
+  if (auth.isSuper) return true
+  if (!kForm.id) return true
+  return kForm.owner_id === auth.user.id
+})
+// 协作者候选：本部门成员，排除自己
+const collabCandidates = computed(() => (users.value || []).filter((u) => !u.frozen && u.id !== auth.user?.id))
+const collabNames = computed(() => (kForm.editor_ids || []).map((id) => {
+  const u = (users.value || []).find((x) => x.id === id)
+  return u ? u.name : ('#' + id)
+}))
+function toggleCollab(uid) {
+  const i = kForm.editor_ids.indexOf(uid)
+  if (i >= 0) kForm.editor_ids.splice(i, 1)
+  else kForm.editor_ids.push(uid)
+}
+function kEditorsText(k) {
+  if (!k) return ''
+  try {
+    const a = JSON.parse(k.editor_names || '[]')
+    if (Array.isArray(a) && a.length) return a.join('、')
+  } catch (e) { /* 脏数据忽略 */ }
+  return ''
+}
+
+// 变更记录正文可读化：早期版本的日志直接存了富文本原文，会露出 <ol><li> / &nbsp; / 剪贴板标记。
+// 这里统一清洗成纯文本，历史脏记录也能看得懂。
+function fmtHistText(s) {
+  if (!s) return ''
+  let t = String(s)
+  t = t.replace(/<!--[\s\S]*?-->/g, '')
+  t = t.replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  t = t.replace(/<\s*li\b[^>]*>/gi, '\n· ')
+  t = t.replace(/<\s*\/?\s*(p|div|li|tr|h[1-6]|blockquote|pre|ul|ol|table)\b[^>]*>/gi, '\n')
+  t = t.replace(/<[^>]*>/g, '')
+  t = t.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+  t = t.replace(/&quot;/gi, '"').replace(/&#39;/g, "'").replace(/&mdash;/g, '—').replace(/&hellip;/g, '…')
+  t = t.replace(/&#(\d+);/g, (m, d) => { const n = parseInt(d, 10); return n ? String.fromCharCode(n) : m })
+  t = t.replace(/[ \t\u00a0]+/g, ' ').replace(/\n{3,}/g, '\n\n')
+  return t.trim()
+}
+// 逐行标注：修改前（del）/ 修改后（add）分色
+function histLines(detail) {
+  const out = []
+  let mode = ''
+  for (const raw of fmtHistText(detail).split('\n')) {
+    let line = raw
+    if (line.indexOf('【修改前】') === 0) { mode = 'del'; line = '修改前：' + line.slice(5) }
+    else if (line.indexOf('【修改后】') === 0) { mode = 'add'; line = '修改后：' + line.slice(5) }
+    out.push({ text: line, cls: mode })
+  }
+  return out
+}
 function canDelAtt(a) {
   if (!viewK.value) return false
   return auth.isSuper || viewK.value.owner_id === auth.user?.id || a.owner_id === auth.user?.id
@@ -1834,7 +1922,7 @@ onMounted(() => {
   refreshKnowledge()
   loadLogs()
   loadHandovers()
-  if (auth.isSuper || auth.canManage) loadUsers()
+  loadUsers() // 知识库「协作者」选择器需要部门成员列表（/users 对已登录用户开放，按部门范围返回）
   useAutoRefresh(loadK, true)
   document.addEventListener('click', onKbDocClick)
 })
@@ -2152,6 +2240,16 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .hist-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .hist-act { font-size: 11px; padding: 1px 7px; }
 .hist-detail { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12.5px; color: var(--text-dim, rgba(255,255,255,0.65)); line-height: 1.6; }
+.hist-line { padding: 0 2px; border-radius: 4px; }
+.hist-line.del { color: #e5484d; background: rgba(229,72,77,.08); text-decoration: line-through; text-decoration-color: rgba(229,72,77,.5); }
+.hist-line.add { color: #30a46c; background: rgba(48,164,108,.10); }
+/* 知识库协作者选择区（v0.27.0） */
+.collab-box { margin: 10px 0 4px; }
+.collab-box .tag-edit { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.collab-box .picker-list { margin-top: 6px; max-height: 200px; overflow: auto; border: 1px solid var(--hairline); border-radius: 8px; padding: 6px 8px; background: var(--bg-soft, rgba(255,255,255,.6)); }
+.collab-box .picker-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
+.collab-box .picker-name { font-size: 13px; }
+.collab-box .picker-empty { padding: 8px 4px; font-size: 12.5px; }
 /* ===== v0.16.0 工作日志 / 交接接力 补齐 ===== */
 
 /* 筛选栏 */

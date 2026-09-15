@@ -213,6 +213,7 @@ func GetKnowledge(c *gin.Context) {
 		UpdateColumn("view_count", gorm.Expr("view_count + 1"))
 	var fresh models.KnowledgeEntry
 	db.DB.First(&fresh, e.ID)
+	fresh.EditorIDList = parseUintList(fresh.EditorIDs) // v0.27.0：回填协作者 id，供前端判断编辑权
 	c.JSON(http.StatusOK, fresh)
 }
 
@@ -472,12 +473,12 @@ func mentionComment(c *gin.Context, e *models.KnowledgeEntry, cm models.Knowledg
 				continue
 			}
 			db.DB.Create(&models.Notification{
-				UserID:     u.ID,
-				Kind:       "user",
-				Title:      "有人在知识库「" + e.Title + "」提到了你",
-				Content:    cl.Username + " 评论：" + clipRunes(cm.Content, 120),
-				ActorID:    cl.UserID,
-				ActorName:  cl.Username,
+				UserID:    u.ID,
+				Kind:      "user",
+				Title:     "有人在知识库「" + e.Title + "」提到了你",
+				Content:   cl.Username + " 评论：" + clipRunes(cm.Content, 120),
+				ActorID:   cl.UserID,
+				ActorName: cl.Username,
 			})
 		}
 	}
@@ -520,7 +521,7 @@ func ListKnowledgeVersions(c *gin.Context) {
 
 // RestoreKnowledgeVersion POST /workspace/knowledge/:id/version/:vid/restore 回滚到指定版本
 func RestoreKnowledgeVersion(c *gin.Context) {
-	e, ok := loadOwnedKnowledge(c)
+	e, ok := loadEditableKnowledge(c)
 	if !ok {
 		return
 	}

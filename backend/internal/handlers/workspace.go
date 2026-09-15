@@ -39,9 +39,148 @@ func scopeVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 	if cl.Role == models.RoleSuperAdmin {
 		return q // 超管可见全部
 	}
-	// 本人(含所有 scope) 或 全公司共享 或 同部门共享
-	return q.Where("(owner_id = ?) OR (scope = ?) OR (scope = ? AND dept_id = ?)",
-		cl.UserID, models.ScopePublic, models.ScopeDepartment, cl.DeptID)
+	// 本人(含所有 scope) 或 全公司共享 或 同部门共享 或 被列为协作者（v0.27.0）
+	ec, ea := editorVisibleClause(cl.UserID)
+	args := append([]interface{}{cl.UserID, models.ScopePublic, models.ScopeDepartment, cl.DeptID}, ea...)
+	return q.Where("(owner_id = ?) OR (scope = ?) OR (scope = ? AND dept_id = ?) OR "+ec, args...)
+}
+
+// ---------- 协作者与编辑权（v0.27.0）----------
+
+// parseUintList 解析 JSON 数组串为 uint 列表；非法内容返回空列表而不报错（容错优先，日志/权限不该因脏数据崩）
+func parseUintList(s string) []uint {
+	out := []uint{}
+	if strings.TrimSpace(s) == "" {
+		return out
+	}
+	var arr []uint
+	if err := json.Unmarshal([]byte(s), &arr); err == nil {
+		return arr
+	}
+	// 容错：兼容非 JSON 的逗号分隔写法 "1,2"
+	for _, p := range strings.Split(s, ",") {
+		if v, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
+			out = append(out, uint(v))
+		}
+	}
+	return out
+}
+
+// normIDList 归一化 id 列表：剔除 0、去重，输出无空格的 JSON 数组串（如 "[3,7]"）
+func normIDList(ids []uint) string {
+	seen := map[uint]bool{}
+	out := []uint{}
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+// namesForIDs 按 id 顺序取姓名，输出 JSON 数组串（找不到的人忽略，保持与 id 列表同序）
+func namesForIDs(ids []uint) string {
+	names := []string{}
+	if len(ids) > 0 {
+		var us []models.User
+		db.DB.Where("id IN ?", ids).Find(&us)
+		m := map[uint]string{}
+		for _, u := range us {
+			m[u.ID] = u.Name
+		}
+		for _, id := range ids {
+			if n, ok := m[id]; ok {
+				names = append(names, n)
+			}
+		}
+	}
+	b, _ := json.Marshal(names)
+	return string(b)
+}
+
+// namesTextFromJSON 把姓名 JSON 数组串转成「张三、李四」；空名单显示「（空）」
+func namesTextFromJSON(s string) string {
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err != nil || len(arr) == 0 {
+		return "（空）"
+	}
+	return strings.Join(arr, "、")
+}
+
+// editorVisibleClause 生成「editor_ids 字段包含某人 id」的匹配条件。
+// editor_ids 存的是无空格的 JSON 数组串（如 "[3,7]"），故按 4 种边界分别 LIKE，
+// 避免用 ",3," 之类误匹配（如 13 命中 3）。
+func editorVisibleClause(uid uint) (string, []interface{}) {
+	u := strconv.FormatUint(uint64(uid), 10)
+	return "(editor_ids = ? OR editor_ids LIKE ? OR editor_ids LIKE ? OR editor_ids LIKE ?)",
+		[]interface{}{"[" + u + "]", "[" + u + ",%", "%," + u + ",%", "%," + u + "]"}
+}
+
+// kIsEditor 判断某人是否在该条目的协作者名单内
+func kIsEditor(e *models.KnowledgeEntry, uid uint) bool {
+	for _, id := range parseUintList(e.EditorIDs) {
+		if id == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// kCanEdit 判断当前用户能否编辑该条目（v0.27.0）。
+//   - 超级管理员：全部可编辑
+//   - 创建者：可编辑
+//   - 不可见者：一律拒绝（private 条目对非协作者直接挡掉，避免"改得到但看不到"）
+//   - 协作者：可编辑
+//   - 部门管理员：本部门条目可编辑（他人共享过来的 SOP / 流程也能维护）
+func kCanEdit(cl *models.Claims, e *models.KnowledgeEntry) bool {
+	if cl == nil {
+		return false
+	}
+	if cl.Role == models.RoleSuperAdmin {
+		return true
+	}
+	if e.OwnerID == cl.UserID {
+		return true
+	}
+	if !kCanRead(cl, e) {
+		return false
+	}
+	if kIsEditor(e, cl.UserID) {
+		return true
+	}
+	if cl.Role == models.RoleDeptAdmin && e.DeptID != 0 && e.DeptID == cl.DeptID {
+		return true
+	}
+	return false
+}
+
+// hydrateKnowledgeEditors 回填瞬态字段 EditorIDList，供前端直接判断编辑权（不落库）
+func hydrateKnowledgeEditors(list []models.KnowledgeEntry) {
+	for i := range list {
+		list[i].EditorIDList = parseUintList(list[i].EditorIDs)
+	}
+}
+
+// ListKnowledgeMembers GET /workspace/knowledge/members
+// 协作者候选成员：普通用户取本部门（含子部门），超管取全部。只返回 id / name / dept，不额外暴露资料。
+func ListKnowledgeMembers(c *gin.Context) {
+	cl := middleware.GetClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		return
+	}
+	q := db.DB.Model(&models.User{}).Select("id, name, dept_id, role")
+	if cl.Role != models.RoleSuperAdmin {
+		if ids := deptScopeIDs(c); len(ids) > 0 {
+			q = q.Where("dept_id IN ?", ids)
+		}
+	}
+	var list []models.User
+	q.Order("dept_id asc, id asc").Find(&list)
+	c.JSON(http.StatusOK, list)
 }
 
 // ============================ 迷你知识库 ============================
@@ -168,6 +307,7 @@ func ListKnowledge(c *gin.Context) {
 		}
 		return list[i].UpdatedAt.After(list[j].UpdatedAt)
 	})
+	hydrateKnowledgeEditors(list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -194,6 +334,8 @@ func CreateKnowledge(c *gin.Context) {
 		Tags     []string `json:"tags"`
 		ParentID uint     `json:"parent_id"`
 		Status   string   `json:"status"` // draft | published
+		// 协作者（可编辑人）id 列表（v0.27.0）
+		EditorIDs []uint `json:"editor_ids"`
 		// 编辑期（条目尚未保存）上传到中转缓存的附件 id：内嵌图片 + 下方「附件」列表文件
 		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
@@ -225,6 +367,19 @@ func CreateKnowledge(c *gin.Context) {
 		ParentID:  req.ParentID,
 		Status:    req.Status,
 	}
+	if len(req.EditorIDs) > 0 {
+		seen := map[uint]bool{}
+		dst := []uint{}
+		for _, id := range req.EditorIDs {
+			if id == 0 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			dst = append(dst, id)
+		}
+		entry.EditorIDs = normIDList(dst)
+		entry.EditorNames = namesForIDs(dst)
+	}
 	if err := db.DB.Create(&entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -244,7 +399,7 @@ func CreateKnowledge(c *gin.Context) {
 	addLog(c, cl.UserID, cl.Username, "新增知识库: "+entry.Title)
 	recordKnowledgeLog(entry.ID, cl, "create",
 		fmt.Sprintf("创建条目：标题「%s」、分类「%s」、可见范围「%s」。正文：%s",
-			entry.Title, entry.Category, scopeLabelShort(entry.Scope), clipRunes(entry.Content, 200)))
+			entry.Title, entry.Category, scopeLabelShort(entry.Scope), clipRunes(htmlToPlainText(entry.Content), 200)))
 	c.JSON(http.StatusOK, entry)
 }
 
@@ -264,9 +419,26 @@ func loadOwnedKnowledge(c *gin.Context) (*models.KnowledgeEntry, bool) {
 	return &entry, true
 }
 
-// UpdateKnowledge 更新知识条目（仅创建者）
+// loadEditableKnowledge 加载一条并校验「当前用户有编辑权」（创建者 / 超管 / 协作者 / 本部门管理员）。
+// v0.27.0 起 UpdateKnowledge、版本回滚、附件增删走这里；
+// 删除 / 彻底删除 / 置顶 / 回收站恢复仍只限创建者与超管（破坏性动作不放给协作者）。
+func loadEditableKnowledge(c *gin.Context) (*models.KnowledgeEntry, bool) {
+	var entry models.KnowledgeEntry
+	if err := db.DB.First(&entry, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "条目不存在"})
+		return nil, false
+	}
+	cl := middleware.GetClaims(c)
+	if !kCanEdit(cl, &entry) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权编辑该条目（仅创建者、协作者、本部门管理员或超级管理员）"})
+		return nil, false
+	}
+	return &entry, true
+}
+
+// UpdateKnowledge 更新知识条目（创建者 / 协作者 / 本部门管理员 / 超管）
 func UpdateKnowledge(c *gin.Context) {
-	entry, ok := loadOwnedKnowledge(c)
+	entry, ok := loadEditableKnowledge(c)
 	if !ok {
 		return
 	}
@@ -279,6 +451,8 @@ func UpdateKnowledge(c *gin.Context) {
 		Tags     []string `json:"tags"`
 		ParentID uint     `json:"parent_id"`
 		Status   string   `json:"status"`
+		// 协作者（可编辑人）id 列表（v0.27.0）；仅创建者 / 超管可改
+		EditorIDs []uint `json:"editor_ids"`
 		// 编辑期（新建未保存时）上传到中转缓存的附件 id
 		TempAttachmentIDs []uint `json:"temp_attachment_ids"`
 	}
@@ -292,6 +466,21 @@ func UpdateKnowledge(c *gin.Context) {
 	}
 	// 记录修改前的旧值（用于变更日志的「修改前/后内容」）
 	oldTitle, oldCategory, oldContent, oldScope, oldTags := entry.Title, entry.Category, entry.Content, entry.Scope, entry.Tags
+	oldEditors := entry.EditorNames
+	// 协作者名单仅创建者 / 超级管理员可改：否则协作者编辑正文时顺带把自己的人也能加进来（越权扩权）
+	if req.EditorIDs != nil && (entry.OwnerID == cl.UserID || cl.Role == models.RoleSuperAdmin) {
+		seen := map[uint]bool{}
+		dst := []uint{}
+		for _, id := range req.EditorIDs {
+			if id == 0 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			dst = append(dst, id)
+		}
+		entry.EditorIDs = normIDList(dst)
+		entry.EditorNames = namesForIDs(dst)
+	}
 	entry.Title = strings.TrimSpace(req.Title)
 	entry.Category = strings.TrimSpace(req.Category)
 	// 服务端白名单净化，防存储型 XSS（纵深防御）
@@ -337,8 +526,13 @@ func UpdateKnowledge(c *gin.Context) {
 		parts = append(parts, fmt.Sprintf("可见范围：%s → %s", scopeLabelShort(oldScope), scopeLabelShort(entry.Scope)))
 	}
 	if oldContent != entry.Content {
+		// 正文存的是富文本 HTML：直接塞进日志会露出 <ol><li> / &nbsp; / 剪贴板标记，记录没法读。
+		// 这里先转成纯文本再摘录，并统一「修改前 / 修改后」两段式，前端按段落分色展示。
 		parts = append(parts, fmt.Sprintf("正文：\n【修改前】%s\n【修改后】%s",
-			clipRunes(oldContent, 400), clipRunes(entry.Content, 400)))
+			clipRunes(htmlToPlainText(oldContent), 400), clipRunes(htmlToPlainText(entry.Content), 400)))
+	}
+	if oldEditors != entry.EditorNames {
+		parts = append(parts, fmt.Sprintf("协作者：%s → %s", namesTextFromJSON(oldEditors), namesTextFromJSON(entry.EditorNames)))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "内容未发生变化（仅刷新时间）")
@@ -692,10 +886,10 @@ func CreateHandover(c *gin.Context) {
 		Todo:          req.Todo,
 		SenderID:      cl.UserID,
 		SenderName:    cl.Username,
-		AssigneeID:    cleaned[0],       // 主接收人（兼容）
+		AssigneeID:    cleaned[0], // 主接收人（兼容）
 		AssigneeName:  nameByID[cleaned[0]],
-		AssigneeIDs:   string(idsJSON),  // 全员 ID（JSON 数组）
-		AssigneeNames: string(namesJSON),// 全员姓名（JSON 数组）
+		AssigneeIDs:   string(idsJSON),   // 全员 ID（JSON 数组）
+		AssigneeNames: string(namesJSON), // 全员姓名（JSON 数组）
 		DeptID:        cl.DeptID,
 		Status:        models.HandoverPending,
 		Priority:      pri,
@@ -891,6 +1085,10 @@ func kCanRead(cl *models.Claims, e *models.KnowledgeEntry) bool {
 	if e.OwnerID == cl.UserID {
 		return true
 	}
+	// v0.27.0：协作者显式授权即可见（不受 scope 限制，private 条目也一样）
+	if kIsEditor(e, cl.UserID) {
+		return true
+	}
 	if e.Scope == models.ScopePublic {
 		return true // 全公司共享（v0.16.0）
 	}
@@ -932,8 +1130,8 @@ func UploadKnowledgeAttachment(c *gin.Context) {
 		return
 	}
 	cl := middleware.GetClaims(c)
-	if e.OwnerID != cl.UserID && cl.Role != models.RoleSuperAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者可上传附件"})
+	if !kCanEdit(cl, e) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者、协作者、本部门管理员或超级管理员可上传附件"})
 		return
 	}
 	// P0-1：先把多部分解析上限拉到 maxAttachSize，否则 32MB+ 的上传会被标准库直接截断
@@ -1043,8 +1241,8 @@ func DeleteKnowledgeAttachment(c *gin.Context) {
 	var e models.KnowledgeEntry
 	_ = db.DB.First(&e, att.EntryID)
 	cl := middleware.GetClaims(c)
-	if cl.Role != models.RoleSuperAdmin && !(e.ID != 0 && e.OwnerID == cl.UserID) && att.OwnerID != cl.UserID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者或上传者可删除"})
+	if cl.Role != models.RoleSuperAdmin && !(e.ID != 0 && e.OwnerID == cl.UserID) && att.OwnerID != cl.UserID && !(e.ID != 0 && kCanEdit(cl, &e)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅条目创建者、协作者或上传者可删除"})
 		return
 	}
 	p := filepath.Join(kAttachmentDir(), filepath.Base(att.StoredName))
@@ -1145,11 +1343,11 @@ func UploadTempAttachment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":          att.ID,
-		"file_name":   att.FileName,
-		"mime":        att.Mime,
-		"size":        att.Size,
-		"stored_name": att.StoredName,
+		"id":           att.ID,
+		"file_name":    att.FileName,
+		"mime":         att.Mime,
+		"size":         att.Size,
+		"stored_name":  att.StoredName,
 		"download_url": "/api/workspace/temp-attachments/" + att.StoredName + "/download",
 	})
 }
