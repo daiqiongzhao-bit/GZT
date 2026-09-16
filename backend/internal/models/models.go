@@ -460,6 +460,38 @@ type KnowledgeEntry struct {
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
+// KnowledgeDraft 知识库编辑草稿（v0.31.0）：自动保存的工作缓存，与已发布条目完全分离。
+//
+// 设计目标：用户在编辑器里写一半时崩溃 / 误关网页 / 清了浏览器缓存，下次打开能找回。
+// 双写策略：
+//   - 本地草稿：浏览器 IndexedDB，按 entry_id（已有条目）或 client_draft_id（新建条目，
+//     由前端生成的稳定会话键）保存，崩溃秒恢复、零后端依赖。
+//   - 服务端草稿：本表，按 (user_id, entry_id|client_draft_id) 唯一，跨设备 / 清缓存也不丢。
+//
+// 与 KnowledgeEntry.Status(draft|published) 的区别：后者是条目自身的「显式存为草稿」生命周期，
+// 本表是「编辑过程中自动暂存的内容缓存」，saveK 成功后即删除，不进入列表 / 检索 / 导出。
+//
+// 权限：草稿归属当前用户（user_id 隔离）；已有条目的草稿还要求对该条目可编辑（kCanEdit），
+// 读者不能往别人的条目塞草稿。新建条目的草稿只需登录即可（client_draft_id 自生成）。
+type KnowledgeDraft struct {
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	UserID        uint      `json:"user_id" gorm:"index"`                 // 草稿归属人（隔离）
+	EntryID       uint      `json:"entry_id" gorm:"index;default:0"`      // 0 = 尚未创建条目（用 client_draft_id 定位）
+	ClientDraftID string    `json:"client_draft_id" gorm:"size:64;index"` // 新建条目的客户端稳定键
+	Kind          string    `json:"kind" gorm:"size:16;default:doc"`      // doc | mind | flow
+	Content       string    `json:"content" gorm:"type:text"`             // doc=HTML；mind/flow=绘图库 JSON
+	Title         string    `json:"title" gorm:"size:255"`
+	Category      string    `json:"category" gorm:"size:64"`
+	Scope         string    `json:"scope" gorm:"size:16"`
+	Tags          string    `json:"tags" gorm:"type:text"`       // JSON 数组字符串，如 ["SOP"]
+	ParentID      uint      `json:"parent_id" gorm:"default:0"`  // 目录树父节点
+	Status        string    `json:"status" gorm:"size:16"`       // 暂存的条目状态（draft|published）
+	EditorIDs     string    `json:"editor_ids" gorm:"type:text"` // JSON 数组字符串
+	SavedAt       time.Time `json:"saved_at"`                    // 最近一次自动保存时间（恢复时取最新）
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // KnowledgeAttachment 知识条目附件：文件存服务器磁盘（与数据库同盘目录），仅存元数据
 type KnowledgeAttachment struct {
 	ID         uint      `json:"id" gorm:"primaryKey"`

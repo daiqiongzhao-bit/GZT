@@ -201,6 +201,14 @@
         <!-- 详情 / 编辑：右侧抽屉 -->
         <transition name="kb-drawer">
           <div v-if="viewK || editingK" class="kb-drawer-mask" @click.self="closeKDrawer">
+            <!-- 自动保存草稿恢复横幅（v0.31.0）：检测到未保存草稿时提示恢复 / 丢弃 -->
+            <div v-if="pendingDraft && editingK" class="kb-draft-bar">
+              <span class="kb-draft-tip">📝 检测到未保存的草稿（保存于 {{ fmtTime(pendingDraft.savedAt) }}）</span>
+              <div class="kb-draft-acts">
+                <button class="btn primary sm" @click="kRecoverDraft">恢复</button>
+                <button class="btn ghost sm" @click="kDiscardDraft">丢弃</button>
+              </div>
+            </div>
             <KnowledgeDetail
               class="kb-drawer-panel"
               :entry="viewK"
@@ -755,6 +763,7 @@ import KnowledgeDetail from '@/components/knowledge/KnowledgeDetail.vue'
 import KnowledgeStats from '@/components/knowledge/KnowledgeStats.vue'
 import KnowledgeTrash from '@/components/knowledge/KnowledgeTrash.vue'
 import { diagramPreview } from '@/utils/diagram'
+import { localDraft, serverDraft, localKey, newClientDraftID } from '@/utils/draft'
 
 // 渲染前净化（纵深防御，与后端 sanitizeRichContent 同口径）防存储型 XSS
 //
@@ -1042,6 +1051,122 @@ const kbNarrow = ref(false)      // 是否为单栏紧凑模式（<820px），�
 let kFirstLoaded = false
 // kind：内容类型（v0.30.0）—— doc 富文本文档 / mind 思维导图 / flow 流程图
 const kForm = reactive({ id: 0, title: '', category: '', content: '', kind: 'doc', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: 0 })
+
+// ---------- 知识库编辑草稿：本地 + 服务端双写自动保存（v0.31.0）----------
+// 目标：写一半崩溃 / 误关网页 / 清缓存，下次打开能找回。
+// 本地：IndexedDB 即时落盘（防崩溃）；服务端：节流双写（防丢 / 跨设备）。
+const kDraftKey = ref('')            // 新建条目的稳定会话键（已有条目走 entry_id）
+const pendingDraft = ref(null)       // 恢复横幅：{ savedAt, snapshot, source }
+const kBaseline = ref('')            // 最近一次「已保存态」快照串（判断是否有未保存改动）
+const kHasUnsaved = ref(false)       // 自上次落盘后是否有未保存改动（beforeunload 用）
+let _localTimer = null
+let _serverTimer = null
+let _lastServerSave = 0
+const SERVER_DRAFT_INTERVAL = 12000  // 服务端草稿节流 12s
+const KB_NEW_KEY_STORE = 'gzt:kb-new-draft-key'
+
+function kSnapFields() {
+  return {
+    title: kForm.title, content: kForm.content, kind: kForm.kind || 'doc',
+    category: kForm.category, scope: kForm.scope, tags: [...(kForm.tags || [])],
+    parent_id: kForm.parent_id || 0, status: kForm.status, editor_ids: [...(kForm.editor_ids || [])],
+  }
+}
+function kSnapStr() { return JSON.stringify(kSnapFields()) }
+function kDraftParams() {
+  return kForm.id ? { entry_id: kForm.id } : { client_draft_id: kDraftKey.value }
+}
+function kMarkBaseline() { kBaseline.value = kSnapStr(); kHasUnsaved.value = false }
+function kDraftData() { return { ...kDraftParams(), ...kSnapFields() } }
+
+function kFlushLocalNow() {
+  _localTimer = null
+  localDraft.save(localKey(kDraftParams()), kSnapFields()).catch(() => {})
+}
+function kFlushServerNow() {
+  _serverTimer = null
+  serverDraft.save(kDraftData()).catch(() => {})
+}
+function kScheduleAutosave() {
+  if (!editingK.value) return
+  if (kSnapStr() === kBaseline.value) return
+  kHasUnsaved.value = true
+  if (_localTimer) clearTimeout(_localTimer)
+  _localTimer = setTimeout(kFlushLocalNow, 700)            // 本地 700ms 防抖
+  const now = Date.now()
+  if (now - _lastServerSave >= SERVER_DRAFT_INTERVAL) {
+    _lastServerSave = now
+    kFlushServerNow()                                      // 服务端：间隔已到立即写
+  } else if (!_serverTimer) {
+    _serverTimer = setTimeout(() => {                      // 服务端：12s 节流（尾沿）
+      _lastServerSave = Date.now()
+      kFlushServerNow()
+    }, SERVER_DRAFT_INTERVAL - (now - _lastServerSave))
+  }
+}
+function kClearDrafts() {
+  const p = kDraftParams()
+  localDraft.clear(localKey(p)).catch(() => {})
+  serverDraft.clear(p).catch(() => {})
+  // 新建条目转正后，草稿是按 client_draft_id 存的，顺手清掉并重置稳定键
+  if (kDraftKey.value) {
+    const pk = { client_draft_id: kDraftKey.value }
+    localDraft.clear(localKey(pk)).catch(() => {})
+    serverDraft.clear(pk).catch(() => {})
+    try { localStorage.removeItem(KB_NEW_KEY_STORE) } catch (e) {}
+    kDraftKey.value = ''
+  }
+}
+// 打开条目时检测本地 + 服务端草稿，取最新；与已保存态不同才提示恢复
+async function kCheckDraft() {
+  const params = kDraftParams()
+  if (!params.entry_id && !params.client_draft_id) return
+  const key = localKey(params)
+  let local = null, server = null
+  try { local = await localDraft.load(key) } catch (e) {}
+  try { const r = await serverDraft.load(params); server = r && r.draft ? r.draft : null } catch (e) {}
+  // 服务端 DTO 是 snake_case（saved_at），本地是 savedAt —— 必须归一化，否则比不出谁最新
+  if (server && !server.savedAt) server.savedAt = server.saved_at || ''
+  const cands = [local, server].filter(Boolean)
+  if (!cands.length) { pendingDraft.value = null; return }
+  const ts = (d) => { const t = new Date((d && (d.savedAt || d.saved_at)) || 0).getTime(); return isNaN(t) ? 0 : t }
+  cands.sort((a, b) => ts(b) - ts(a))
+  const best = cands[0]
+  // 已有条目：草稿与当前已保存态一致（多半是上次保存后残留）→ 直接清掉，不提示
+  if (kForm.id && kSnapStr() === kBaseline.value) { kClearDrafts(); pendingDraft.value = null; return }
+  // 新建条目：草稿若为空（既没标题也没正文）就不必打扰用户
+  if (!kForm.id && !String(best.title || '').trim() && !String(best.content || '').trim()) { pendingDraft.value = null; return }
+  pendingDraft.value = { savedAt: best.savedAt || best.saved_at || '', snapshot: best, source: best === server ? 'server' : 'local' }
+}
+function kRecoverDraft() {
+  const s = pendingDraft.value && pendingDraft.value.snapshot
+  if (!s) return
+  kForm.title = s.title || ''
+  kForm.category = s.category || ''
+  kForm.content = s.content || ''
+  kForm.kind = s.kind || 'doc'
+  kForm.scope = s.scope || 'department'
+  kForm.tags = Array.isArray(s.tags) ? [...s.tags] : []
+  kForm.parent_id = s.parent_id || 0
+  kForm.status = s.status || 'published'
+  kForm.editor_ids = Array.isArray(s.editor_ids) ? [...s.editor_ids] : []
+  if (s.client_draft_id) kDraftKey.value = s.client_draft_id
+  pendingDraft.value = null
+  // 不更新 baseline：草稿内容 != 已保存态，继续自动保存以保活，直至用户点保存
+}
+function kDiscardDraft() { kClearDrafts(); pendingDraft.value = null }
+// 新建条目的稳定键：持久化到 localStorage，崩溃 / 误关后重开「新建」仍能找回上次草稿
+function kEnsureNewDraftKey() {
+  try {
+    let k = localStorage.getItem(KB_NEW_KEY_STORE)
+    if (!k) { k = newClientDraftID(); localStorage.setItem(KB_NEW_KEY_STORE, k) }
+    return k
+  } catch (e) { return newClientDraftID() }
+}
+
+// 内容变化即触发自动保存（与已保存态比较，避免把已保存内容又写成草稿）
+watch(kSnapStr, () => { kScheduleAutosave() }, { flush: 'post' })
+
 const showCollabPicker = ref(false)
 const kTagDraft = ref('')
 
@@ -1182,6 +1307,10 @@ function addKTag() {
 
 function openNewK() {
   Object.assign(kForm, { id: 0, title: '', category: '', content: '', kind: 'doc', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
+  kDraftKey.value = kEnsureNewDraftKey()   // 新建条目用稳定会话键（崩溃后重开可找回）
+  pendingDraft.value = null
+  kMarkBaseline()
+  kCheckDraft()                            // 检测上次未完成的「新建」草稿，弹横幅让用户选
   kTagDraft.value = ''
   showCollabPicker.value = false
   kAtts.value = []
@@ -1193,6 +1322,10 @@ function openNewK() {
 }
 function openEditK(k) {
   Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, kind: k.kind || 'doc', scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published', editor_ids: Array.isArray(k.editor_id_list) ? [...k.editor_id_list] : [], owner_id: k.owner_id || 0 })
+  kDraftKey.value = ''                     // 已有条目走 entry_id 定位
+  pendingDraft.value = null
+  kMarkBaseline()                          // 基线 = 服务端已保存态
+  kCheckDraft()                            // 检测本地 / 服务端草稿
   kTagDraft.value = ''
   showCollabPicker.value = false
   selectedKId.value = k.id
@@ -1239,6 +1372,9 @@ async function saveK() {
       if (fresh) openDetailK(fresh)
       else await openDetailKById(savedId)
     }
+    // 保存成功：清理双向草稿并把基线对齐为已保存态（下次打开不再误提示恢复）
+    kMarkBaseline()
+    kClearDrafts()
   } catch (e) { toast(e.response?.data?.error || '保存失败', 'error') }
   finally { savingK.value = false }
 }
@@ -2063,6 +2199,23 @@ watch(selectedKId, (id) => {
   }
 })
 
+// 草稿安全网（v0.31.0）：Ctrl/Cmd+S 保存、离开前拦截、切后台前落盘
+function onKbKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    if (editingK.value) { e.preventDefault(); saveK() }
+  }
+}
+function onKbBeforeUnload(e) {
+  if (kHasUnsaved.value) { e.preventDefault(); e.returnValue = '' }
+}
+function onKbVisibility() {
+  if (document.visibilityState === 'hidden' && editingK.value && kSnapStr() !== kBaseline.value) {
+    kFlushLocalNow()      // 切后台 / 关页面前尽量把草稿落盘
+    kFlushServerNow()
+    kHasUnsaved.value = false
+  }
+}
+
 onMounted(() => {
   refreshKnowledge()
   loadLogs()
@@ -2070,6 +2223,9 @@ onMounted(() => {
   loadUsers() // 知识库「协作者」选择器需要部门成员列表（/users 对已登录用户开放，按部门范围返回）
   useAutoRefresh(loadK, true)
   document.addEventListener('click', onKbDocClick)
+  window.addEventListener('keydown', onKbKeydown)
+  window.addEventListener('beforeunload', onKbBeforeUnload)
+  document.addEventListener('visibilitychange', onKbVisibility)
   // 断点监听：旧浏览器（无 matchMedia）降级为固定三栏
   if (window.matchMedia) {
     kbMQ = window.matchMedia('(min-width: 1024px)')
@@ -2082,6 +2238,9 @@ onMounted(() => {
 onUnmounted(() => {
   useAutoRefresh(loadK, false)
   document.removeEventListener('click', onKbDocClick)
+  window.removeEventListener('keydown', onKbKeydown)
+  window.removeEventListener('beforeunload', onKbBeforeUnload)
+  document.removeEventListener('visibilitychange', onKbVisibility)
   if (kbMQ) kbMQ.removeEventListener('change', applyKbBreakpoint)
   if (kbMQ2) kbMQ2.removeEventListener('change', applyKbBreakpoint)
 })
@@ -2678,6 +2837,19 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   background: rgba(15, 23, 42, .38);
   display: flex; justify-content: flex-end;
 }
+/* 自动保存草稿恢复横幅（v0.31.0）：浮在抽屉上层，左上角，点「恢复/丢弃」二选一 */
+.kb-draft-bar {
+  position: absolute; top: 14px; left: 14px; z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+  max-width: min(560px, calc(100vw - 28px));
+  padding: 10px 14px; border-radius: 12px;
+  background: var(--bg-1); border: 1px solid var(--glass-border);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .22);
+  font-size: 13px; color: var(--text);
+}
+.kb-draft-tip { line-height: 1.5; }
+.kb-draft-acts { display: flex; gap: 8px; margin-left: auto; flex: none; }
+.kb-draft-bar .btn.sm { padding: 4px 10px; font-size: 12px; }
 .kb-drawer-panel.kb-detail-pane {
   width: min(940px, 94vw);
   max-width: 94vw;

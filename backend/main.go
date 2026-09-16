@@ -273,6 +273,11 @@ func main() {
 			auth.GET("/workspace/knowledge/templates/:id", handlers.ApplyKnowledgeTemplate)
 			auth.DELETE("/workspace/knowledge/templates/:id", handlers.DeleteKnowledgeTemplate)
 			auth.POST("/workspace/knowledge/import", handlers.ImportKnowledge)
+
+			// 知识库编辑草稿（v0.31.0）：自动保存双写（本地 IndexedDB + 服务端），崩溃 / 误关可恢复
+			auth.PUT("/workspace/knowledge/draft", handlers.SaveKnowledgeDraft)
+			auth.GET("/workspace/knowledge/draft", handlers.GetKnowledgeDraft)
+			auth.DELETE("/workspace/knowledge/draft", handlers.DeleteKnowledgeDraft)
 			auth.GET("/workspace/knowledge/export/markdown", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeMarkdown)
 			auth.GET("/workspace/knowledge/export/doc", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeDoc)
 

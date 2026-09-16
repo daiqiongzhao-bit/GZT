@@ -63,6 +63,8 @@ func Init() error {
 		&models.KnowledgeVersion{},
 		&models.KnowledgeTemplate{},
 		&models.KnowledgeLink{},
+		// v0.31.0 知识库编辑草稿（自动保存双写，与已发布条目分离）
+		&models.KnowledgeDraft{},
 		&models.WorkLog{},
 		&models.WorkHandover{},
 		&models.WorkHandoverEvent{},
