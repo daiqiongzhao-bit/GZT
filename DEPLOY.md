@@ -154,10 +154,18 @@ systemctl enable --now swb
 
 ## 六、升级
 
-- **Docker 方式**：
+- **Docker 方式（现成镜像）**：
   ```bash
-  docker compose pull          # 拉新镜像（或源码方式重新构建）
+  docker compose pull          # 拉新镜像
   docker compose up -d         # 重启即完成，数据不丢
+  ```
+- **源码构建方式（改过代码时）**：
+  ```bash
+  git pull
+  # ⚠️ 必须用 --no-cache 全量重建，否则 Docker 层缓存会复用旧的「前端构建」层，
+  #    导致镜像内嵌入陈旧/不完整的 dist（路由分块丢失、界面停留在旧版）。
+  docker compose build --no-cache
+  docker compose up -d
   ```
 - **二进制方式**：停服务 → 替换 `swb` 文件 → 启动，数据库自动迁移，无需人工操作。
 
