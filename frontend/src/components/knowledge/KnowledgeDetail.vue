@@ -433,6 +433,9 @@ function printEntry() {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* ⚠️ v0.28.1：必须有 min-height:0，否则 flex 子项不会收缩，
+     内部 .kb-detail-body 无法触发滚动，底部按钮被挤出。 */
+  min-height: 0;
   height: 100%;
   background: var(--bg-1);
 }
@@ -485,6 +488,9 @@ function printEntry() {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 10px 18px; border-top: 1px solid var(--hairline);
   background: var(--bg-1); flex-wrap: wrap;
+  /* ⚠️ v0.28.1：即便极端情况下容器未正确约束高度，底栏也固定在右栏底部可见，
+     杜绝「写多了按钮被顶出视口、点不到保存」的问题。 */
+  position: sticky; bottom: 0; z-index: 5;
 }
 .df-tip { font-size: 11.5px; }
 .df-btns { display: flex; gap: 8px; }

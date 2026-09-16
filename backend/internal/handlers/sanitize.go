@@ -375,14 +375,20 @@ func safeStyleValue(key, val string) bool {
 	if styleDangerRe.MatchString(val) {
 		return false
 	}
-	// 跳出属性上下文的三件套：引号会闭合 style=""，尖括号会闭合标签。
-	// 例外：font-family 合法字体名可含引号（"Times New Roman"），
-	// 由 fontFamilyRe 的字符集约束保证不含逃逸风险，故此处仅对其放宽 `"`。
-	if strings.ContainsAny(val, `'<>&`) {
-		return false
-	}
-	if key != "font-family" && strings.Contains(val, `"`) {
-		return false
+	// 跳出属性上下文的危险字符：尖括号 / & 必须拦截（会闭合标签或注入实体）。
+	// 引号在 style="..." 内由 styleDangerRe 与下方输出层转义兜底（不闭合外层属性）。
+	// ⚠️ v0.28.1 修复：此前对 font-family 也拦截了单引号，导致
+	//    `font-family:'Times New Roman', serif`（Word 粘贴常见形态）整条被丢弃，
+	//    正文里所有字体声明在保存后丢失 → 用户感知为「排版乱了」。
+	//    字体族引号交给字体族白名单 (fontFamilyRe) 约束即可，此处放行。
+	if key == "font-family" {
+		if strings.ContainsAny(val, "<>&") {
+			return false
+		}
+	} else {
+		if strings.ContainsAny(val, "'<>&") {
+			return false
+		}
 	}
 	switch key {
 	case "color", "background-color", "text-decoration-color", "border-color":
@@ -471,8 +477,8 @@ func stripUnsafeStyle(s string) string {
 		if len(keep) == 0 {
 			return "" // 全部声明都不安全 → 删掉整个 style 属性
 		}
-		// 统一输出双引号形态；值内可能残留的单引号已由 safeStyleValue 拦截
-		return ` style="` + strings.Join(keep, ";") + `"`
+		// 统一输出双引号形态；值内残留的双引号转义，避免闭合外层 style 属性
+		return ` style="` + strings.ReplaceAll(strings.Join(keep, ";"), `"`, "&quot;") + `"`
 	})
 }
 

@@ -775,7 +775,9 @@ function kbFilterStyle(style) {
     const i = decl.indexOf(':')
     if (i < 0) continue
     const key = decl.slice(0, i).trim().toLowerCase()
-    const val = decl.slice(i + 1).trim()
+    // 实体解码放在校验之前：后端可能以 &quot; / &#39; 形态落库，
+    // 先还原成真实引号，否则 'Times New Roman' 这类合法字体族会被正则误拒。
+    const val = kbUnescape(decl.slice(i + 1).trim())
     if (!key || !val) continue
     if (!KB_SAFE_STYLE_KEYS.has(key)) continue
     if (!kbStyleValueOk(key, val)) continue
@@ -2425,6 +2427,12 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
+  /* ⚠️ 关键：显式把唯一的行高撑满容器（minmax(0,1fr) 允许收缩）。
+     v0.28.1 修复：此前只定义了 grid-template-columns 没定义行高，
+     依赖 grid 默认的 align-content:stretch 把行撑满——该行为在内容变长时不可靠，
+     导致右栏 .kb-detail-pane 的 height:100% 退化成内容高度，整栏随正文长高，
+     底部「取消/保存」按钮被挤出 .kb-shell（overflow:hidden）视口、不可见。 */
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: clamp(180px, 17vw, 260px) clamp(240px, 24vw, 340px) minmax(0, 1fr);
 }
 .kb-3col > * { min-width: 0; height: 100%; }
