@@ -25,6 +25,7 @@ import (
 // todayOnDuty 今日各班次当班人员：shift -> [姓名]（scope>0 仅统计该部门班表）
 // 「当班」口径（v0.8.0 起与需求对齐）：今日有排班且非休息的人员，
 // 覆盖 早班/中班/晚班/夜班/早晚 等全部班次；休息班次不计入当班、不参与推送 @。
+// v0.29.1：已冻结(frozen) / 休假(on_leave) 的账号即使仍留在班表里，也不计入当班、不参与 @。
 func todayOnDuty(scope []uint) map[string][]string {
 	today := time.Now().Format("2006-01-02")
 	q := db.DB.Where("date = ?", today).Where("shift <> ?", "休息")
@@ -33,6 +34,7 @@ func todayOnDuty(scope []uint) map[string][]string {
 	}
 	var schedules []models.Schedule
 	q.Find(&schedules)
+	inactive := inactiveUserNames() // 冻结/休假账号：一律不算当班
 	byShift := map[string][]string{}
 	for _, s := range schedules {
 		var people []string
@@ -41,7 +43,7 @@ func todayOnDuty(scope []uint) map[string][]string {
 		}
 		seen := map[string]bool{}
 		for _, p := range people {
-			if p == "" || seen[p] {
+			if p == "" || seen[p] || inactive[p] {
 				continue
 			}
 			seen[p] = true
@@ -49,6 +51,23 @@ func todayOnDuty(scope []uint) map[string][]string {
 		}
 	}
 	return byShift
+}
+
+// inactiveUserNames 返回「已冻结」或「休假(on_leave)」账号的姓名 / 账号名集合。
+// 这些账号禁止登录或不在岗，不应出现在任何「当班 / @」名单里（与 allUserNames 口径一致）。
+func inactiveUserNames() map[string]bool {
+	set := map[string]bool{}
+	var users []models.User
+	db.DB.Where("frozen = ? OR on_leave = ?", true, true).Find(&users)
+	for _, u := range users {
+		if u.Name != "" {
+			set[u.Name] = true
+		}
+		if u.Username != "" {
+			set[u.Username] = true
+		}
+	}
+	return set
 }
 
 // allUserNames 「全员」任务的当班名单。排除：超级管理员（系统账号，如「系统管理员」）、
@@ -129,7 +148,12 @@ func peopleMobiles(names []string) []string {
 	}
 	var users []models.User
 	// v0.15.2：只 @ 已加入通知群的成员（未入群无法被企业微信@到）
-	db.DB.Where("name IN ? OR username IN ?", names, names).Where("in_group = ?", true).Find(&users)
+	// v0.29.1：已冻结 / 休假的账号永不 @（兜底：无论名单来自班表还是负责人，都不会再 @ 到这类账号）
+	db.DB.Where("name IN ? OR username IN ?", names, names).
+		Where("in_group = ?", true).
+		Where("frozen = ?", false).
+		Where("on_leave = ?", false).
+		Find(&users)
 	seen := map[string]bool{}
 	var mobiles []string
 	for _, u := range users {
