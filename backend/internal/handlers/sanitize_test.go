@@ -516,3 +516,34 @@ func TestSanitizeLink(t *testing.T) {
 		}
 	}
 }
+
+// TestSanitize_FontFamilyWithQuotes v0.28.1 回归：
+// 带引号的字体族（Word 粘贴常见形态）保存后不得被剥离，否则整篇文档字体丢失 → 用户感知「排版乱」。
+func TestSanitize_FontFamilyWithQuotes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string // 期望仍出现在输出中的片段
+	}{
+		{"单引号多词", `<p><span style="font-family: 'Times New Roman', serif;">x</span></p>`, "Times New Roman"},
+		{"双引号多词", `<p><span style='font-family: "Times New Roman", serif;'>x</span></p>`, "Times New Roman"},
+		{"中文无引号", `<p><span style="font-family: 微软雅黑;">x</span></p>`, "微软雅黑"},
+		{"含危险值仍拦截", `<p><span style="font-family: expression(alert(1))">x</span></p>`, ""},
+		{"宽体汉字字体", `<p><span style="font-family: &quot;Songti SC&quot;, serif;">x</span></p>`, "Songti SC"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := sanitizeRichContent(c.in)
+			if c.want == "" {
+				if strings.Contains(got, "font-family") {
+					t.Errorf("危险字体值应被删除 font-family\n输入: %s\n输出: %s", c.in, got)
+				}
+				return
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("字体族被误删\n输入: %s\n输出: %s", c.in, got)
+			}
+		})
+	}
+}
+
