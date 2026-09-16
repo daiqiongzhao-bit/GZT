@@ -38,7 +38,6 @@
               title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移（仅超级管理员）"
               @click="exportBundle"
             >📦 打包 zip</button>
-
             <div class="kb-menu-wrap" @click.stop>
               <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
                 ⬆ 导出 <i class="caret">▾</i>
@@ -51,48 +50,85 @@
                 </div>
               </transition>
             </div>
-
-            <button class="kb-nav-toggle" title="显示 / 隐藏导航栏" @click="kbNavOpen = !kbNavOpen">☰</button>
+            <button class="btn primary sm" @click="openNewK">＋ 新建</button>
           </div>
         </div>
 
-        <!-- 三栏主体 -->
-        <div class="kb-3col" :class="{ 'on-detail': kbNarrow && (selectedKId || editingK) }">
-          <!-- 左栏：导航（窄屏可折叠） -->
-          <KnowledgeNav
-            v-show="kbNavOpen"
-            :view="kbView"
-            :total="knowledge.length"
-            :trash-count="trash.length"
-            :tree="kTree"
-            :parent-id="kParent"
-            :categories="categories"
-            :category="kCategory"
-            :tags="allTags"
-            :tag="kTag"
-            :mine="kMine"
-            :starred="kStarred"
-            @view="kbGo"
-            @pick-parent="onPickParent"
-            @pick-category="(c) => { kCategory = c; loadK() }"
-            @pick-tag="(t) => { kTag = t; kbView = 'list'; loadK() }"
-            @toggle-mine="kMine = !kMine; loadK()"
-            @toggle-starred="kStarred = !kStarred; loadK()"
-          />
+        <!-- 筛选条：搜索 + 排序 + 目录 + 视图切换 + 快捷筛选 -->
+        <div class="kb-toolbar">
+          <div class="kb-search-box">
+            <input
+              class="kb-search"
+              type="search"
+              :value="kQuery"
+              placeholder="🔍 搜索标题 / 内容 / 分类 / 标签"
+              @input="kQuery = $event.target.value; loadK()"
+            />
+          </div>
+          <select class="kb-sel" :value="kSort" @change="kSort = $event.target.value; loadK()" title="排序方式">
+            <option value="recent">最近更新</option>
+            <option value="created">最新创建</option>
+            <option value="hot">最热</option>
+          </select>
+          <select class="kb-sel kb-sel-tree" :value="kParent" @change="onPickParent($event.target.value)" title="按目录筛选">
+            <option value="">📁 全部目录</option>
+            <option v-for="n in kbParentFlat" :key="n.id" :value="String(n.id)">{{ '　'.repeat(n.depth) }}{{ n.title }}</option>
+          </select>
+          <div class="kb-seg">
+            <button :class="{ on: kbView === 'list' }" @click="kbGo('list')">📚 全部条目</button>
+            <button :class="{ on: kbView === 'stats' }" @click="kbGo('stats')">📊 统计</button>
+            <button :class="{ on: kbView === 'trash' }" @click="kbGo('trash')">🗑 回收站<template v-if="trash.length"> {{ trash.length }}</template></button>
+          </div>
+          <div class="kb-quick">
+            <button class="kb-toggle" :class="{ on: kStarred }" title="只看收藏" @click="kStarred = !kStarred; loadK()">⭐</button>
+            <button class="kb-toggle" :class="{ on: kMine }" title="只看我写的" @click="kMine = !kMine; loadK()">✍</button>
+          </div>
+        </div>
 
-          <!-- 中栏 + 右栏：按视图切换 -->
+        <!-- 分类 / 标签 胶囊 -->
+        <div v-if="categories.length || allTags.length" class="kb-cats">
+          <button class="kb-cat" :class="{ on: !kCategory && !kTag }" @click="kCategory=''; kTag=''; kbView='list'; loadK()">全部</button>
+          <button
+            v-for="c in categories"
+            :key="c"
+            class="kb-cat"
+            :class="{ on: kCategory === c }"
+            @click="kCategory = kCategory === c ? '' : c; kTag=''; kbView='list'; loadK()"
+          >{{ c }}</button>
+          <button
+            v-for="t in allTags"
+            :key="'t'+t"
+            class="kb-cat tag"
+            :class="{ on: kTag === t }"
+            @click="kTag = kTag === t ? '' : t; kCategory=''; kbView='list'; loadK()"
+          >#{{ t }}</button>
+        </div>
+
+        <!-- 生效中的筛选条件（可逐个移除） -->
+        <div v-if="kbActiveFilters.length" class="kb-active-filters">
+          <span
+            v-for="f in kbActiveFilters"
+            :key="f.key"
+            class="kb-af"
+            @click="clearKFilter(f.key)"
+          >{{ f.label }} <i>✕</i></span>
+          <span class="kb-af clear-all" @click="kQuery=''; kCategory=''; kTag=''; kMine=false; kStarred=false; kParent=''; loadK()">清除全部</span>
+        </div>
+
+        <!-- 内容区：卡片网格 / 统计 / 回收站 -->
+        <div class="kb-content">
           <template v-if="kbView === 'stats'">
             <KnowledgeStats
-              class="kb-span2"
+              class="kb-pane"
               :stats="stats"
               :loading="statsLoading"
-              @pick-tag="(t) => { kTag = t; kbView = 'list'; loadK() }"
+              @pick-tag="(t) => { kTag = t; kCategory=''; kbView = 'list'; loadK() }"
             />
           </template>
 
           <template v-else-if="kbView === 'trash'">
             <KnowledgeTrash
-              class="kb-span2"
+              class="kb-pane"
               :items="trash"
               :fmt-time="fmtTime"
               @restore="restoreK"
@@ -101,43 +137,70 @@
             />
           </template>
 
-          <!-- 列表 + 详情：知识库主工作区 -->
           <template v-else>
-            <KnowledgeList
-              :items="knowledge"
-              :loading="kLoading"
-              :selected-id="selectedKId"
-              v-model:query="kQuery"
-              v-model:sort="kSort"
-              :category="kCategory"
-              :tag="kTag"
-              :parent-title="parentTitle"
-              v-model:mine="kMine"
-              v-model:starred="kStarred"
-              :current-user-id="auth.user?.id || 0"
-              :current-user-name="auth.user?.username || ''"
-              :can-edit="canEditK"
-              :can-manage="canManageK"
-              :fmt-time="fmtTime"
-              :preview="kPreview"
-              :highlight="highlight"
-              :parse-tags="parseTags"
-              :scope-label="scopeLabel"
-              :scope-chip="scopeChip"
-              @open="openDetailK"
-              @create="openNewK"
-              @edit="openEditK"
-              @remove="removeK"
-              @star="toggleStar"
-              @pin="togglePin"
-              @update:query="loadK"
-              @update:sort="loadK"
-              @update:mine="loadK"
-              @update:starred="loadK"
-              @clear-filter="clearKFilter"
-            />
+            <div v-if="kLoading" class="kb-grid">
+              <div v-for="i in 6" :key="i" class="kb-card skel"></div>
+            </div>
 
+            <div v-else-if="knowledge.length" class="kb-grid">
+              <article
+                v-for="k in knowledge"
+                :key="k.id"
+                class="kb-card"
+                :class="{ on: String(selectedKId) === String(k.id), mine: k.owner_id === (auth.user?.id||0), pinned: k.pinned }"
+                @click="openDetailK(k)"
+              >
+                <div class="kc-head">
+                  <span v-if="k.pinned" class="kc-pin" title="已置顶">📌</span>
+                  <span class="kc-title" v-html="highlight(k.title, kQuery)"></span>
+                  <span
+                    class="kc-star"
+                    :class="{ on: k.starred }"
+                    :title="k.starred ? '取消收藏' : '收藏'"
+                    @click.stop="toggleStar(k)"
+                  >{{ k.starred ? '★' : '☆' }}</span>
+                </div>
+
+                <div class="kc-preview" v-html="highlight(kPreview(k), kQuery)"></div>
+
+                <div class="kc-foot">
+                  <span class="kc-chip" :class="scopeChip(k.scope)">{{ scopeLabel(k.scope) }}</span>
+                  <span v-if="k.category" class="kc-chip accent">{{ k.category }}</span>
+                  <span v-if="k.status === 'draft'" class="kc-chip warn">草稿</span>
+                  <span v-for="t in parseTags(k.tags).slice(0, 3)" :key="t" class="kc-tag">#{{ t }}</span>
+                </div>
+
+                <div class="kc-meta dim">
+                  {{ k.owner_name === (auth.user?.username) ? '我' : k.owner_name }} · {{ fmtTime(k.updated_at || k.created_at) }}
+                  <template v-if="k.view_count"> · 👁 {{ k.view_count }}</template>
+                </div>
+
+                <div class="kc-ops" @click.stop>
+                  <button v-if="canEditK(k)" class="kc-op" @click="openEditK(k)">编辑</button>
+                  <button
+                    v-if="canManageK(k)"
+                    class="kc-op"
+                    :title="k.pinned ? '取消置顶' : '置顶'"
+                    @click="togglePin(k)"
+                  >{{ k.pinned ? '取消置顶' : '置顶' }}</button>
+                  <button v-if="canManageK(k)" class="kc-op danger" @click="removeK(k)">删除</button>
+                </div>
+              </article>
+            </div>
+
+            <div v-else class="kb-empty">
+              <div class="kb-empty-ico">📭</div>
+              <div class="kb-empty-txt">{{ (kQuery || kCategory || kTag || kMine || kStarred || kParent) ? '没有匹配的知识条目，试试放宽筛选条件' : '还没有知识条目，点「＋ 新建」沉淀第一条吧' }}</div>
+              <button v-if="!(kQuery || kCategory || kTag || kMine || kStarred || kParent)" class="btn primary sm" @click="openNewK">＋ 新建第一条</button>
+            </div>
+          </template>
+        </div>
+
+        <!-- 详情 / 编辑：右侧抽屉 -->
+        <transition name="kb-drawer">
+          <div v-if="viewK || editingK" class="kb-drawer-mask" @click.self="closeKDrawer">
             <KnowledgeDetail
+              class="kb-drawer-panel"
               :entry="viewK"
               :editing="editingK"
               :saving="savingK"
@@ -193,8 +256,8 @@
               @update:comment-text="(v) => kCommentText = v"
               @content-error="(m) => toast(m, 'error')"
             />
-          </template>
-        </div>
+          </div>
+        </transition>
       </div>
 
       <!-- 模板选择弹窗 -->
@@ -686,8 +749,6 @@ import http from '@/api/http'
 import { useAuthStore } from '@/store/auth'
 import { getCurrentInstance } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
-import KnowledgeNav from '@/components/knowledge/KnowledgeNav.vue'
-import KnowledgeList from '@/components/knowledge/KnowledgeList.vue'
 import KnowledgeDetail from '@/components/knowledge/KnowledgeDetail.vue'
 import KnowledgeStats from '@/components/knowledge/KnowledgeStats.vue'
 import KnowledgeTrash from '@/components/knowledge/KnowledgeTrash.vue'
@@ -1013,6 +1074,32 @@ function clearKFilter(key) {
   else if (key === 'starred') kStarred.value = false
   loadK()
 }
+
+// v0.29.0：卡片网格 + 抽屉布局所需的派生状态
+const kbActiveFilters = computed(() => {
+  const out = []
+  if (kQuery.value) out.push({ key: 'query', label: `搜索：${kQuery.value}` })
+  if (kCategory.value) out.push({ key: 'category', label: `分类：${kCategory.value}` })
+  if (kTag.value) out.push({ key: 'tag', label: `#${kTag.value}` })
+  if (kParent.value) out.push({ key: 'parent', label: `目录：${parentTitle.value || '已选目录'}` })
+  if (kMine.value) out.push({ key: 'mine', label: '只看我写的' })
+  if (kStarred.value) out.push({ key: 'starred', label: '只看收藏' })
+  return out
+})
+// 目录树拍平（带缩进深度），供筛选下拉使用
+const kbParentFlat = computed(() => {
+  const out = []
+  const walk = (nodes, depth) => {
+    for (const n of (nodes || [])) {
+      out.push({ id: n.id, title: n.title, depth })
+      if (n.children && n.children.length) walk(n.children, depth + 1)
+    }
+  }
+  walk(kTree.value, 0)
+  return out
+})
+function closeKDrawer() { editingK.value = false; viewK.value = null }
+
 async function loadCats() {
   try { categories.value = await api.get('/workspace/knowledge/categories') } catch {}
 }
@@ -2390,10 +2477,10 @@ textarea.ta { resize: vertical; line-height: 1.6; }
    自适应策略：列宽用 minmax + clamp，不写死像素，
    保证从 1024px 的旧笔记本到 3840px 的带鱼屏都不出现横向滚动。
    -------------------------------------------------------- */
+/* ============ 知识库 · 卡片网格 + 抽屉（v0.29.0） ============ */
 .kb-shell {
   display: flex;
   flex-direction: column;
-  /* 视口高度减去顶栏/标签栏的占位，避免整页滚动 */
   height: calc(100vh - 190px);
   min-height: 460px;
   border: 1px solid var(--glass-border);
@@ -2401,7 +2488,6 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   background: var(--bg-1);
   overflow: hidden;
 }
-
 .kb-topbar {
   flex: 0 0 auto;
   display: flex;
@@ -2415,69 +2501,191 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 }
 .kb-title { margin: 0; white-space: nowrap; }
 .kb-topacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.kb-nav-toggle {
+
+/* 筛选条 */
+.kb-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.kb-search-box { flex: 1 1 240px; min-width: 180px; }
+.kb-search {
+  width: 100%;
+  border: 1px solid var(--glass-border);
+  background: var(--overlay);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+}
+.kb-search:focus { border-color: var(--accent); }
+.kb-search::-webkit-search-cancel-button { cursor: pointer; }
+.kb-sel {
+  flex: 0 0 auto;
+  border: 1px solid var(--glass-border);
+  background: var(--overlay);
+  color: var(--text-dim);
+  border-radius: 9px; padding: 7px 9px; font-size: 12.5px; outline: none; cursor: pointer;
+}
+.kb-sel-tree { max-width: 200px; }
+.kb-seg {
+  flex: 0 0 auto;
+  display: inline-flex;
+  background: var(--overlay);
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.kb-seg button {
+  border: none; background: transparent; color: var(--text-dim);
+  font-size: 12.5px; padding: 7px 11px; cursor: pointer;
+  transition: background .12s ease, color .12s ease; white-space: nowrap;
+}
+.kb-seg button + button { border-left: 1px solid var(--glass-border); }
+.kb-seg button:hover { color: var(--accent); }
+.kb-seg button.on { background: var(--accent); color: #fff; }
+.kb-quick { display: inline-flex; gap: 6px; }
+.kb-toggle {
   border: 1px solid var(--glass-border); background: transparent;
   color: var(--text-dim); border-radius: 9px;
-  padding: 5px 10px; font-size: 13px; cursor: pointer; line-height: 1;
+  padding: 6px 9px; font-size: 13px; cursor: pointer;
+  transition: all .12s ease;
 }
-.kb-nav-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.kb-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.kb-toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
-/* 三栏网格：左栏 clamp 自适应，中栏固定较窄，右栏吃掉剩余空间 */
-.kb-3col {
-  flex: 1 1 auto;
-  min-height: 0;
+/* 分类 / 标签 胶囊 */
+.kb-cats {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.kb-cat {
+  border: 1px solid var(--glass-border); background: transparent;
+  color: var(--text-dim); font-size: 12.5px; cursor: pointer;
+  border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+  transition: all .12s ease;
+}
+.kb-cat:hover { border-color: var(--accent); color: var(--accent); }
+.kb-cat.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.kb-cat.tag { padding: 4px 11px; font-size: 12px; }
+.kb-cat.tag.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* 生效筛选 */
+.kb-active-filters { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 5px; padding: 0 14px 9px; }
+.kb-af {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--accent);
+  background: var(--accent-soft); border-radius: 999px;
+  padding: 2px 9px; cursor: pointer; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-af i { font-style: normal; opacity: .7; }
+.kb-af:hover i { opacity: 1; }
+.kb-af.clear-all { background: var(--overlay-2); color: var(--text-dim); }
+
+/* 内容区 */
+.kb-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.kb-content::-webkit-scrollbar { width: 8px; }
+.kb-content::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 4px; }
+.kb-pane { display: block; }
+
+/* 卡片网格 */
+.kb-grid {
   display: grid;
-  /* ⚠️ 关键：显式把唯一的行高撑满容器（minmax(0,1fr) 允许收缩）。
-     v0.28.1 修复：此前只定义了 grid-template-columns 没定义行高，
-     依赖 grid 默认的 align-content:stretch 把行撑满——该行为在内容变长时不可靠，
-     导致右栏 .kb-detail-pane 的 height:100% 退化成内容高度，整栏随正文长高，
-     底部「取消/保存」按钮被挤出 .kb-shell（overflow:hidden）视口、不可见。 */
-  grid-template-rows: minmax(0, 1fr);
-  grid-template-columns: clamp(180px, 17vw, 260px) clamp(240px, 24vw, 340px) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 12px;
+  padding: 14px;
 }
-.kb-3col > * { min-width: 0; height: 100%; }
-/* 统计/回收站跨中+右两栏 */
-.kb-3col > .kb-span2 { grid-column: 2 / -1; }
-
-/* ---------- 断点 1：1024px 以下 —— 左栏收起为滑出层 ---------- */
-@media (max-width: 1023px) {
-  .kb-shell { height: calc(100vh - 165px); }
-  .kb-3col { grid-template-columns: clamp(220px, 30vw, 300px) minmax(0, 1fr); }
-  /* 左栏脱离网格，改为覆盖层 */
-  .kb-3col > .kb-nav {
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: clamp(220px, 60vw, 300px);
-    z-index: 30;
-    background: var(--bg-1);
-    border-right: 1px solid var(--glass-border);
-    box-shadow: 4px 0 18px rgba(15, 23, 42, .12);
-  }
-  .kb-3col { position: relative; }
-  .kb-3col > .kb-span2 { grid-column: 1 / -1; }
+.kb-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: 7px;
+  border: 1px solid var(--glass-border);
+  border-radius: 13px;
+  padding: 13px 14px;
+  background: var(--bg-1);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, box-shadow .12s ease, transform .12s ease;
+  min-width: 0;
 }
+.kb-card:hover { border-color: var(--accent); box-shadow: 0 6px 18px rgba(15,23,42,.08); transform: translateY(-1px); }
+.kb-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.kb-card.mine::before, .kb-card.pinned::before {
+  content: ''; position: absolute; left: 0; top: 12px; bottom: 12px;
+  width: 3px; border-radius: 0 3px 3px 0;
+}
+.kb-card.mine::before { background: var(--accent); }
+.kb-card.pinned::before { background: #d97706; }
+.kc-head { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.kc-pin { flex: 0 0 auto; font-size: 11px; line-height: 1.5; }
+.kc-title {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 14.5px; font-weight: 700; line-height: 1.45; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.kc-star { flex: 0 0 auto; font-size: 15px; line-height: 1; color: var(--text-faint); cursor: pointer; padding: 0 2px; }
+.kc-star.on { color: #f59e0b; }
+.kc-star:hover { color: #f59e0b; }
+.kc-preview {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+.kc-preview :deep(mark), .kc-title :deep(mark) { background: #fde68a; color: inherit; border-radius: 3px; padding: 0 1px; }
+.kc-foot { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 10.5px; }
+.kc-chip { border-radius: 999px; padding: 1px 8px; background: var(--overlay-2); color: var(--text-faint); white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.kc-chip.accent { background: var(--accent-soft); color: var(--accent); }
+.kc-chip.warn { background: rgba(217,119,6,.14); color: #d97706; }
+.kc-tag { color: var(--accent); white-space: nowrap; }
+.kc-meta { font-size: 11px; color: var(--text-faint); }
+.kc-ops { display: flex; gap: 5px; flex-wrap: wrap; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .18s ease, opacity .18s ease, margin-top .18s ease; }
+.kb-card:hover .kc-ops, .kb-card.on .kc-ops { max-height: 32px; opacity: 1; margin-top: 2px; }
+.kc-op { border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim); font-size: 11.5px; cursor: pointer; border-radius: 7px; padding: 2px 10px; transition: all .12s ease; }
+.kc-op:hover { border-color: var(--accent); color: var(--accent); }
+.kc-op.danger:hover { border-color: #dc2626; color: #dc2626; }
+.kb-card.skel { height: 132px; background: linear-gradient(90deg, var(--overlay) 25%, var(--overlay-2) 50%, var(--overlay) 75%); background-size: 200% 100%; animation: kb-shimmer 1.3s infinite; cursor: default; border-color: transparent; }
 
-/* ---------- 断点 2：820px 以下 —— 单栏，只显示列表或详情 ---------- */
-@media (max-width: 819px) {
+/* 空态 */
+.kb-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 64px 20px; text-align: center; }
+.kb-empty-ico { font-size: 38px; opacity: .5; }
+.kb-empty-txt { font-size: 13px; color: var(--text-faint); line-height: 1.7; }
+
+@keyframes kb-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* 详情 / 编辑 右侧抽屉 */
+.kb-drawer-mask {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(15, 23, 42, .38);
+  display: flex; justify-content: flex-end;
+}
+.kb-drawer-panel.kb-detail-pane {
+  width: min(940px, 94vw);
+  max-width: 94vw;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-1);
+  border-left: 1px solid var(--glass-border);
+  box-shadow: -10px 0 36px rgba(15, 23, 42, .2);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.kb-drawer-enter-active, .kb-drawer-leave-active { transition: opacity .2s ease; }
+.kb-drawer-enter-from, .kb-drawer-leave-to { opacity: 0; }
+.kb-drawer-enter-active .kb-drawer-panel, .kb-drawer-leave-active .kb-drawer-panel { transition: transform .24s cubic-bezier(.22,.61,.36,1); }
+.kb-drawer-enter-from .kb-drawer-panel, .kb-drawer-leave-to .kb-drawer-panel { transform: translateX(42px); }
+
+/* 窄屏：抽屉占满 */
+@media (max-width: 760px) {
   .kb-shell { height: calc(100vh - 150px); min-height: 380px; border-radius: 12px; }
-  .kb-topbar { padding: 9px 11px; gap: 7px; }
-  .kb-topacts .btn.sm { font-size: 11.5px; padding: 5px 9px; }
-  .kb-3col,
-  .kb-3col > .kb-span2 {
-    display: block;
-    grid-template-columns: none;
-  }
-  /* 单栏模式：列表与详情二选一，靠 .on-detail 切换 */
-  .kb-3col > .kb-list-pane { display: flex; }
-  .kb-3col > .kb-detail-pane { display: none; }
-  .kb-3col.on-detail > .kb-list-pane { display: none; }
-  .kb-3col.on-detail > .kb-detail-pane { display: flex; }
-  .kb-list-pane { border-left: none; border-right: none; }
-}
-
-@media (max-width: 640px) {
-  .kb-topbar { flex-direction: column; align-items: stretch; }
-  .kb-title { font-size: 15px; }
-  .kb-topacts { justify-content: flex-start; }
+  .kb-drawer-panel.kb-detail-pane { width: 100vw; max-width: 100vw; }
+  .kb-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 9px; padding: 10px; }
 }
 </style>
