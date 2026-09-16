@@ -422,10 +422,17 @@ const (
 
 // KnowledgeEntry 迷你知识库条目：方法/流程/制度等长期内容
 type KnowledgeEntry struct {
-	ID        uint           `json:"id" gorm:"primaryKey"`
-	Title     string         `json:"title" gorm:"size:255;not null"`
-	Category  string         `json:"category" gorm:"size:64"`  // 分类标签（可自由填）
-	Content   string         `json:"content" gorm:"type:text"` // 正文（多行）
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	Title    string `json:"title" gorm:"size:255;not null"`
+	Category string `json:"category" gorm:"size:64"`  // 分类标签（可自由填）
+	Content  string `json:"content" gorm:"type:text"` // 正文（doc=HTML；mind/flow=图形库 JSON）
+	// —— 内容类型（v0.30.0）——
+	// doc  = 富文本文档（默认，历史数据自动落此值）
+	// mind = 思维导图（Content 存 mind-elixir 的 MindElixirData JSON）
+	// flow = 流程图（Content 存 LogicFlow 的 GraphData JSON）
+	// ⚠️ 图形条目的 Content 不是 HTML：检索/变更记录/导出/预览一律按「大纲纯文本」处理，
+	//    统一入口见 knowledge_diagram.go 的 knowledgePlainText()。
+	Kind      string         `json:"kind" gorm:"size:16;default:doc"`
 	Scope     WorkspaceScope `json:"scope" gorm:"size:16;default:department"`
 	OwnerID   uint           `json:"owner_id" gorm:"index"`     // 创建者
 	OwnerName string         `json:"owner_name" gorm:"size:64"` // 创建者姓名（展示用）

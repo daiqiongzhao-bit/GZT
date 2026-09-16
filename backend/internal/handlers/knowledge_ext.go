@@ -79,11 +79,14 @@ func ensureFTS() {
 	db.DB.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title, content, tags, tokenize='unicode61')`)
 }
 
-// ftsUpsert 重建某条目的 FTS 索引
+// ftsUpsert 重建某条目的 FTS 索引。
+// v0.30.0：图形条目（思维导图 / 流程图）的 Content 是绘图库 JSON，直接索引会把
+// {"id":..} / "nodeData" / "sourceNodeId" 这类记号当成正文，检索结果全是噪音；
+// 统一改索引 knowledgePlainText()：文档=HTML 转文本，图形=大纲。
 func ftsUpsert(e models.KnowledgeEntry) {
 	db.DB.Exec("DELETE FROM knowledge_fts WHERE rowid = ?", e.ID)
 	db.DB.Exec("INSERT INTO knowledge_fts(rowid, title, content, tags) VALUES (?,?,?,?)",
-		e.ID, ftsJoin(e.Title), ftsJoin(e.Content), ftsJoin(e.Tags))
+		e.ID, ftsJoin(e.Title), ftsJoin(knowledgePlainText(e.Kind, e.Content)), ftsJoin(e.Tags))
 }
 
 // ftsDelete 删除某条目的 FTS 索引
@@ -845,7 +848,12 @@ func ExportKnowledgeMarkdown(c *gin.Context) {
 		}
 		b.WriteString("## " + k.Title + "\n\n")
 		b.WriteString("> 分类: " + k.Category + " · 标签: " + strings.Join(parseTags(k.Tags), "、") + " · " + scope + " · 更新于 " + k.UpdatedAt.Format("2006-01-02") + "\n\n")
-		b.WriteString(k.Content + "\n\n")
+		if isDiagramKind(k.Kind) {
+			// v0.30.0：图形条目导出「大纲纯文本」，JSON 灌进 Markdown 没有意义
+			b.WriteString("**【" + kindLabel(k.Kind) + "】**\n\n```\n" + knowledgePlainText(k.Kind, k.Content) + "\n```\n\n")
+		} else {
+			b.WriteString(k.Content + "\n\n")
+		}
 		b.WriteString("---\n\n")
 	}
 	c.String(http.StatusOK, b.String())
@@ -873,7 +881,13 @@ func ExportKnowledgeDoc(c *gin.Context) {
 		}
 		b.WriteString("<h2>" + htmlEscape(k.Title) + "</h2>")
 		b.WriteString("<p><i>分类: " + htmlEscape(k.Category) + " · 标签: " + htmlEscape(strings.Join(parseTags(k.Tags), "、")) + " · " + scope + "</i></p>")
-		b.WriteString(k.Content)
+		if isDiagramKind(k.Kind) {
+			// v0.30.0：图形条目用等宽块输出大纲，保留缩进层级
+			b.WriteString("<p><b>【" + kindLabel(k.Kind) + "】</b></p><pre style='font-family:inherit;white-space:pre-wrap;line-height:1.7'>" +
+				htmlEscape(knowledgePlainText(k.Kind, k.Content)) + "</pre>")
+		} else {
+			b.WriteString(k.Content)
+		}
 		b.WriteString("<hr/>")
 	}
 	b.WriteString("</body></html>")

@@ -40,7 +40,18 @@
               :title="view.pinned ? '取消置顶' : '置顶'"
               @click="$emit('pin', view)"
             >{{ view.pinned ? '📌' : '📍' }}</button>
-            <button class="icon-btn" title="打印 / 另存为 PDF" @click="printEntry">🖨</button>
+            <button v-if="!isDiagram" class="icon-btn" title="打印 / 另存为 PDF" @click="printEntry">🖨</button>
+            <!-- 图形条目（思维导图 / 流程图）导出：PNG / SVG / PDF / 源文件 -->
+            <div v-if="isDiagram" class="dh-export" @click.stop>
+              <button class="icon-btn" title="导出图片 / PDF / 源文件" @click="exportOpen = !exportOpen">⬇</button>
+              <div v-if="exportOpen" class="dh-export-menu">
+                <button :disabled="exporting" @click="exportAs('png')">导出 PNG 图片</button>
+                <button :disabled="exporting" @click="exportAs('svg')">导出 SVG 矢量图</button>
+                <button :disabled="exporting" @click="exportAs('pdf')">导出 PDF 文档</button>
+                <button :disabled="exporting" @click="exportAs('json')">导出源文件（JSON）</button>
+                <div class="dhe-tip">{{ exporting ? '正在生成…' : 'JSON 可备份，也可再导入编辑' }}</div>
+              </div>
+            </div>
             <button v-if="!editing && canEdit" class="btn primary sm" @click="startEdit">✎ 编辑</button>
           </div>
         </div>
@@ -48,6 +59,7 @@
         <div class="dh-meta dim">
           <span class="ki-chip" :class="scopeChip(view.scope)">{{ scopeLabel(view.scope) }}</span>
           <span v-if="view.category" class="ki-chip accent">{{ view.category }}</span>
+          <span v-if="isDiagram" class="ki-chip accent">{{ kindLabelOf }}</span>
           <span v-if="view.status === 'draft'" class="ki-chip warn">草稿</span>
           <span v-for="t in parseTags(view.tags)" :key="t" class="dh-tag">#{{ t }}</span>
           <span class="dh-mtime">
@@ -59,6 +71,26 @@
 
         <!-- 编辑态：表单字段（分类 / 目录 / 状态 / 标签 / 可见范围） -->
         <div v-if="editing" class="dh-form">
+          <!-- 内容类型只在新建时可选：HTML 与绘图 JSON 无法互转，编辑中切换必然丢内容 -->
+          <div v-if="!draft.id" class="dhf-row">
+            <label class="dhf-fld wide">
+              <span>内容类型</span>
+              <div class="kind-pick">
+                <button
+                  v-for="k in KIND_OPTIONS"
+                  :key="k.value"
+                  type="button"
+                  class="kind-opt"
+                  :class="{ on: (draft.kind || 'doc') === k.value }"
+                  @click="pickKind(k.value)"
+                >
+                  <span class="kind-ico">{{ k.icon }}</span>
+                  <span class="kind-txt">{{ k.label }}</span>
+                  <span class="kind-sub">{{ k.desc }}</span>
+                </button>
+              </div>
+            </label>
+          </div>
           <div class="dhf-row">
             <label class="dhf-fld">
               <span>分类</span>
@@ -129,21 +161,39 @@
         </div>
       </header>
 
-      <!-- 正文：编辑态渲染编辑器，阅读态渲染净化后的 HTML -->
-      <div class="kb-detail-body">
-        <RichTextEditor
-          v-if="editing"
-          :model-value="draft.content"
-          :entry-id="draft.id || 0"
-          placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接 / 表格 / 代码块"
+      <!-- 正文：按内容类型渲染（doc=富文本 / mind=思维导图 / flow=流程图） -->
+      <div class="kb-detail-body" :class="{ 'kb-body-flush': isDiagram }">
+        <MindMapEditor
+          v-if="curKind === 'mind'"
+          ref="diagramRef"
+          :model-value="editing ? draft.content : (view.content || '')"
+          :readonly="!editing"
           @update:model-value="onContent"
-          @image-upload-error="$emit('content-error', $event)"
+          @dirty="onDiagramDirty"
         />
-        <div
-          v-else
-          class="kb-prose kb-read"
-          v-html="safeHtml(view.content) || '<span class=\'dim\'>（暂无内容，点右上「编辑」开始写）</span>'"
-        ></div>
+        <FlowEditor
+          v-else-if="curKind === 'flow'"
+          ref="diagramRef"
+          :model-value="editing ? draft.content : (view.content || '')"
+          :readonly="!editing"
+          @update:model-value="onContent"
+          @dirty="onDiagramDirty"
+        />
+        <template v-else>
+          <RichTextEditor
+            v-if="editing"
+            :model-value="draft.content"
+            :entry-id="draft.id || 0"
+            placeholder="像 Word 一样直接编辑：可粘贴截图、插入图片 / 文档 / 超链接 / 表格 / 代码块"
+            @update:model-value="onContent"
+            @image-upload-error="$emit('content-error', $event)"
+          />
+          <div
+            v-else
+            class="kb-prose kb-read"
+            v-html="safeHtml(view.content) || '<span class=\'dim\'>（暂无内容，点右上「编辑」开始写）</span>'"
+          ></div>
+        </template>
       </div>
 
       <!-- 编辑态底栏 -->
@@ -288,6 +338,9 @@
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
+import MindMapEditor from '@/components/knowledge/MindMapEditor.vue'
+import FlowEditor from '@/components/knowledge/FlowEditor.vue'
+import { downloadBlob, downloadText, safeFileName, imageBlobToPdf } from '@/utils/diagram'
 
 const props = defineProps({
   entry: { type: Object, default: null },
@@ -340,6 +393,75 @@ const sub = ref('comments')
 const tagDraft = ref('')
 const showCollab = ref(false)
 const dirty = ref(false)
+
+// ---------- 图形条目（思维导图 / 流程图，v0.30.0）----------
+const diagramRef = ref(null)   // 指向当前渲染的图形编辑器（v-if 保证同时只有一个）
+const exportOpen = ref(false)
+const exporting = ref(false)
+
+const KIND_OPTIONS = [
+  { value: 'doc', icon: '📄', label: '富文本文档', desc: '图文 / 表格 / 代码块' },
+  { value: 'mind', icon: '🧠', label: '思维导图', desc: '梳理结构与要点' },
+  { value: 'flow', icon: '🔀', label: '流程图', desc: '画审批与操作步骤' },
+]
+
+/** 当前内容类型：编辑态看草稿，阅读态看条目；未知值一律按文档处理（历史数据兼容） */
+const curKind = computed(() => {
+  const raw = (props.editing ? props.draft && props.draft.kind : props.entry && props.entry.kind)
+    || (props.draft && props.draft.kind) || 'doc'
+  return raw === 'mind' || raw === 'flow' ? raw : 'doc'
+})
+const isDiagram = computed(() => curKind.value !== 'doc')
+const kindLabelOf = computed(() => (curKind.value === 'mind' ? '思维导图' : '流程图'))
+
+function markDirty() {
+  if (!dirty.value) { dirty.value = true; emit('dirty-change', true) }
+}
+
+function pickKind(k) {
+  if ((props.draft.kind || 'doc') === k) return
+  // 切换类型会把正文语义整个换掉（HTML ↔ 绘图 JSON 无法互转），已写内容必须确认放弃
+  if (String(props.draft.content || '').trim() && !confirm('切换内容类型会清空当前正文，确定继续吗？')) return
+  props.draft.kind = k
+  props.draft.content = ''
+  markDirty()
+}
+
+function onDiagramDirty() { markDirty() }
+
+// 本组件不持有全局 toast，借用父级已接好的 content-error 通道提示
+function exportErr(msg) { emit('content-error', msg) }
+
+/** 导出当前图形条目：png / svg / pdf / json */
+async function exportAs(fmt) {
+  exportOpen.value = false
+  const ed = diagramRef.value
+  const title = (props.entry && props.entry.title) || (props.draft && props.draft.title) || '未命名'
+  try {
+    if (fmt === 'json') {
+      const raw = String((props.entry && props.entry.content) || (props.draft && props.draft.content) || '')
+      if (!raw.trim()) return exportErr('当前图形还是空的，先画点内容再导出')
+      downloadText(raw, safeFileName(title, 'json'), 'application/json;charset=utf-8')
+      return
+    }
+    if (!ed || typeof ed.exportBlob !== 'function') return exportErr('图形编辑器还没准备好，请稍后重试')
+    exporting.value = true
+    if (fmt === 'svg') {
+      const svg = await ed.exportBlob('svg')
+      if (!svg) throw new Error('导出 SVG 失败')
+      downloadBlob(svg, safeFileName(title, 'svg'))
+      return
+    }
+    const png = await ed.exportBlob('png')
+    if (!png) throw new Error('导出图片失败')
+    if (fmt === 'png') downloadBlob(png, safeFileName(title, 'png'))
+    else downloadBlob(await imageBlobToPdf(png), safeFileName(title, 'pdf'))
+  } catch (e) {
+    exportErr(e && e.message ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 
 /**
  * 统一的「当前展示对象」。
@@ -569,4 +691,36 @@ function printEntry() {
   .dh-title { font-size: 16px; }
   .dh-mtime { margin-left: 0; flex-basis: 100%; }
 }
+
+/* ---------- 图形条目（v0.30.0）---------- */
+.dh-export { position: relative; display: inline-flex; }
+.dh-export-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 5;
+  min-width: 176px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg-1); border: 1px solid var(--glass-border); border-radius: 10px;
+  box-shadow: 0 10px 26px var(--overlay);
+}
+.dh-export-menu button {
+  padding: 7px 10px; font-size: 13px; text-align: left; color: var(--text);
+  background: transparent; border: 0; border-radius: 7px; cursor: pointer;
+}
+.dh-export-menu button:hover:not(:disabled) { background: var(--overlay-2); color: var(--accent); }
+.dh-export-menu button:disabled { opacity: .5; cursor: not-allowed; }
+.dhe-tip { padding: 4px 10px 2px; font-size: 11px; color: var(--text-faint); }
+
+.kind-pick { display: flex; gap: 8px; flex-wrap: wrap; }
+.kind-opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-width: 140px; padding: 9px 12px; text-align: left; cursor: pointer;
+  color: var(--text); background: var(--overlay-2);
+  border: 1px solid var(--glass-border); border-radius: 10px;
+}
+.kind-opt:hover { border-color: var(--accent); }
+.kind-opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.kind-ico { font-size: 15px; line-height: 1.1; }
+.kind-txt { font-size: 13px; font-weight: 600; }
+.kind-sub { font-size: 11px; color: var(--text-faint); }
+
+/* 图形编辑器自带边框与提示条，正文区收紧留白，把空间让给画布 */
+.kb-detail-body.kb-body-flush { padding: 10px 10px 14px; }
 </style>

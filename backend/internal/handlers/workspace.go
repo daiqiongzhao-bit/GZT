@@ -329,8 +329,9 @@ func CreateKnowledge(c *gin.Context) {
 	var req struct {
 		Title    string   `json:"title"`
 		Category string   `json:"category"`
-		Content  string   `json:"content"`
-		Scope    string   `json:"scope"` // private | department
+		Content  string   `json:"content"` // doc=HTML；mind/flow=图形库 JSON（v0.30.0）
+		Kind     string   `json:"kind"`    // doc | mind | flow；空值按 doc 处理（v0.30.0）
+		Scope    string   `json:"scope"`   // private | department
 		Tags     []string `json:"tags"`
 		ParentID uint     `json:"parent_id"`
 		Status   string   `json:"status"` // draft | published
@@ -353,12 +354,23 @@ func CreateKnowledge(c *gin.Context) {
 	if req.Status != "draft" {
 		req.Status = "published"
 	}
-	// 服务端白名单净化，防存储型 XSS（纵深防御，绕过前端也拦得住）
-	req.Content = sanitizeRichContent(req.Content)
+	// v0.30.0：内容类型白名单。图形条目的正文是绘图库 JSON，不能走 HTML 净化
+	// （净化会把 JSON 打散成非法内容），改为「必须是合法且结构对得上的 JSON」校验；
+	// 文档条目照旧走白名单净化，防存储型 XSS（纵深防御，绕过前端也拦得住）。
+	kind := normalizeKind(req.Kind)
+	if isDiagramKind(kind) {
+		if err := validateDiagramContent(kind, req.Content); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		req.Content = sanitizeRichContent(req.Content)
+	}
 	entry := models.KnowledgeEntry{
 		Title:     req.Title,
 		Category:  strings.TrimSpace(req.Category),
 		Content:   req.Content,
+		Kind:      kind,
 		Scope:     models.WorkspaceScope(req.Scope),
 		OwnerID:   cl.UserID,
 		OwnerName: cl.Username,
@@ -399,7 +411,7 @@ func CreateKnowledge(c *gin.Context) {
 	addLog(c, cl.UserID, cl.Username, "新增知识库: "+entry.Title)
 	recordKnowledgeLog(entry.ID, cl, "create",
 		fmt.Sprintf("创建条目：标题「%s」、分类「%s」、可见范围「%s」。正文：%s",
-			entry.Title, entry.Category, scopeLabelShort(entry.Scope), clipRunes(htmlToPlainText(entry.Content), 200)))
+			entry.Title, entry.Category, scopeLabelShort(entry.Scope), clipRunes(knowledgePlainText(entry.Kind, entry.Content), 200)))
 	c.JSON(http.StatusOK, entry)
 }
 
@@ -451,6 +463,8 @@ func UpdateKnowledge(c *gin.Context) {
 		Tags     []string `json:"tags"`
 		ParentID uint     `json:"parent_id"`
 		Status   string   `json:"status"`
+		// 内容类型（v0.30.0）：仅作意图声明，服务端一律以库中既有类型为准
+		Kind string `json:"kind"`
 		// 协作者（可编辑人）id 列表（v0.27.0）；仅创建者 / 超管可改
 		EditorIDs []uint `json:"editor_ids"`
 		// 编辑期（新建未保存时）上传到中转缓存的附件 id
@@ -483,9 +497,21 @@ func UpdateKnowledge(c *gin.Context) {
 	}
 	entry.Title = strings.TrimSpace(req.Title)
 	entry.Category = strings.TrimSpace(req.Category)
-	// 服务端白名单净化，防存储型 XSS（纵深防御）
-	req.Content = sanitizeRichContent(req.Content)
-	entry.Content = req.Content
+	// v0.30.0：内容类型不可在编辑时切换 —— HTML 与绘图 JSON 无法互转，切换必然丢内容。
+	// 一律以库中既有类型为准：客户端就算传了别的 kind 也只当意图被忽略，不给它污染正文的
+	// 机会；想换类型请新建条目。
+	if isDiagramKind(entry.Kind) {
+		if err := validateDiagramContent(entry.Kind, req.Content); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		entry.Content = req.Content
+	} else {
+		// 服务端白名单净化，防存储型 XSS（纵深防御）。净化结果同时回写 req.Content，
+		// 保证后面「转正编辑期附件」改写的仍是净化后的内容。
+		req.Content = sanitizeRichContent(req.Content)
+		entry.Content = req.Content
+	}
 	if req.Status == "draft" || req.Status == "published" {
 		entry.Status = req.Status
 	}
@@ -529,7 +555,7 @@ func UpdateKnowledge(c *gin.Context) {
 		// 正文存的是富文本 HTML：直接塞进日志会露出 <ol><li> / &nbsp; / 剪贴板标记，记录没法读。
 		// 这里先转成纯文本再摘录，并统一「修改前 / 修改后」两段式，前端按段落分色展示。
 		parts = append(parts, fmt.Sprintf("正文：\n【修改前】%s\n【修改后】%s",
-			clipRunes(htmlToPlainText(oldContent), 400), clipRunes(htmlToPlainText(entry.Content), 400)))
+			clipRunes(knowledgePlainText(entry.Kind, oldContent), 400), clipRunes(knowledgePlainText(entry.Kind, entry.Content), 400)))
 	}
 	if oldEditors != entry.EditorNames {
 		parts = append(parts, fmt.Sprintf("协作者：%s → %s", namesTextFromJSON(oldEditors), namesTextFromJSON(entry.EditorNames)))

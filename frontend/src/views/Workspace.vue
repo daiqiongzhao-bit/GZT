@@ -164,6 +164,8 @@
                 <div class="kc-preview" v-html="highlight(kPreview(k), kQuery)"></div>
 
                 <div class="kc-foot">
+                  <span v-if="k.kind === 'mind'" class="kc-chip kind">🧠 导图</span>
+                  <span v-else-if="k.kind === 'flow'" class="kc-chip kind">🔀 流程图</span>
                   <span class="kc-chip" :class="scopeChip(k.scope)">{{ scopeLabel(k.scope) }}</span>
                   <span v-if="k.category" class="kc-chip accent">{{ k.category }}</span>
                   <span v-if="k.status === 'draft'" class="kc-chip warn">草稿</span>
@@ -752,6 +754,7 @@ import RichTextEditor from '@/components/RichTextEditor.vue'
 import KnowledgeDetail from '@/components/knowledge/KnowledgeDetail.vue'
 import KnowledgeStats from '@/components/knowledge/KnowledgeStats.vue'
 import KnowledgeTrash from '@/components/knowledge/KnowledgeTrash.vue'
+import { diagramPreview } from '@/utils/diagram'
 
 // 渲染前净化（纵深防御，与后端 sanitizeRichContent 同口径）防存储型 XSS
 //
@@ -1037,7 +1040,8 @@ const kLoading = ref(false)      // 列表骨架屏开关（首次加载才显�
 const kbNavOpen = ref(true)      // 左栏折叠开关（<1024px 自动收起）
 const kbNarrow = ref(false)      // 是否为单栏紧凑模式（<820px），用于隐藏中栏
 let kFirstLoaded = false
-const kForm = reactive({ id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: 0 })
+// kind：内容类型（v0.30.0）—— doc 富文本文档 / mind 思维导图 / flow 流程图
+const kForm = reactive({ id: 0, title: '', category: '', content: '', kind: 'doc', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: 0 })
 const showCollabPicker = ref(false)
 const kTagDraft = ref('')
 
@@ -1131,8 +1135,16 @@ function highlight(text, kw) {
   return safe.replace(new RegExp('(' + esc + ')', 'gi'), '<mark>$1</mark>')
 }
 // 纯文本预览（用于卡片与高亮）
+// v0.30.0：思维导图 / 流程图的 content 是绘图库 JSON，直接塞进 innerHTML 会变成
+// 一堆 {"id":...} 记号 —— 先转成大纲纯文本再截断。
 function kPreview(k) {
   const raw = (k && k.content) || ''
+  const kind = (k && k.kind) || 'doc'
+  if (kind === 'mind' || kind === 'flow') {
+    const t = diagramPreview(raw, kind).trim()
+    if (!t) return kind === 'mind' ? '（空白思维导图）' : '（空白流程图）'
+    return t.length > 160 ? t.slice(0, 160) + '…' : t
+  }
   const tmp = document.createElement('div')
   tmp.innerHTML = raw
   const text = (tmp.innerText || '').trim()
@@ -1169,7 +1181,7 @@ function addKTag() {
 }
 
 function openNewK() {
-  Object.assign(kForm, { id: 0, title: '', category: '', content: '', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
+  Object.assign(kForm, { id: 0, title: '', category: '', content: '', kind: 'doc', scope: 'department', tags: [], parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
   kTagDraft.value = ''
   showCollabPicker.value = false
   kAtts.value = []
@@ -1180,7 +1192,7 @@ function openNewK() {
   editingK.value = true
 }
 function openEditK(k) {
-  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published', editor_ids: Array.isArray(k.editor_id_list) ? [...k.editor_id_list] : [], owner_id: k.owner_id || 0 })
+  Object.assign(kForm, { id: k.id, title: k.title, category: k.category, content: k.content, kind: k.kind || 'doc', scope: k.scope, tags: parseTags(k.tags), parent_id: k.parent_id || 0, status: k.status || 'published', editor_ids: Array.isArray(k.editor_id_list) ? [...k.editor_id_list] : [], owner_id: k.owner_id || 0 })
   kTagDraft.value = ''
   showCollabPicker.value = false
   selectedKId.value = k.id
@@ -1205,7 +1217,7 @@ async function saveK() {
   savingK.value = true
   try {
     let savedId = kForm.id
-    const payload = { title: kForm.title, category: kForm.category, content: kForm.content, scope: kForm.scope, tags: kForm.tags, parent_id: kForm.parent_id, status: kForm.status }
+    const payload = { title: kForm.title, category: kForm.category, content: kForm.content, kind: kForm.kind || 'doc', scope: kForm.scope, tags: kForm.tags, parent_id: kForm.parent_id, status: kForm.status }
     // 协作者名单只有创建者/超管能改；协作者本人编辑时不下发，避免越权扩权（服务端亦会二次校验）
     if (canSetEditors.value) payload.editor_ids = [...kForm.editor_ids]
     if (kForm.id) {
@@ -1324,7 +1336,7 @@ function openTemplates() { templateModal.value = true; loadTemplates() }
 async function applyTemplate(t) {
   try {
     const r = await api.get('/workspace/knowledge/templates/' + t.id)
-    Object.assign(kForm, { id: 0, title: r.title || t.title, category: r.category || '', content: r.content || '', scope: 'department', tags: parseTags(r.tags || t.tags), parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
+    Object.assign(kForm, { id: 0, title: r.title || t.title, category: r.category || '', content: r.content || '', kind: 'doc', scope: 'department', tags: parseTags(r.tags || t.tags), parent_id: 0, status: 'published', editor_ids: [], owner_id: auth.user?.id || 0 })
     kTagDraft.value = ''
     editingK.value = true
     templateModal.value = false

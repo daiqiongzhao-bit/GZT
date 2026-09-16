@@ -8,6 +8,8 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@logicflow/core": "2.2.5",
+    "@logicflow/extension": "2.3.1",
     "@tiptap/core": "3.31.3",
     "@tiptap/extension-character-count": "3.31.3",
     "@tiptap/extension-highlight": "3.31.3",
@@ -25,6 +27,7 @@
     "@tiptap/starter-kit": "3.31.3",
     "@tiptap/vue-3": "3.31.3",
     "axios": "^1.6.8",
+    "mind-elixir": "5.15.1",
     "naive-ui": "^2.38.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
