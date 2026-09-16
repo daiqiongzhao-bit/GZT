@@ -155,12 +155,13 @@ func broadcastTargetIDs(all bool, depts []uint) []uint {
 	return out
 }
 
-// broadcastToDeptIDs 向「已展开的部门集合」的全部非冻结成员发送广播通知，并触发 Web Push。
+// broadcastToDeptIDs 向「已展开的部门集合」的全部非冻结、非休假成员发送广播通知，并触发 Web Push。
 // actorID/actorName 为广播发送者（历史/定时广播用 Creator；界面发送用当前用户）。
 // 返回实际接收人数。
 func broadcastToDeptIDs(actorID uint, actorName, title, content, link string, requireAck bool, attJSON string, deptIDs []uint) (int, error) {
 	var users []models.User
-	if err := db.DB.Where("dept_id IN ? AND frozen = ?", deptIDs, false).Find(&users).Error; err != nil {
+	// v0.29.2：休假(on_leave) 与冻结一样排除（此前只过滤 frozen，导致休假的部门成员仍会收到广播）
+	if err := db.DB.Where("dept_id IN ? AND frozen = ? AND on_leave = ?", deptIDs, false, false).Find(&users).Error; err != nil {
 		return 0, err
 	}
 	if len(users) == 0 {
@@ -479,6 +480,11 @@ func NudgeBroadcast(c *gin.Context) {
 	}
 	// 找到仍未处理的人
 	q := db.DB.Model(&models.Notification{}).Where("broadcast_id = ?", bid)
+	// v0.29.2：不再催办已冻结 / 休假的账号（含修复前已存在的历史通知行）
+	q = q.Where("user_id IN (?)",
+		db.DB.Model(&models.User{}).Select("id").
+			Where("frozen = ?", false).
+			Where("on_leave = ?", false))
 	if orig.RequireAck {
 		q = q.Where("ack = ?", false)
 	} else {

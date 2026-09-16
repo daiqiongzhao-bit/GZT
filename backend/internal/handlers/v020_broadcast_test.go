@@ -55,16 +55,17 @@ func doBroadcast(t *testing.T, r *gin.Engine, deptID uint, title, content string
 
 func seedBroadcastUsers(t *testing.T) {
 	t.Helper()
-	// 部门 1：两名可用 + 一名冻结；部门 2：一名可用
+	// 部门 1：两名可用 + 一名冻结 + 一名休假；部门 2：一名可用
 	db.DB.Create(&models.Department{ID: 1, Name: "预订仓"})
 	db.DB.Create(&models.Department{ID: 2, Name: "信息部"})
 	db.DB.Create(&models.User{Username: "a1", Name: "张三", DeptID: 1, Frozen: false})
 	db.DB.Create(&models.User{Username: "a2", Name: "李四", DeptID: 1, Frozen: false})
 	db.DB.Create(&models.User{Username: "a3", Name: "冻结王", DeptID: 1, Frozen: true})
+	db.DB.Create(&models.User{Username: "a4", Name: "休假赵", DeptID: 1, OnLeave: true})
 	db.DB.Create(&models.User{Username: "b1", Name: "陈五", DeptID: 2, Frozen: false})
 }
 
-// TestBroadcastDeptAdminOwnDept 部门管理员发广播：只给本部门非冻结成员，含本人，不带入冻结与它部门（v0.2.0）
+// TestBroadcastDeptAdminOwnDept 部门管理员发广播：只给本部门「非冻结且非休假」成员，含本人，不带入冻结/休假/它部门（v0.2.0，v0.29.2 补 on_leave）
 func TestBroadcastDeptAdminOwnDept(t *testing.T) {
 	r, _ := setupV020(t, BroadcastNotification, &models.Claims{
 		UserID: 1, Username: "a1", Role: models.RoleDeptAdmin, DeptID: 1, Client: models.ClientWeb,
@@ -74,7 +75,7 @@ func TestBroadcastDeptAdminOwnDept(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d: %s", w.Code, w.Body.String())
 	}
-	// 部门 1 可用 2 人（张三含本人 actor + 李四），冻结王、陈五不在
+	// 部门 1 可用 2 人（张三含本人 actor + 李四），冻结王、休假赵、陈五均不在
 	var n []models.Notification
 	db.DB.Find(&n)
 	names := map[string]bool{}
@@ -89,8 +90,8 @@ func TestBroadcastDeptAdminOwnDept(t *testing.T) {
 	if !names["张三"] || !names["李四"] {
 		t.Errorf("通知接收人应为 张三、李四，实际 %v", names)
 	}
-	if names["冻结王"] || names["陈五"] {
-		t.Errorf("冻结/它部门人员不应收到广播，实际 %v", names)
+	if names["冻结王"] || names["休假赵"] || names["陈五"] {
+		t.Errorf("冻结/休假/它部门人员不应收到广播，实际 %v", names)
 	}
 }
 

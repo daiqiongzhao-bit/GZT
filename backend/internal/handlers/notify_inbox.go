@@ -42,7 +42,9 @@ func notifyUser(userID uint, kind, title, content string, actorID uint, actorNam
 	}
 }
 
-// notifyPeopleByName 按姓名给系统内用户发通知（匹配不到的用户跳过）
+// notifyPeopleByName 按姓名给系统内用户发通知（匹配不到的用户跳过）。
+// v0.29.2：已冻结(frozen) / 休假(on_leave) 的账号不再接收（与「当班@名单」口径一致）——
+// 冻结账号无法登录、休假账号不在岗，批量通知对他们只是噪音。
 func notifyPeopleByName(names []string, kind, titleFmt, contentFmt string, actorID uint, actorName string) {
 	if actorID == 0 {
 		return
@@ -54,22 +56,25 @@ func notifyPeopleByName(names []string, kind, titleFmt, contentFmt string, actor
 			continue
 		}
 		var users []models.User
-		db.DB.Where("name = ?", name).Find(&users)
+		db.DB.Where("name = ?", name).
+			Where("frozen = ?", false).
+			Where("on_leave = ?", false).
+			Find(&users)
 		for _, u := range users {
 			if seen[u.ID] || u.ID == actorID {
 				continue
 			}
-		seen[u.ID] = true
-		if err := db.DB.Create(&models.Notification{
-			UserID:    u.ID,
-			Kind:      kind,
-			Title:     titleFmt,
-			Content:   contentFmt,
-			ActorID:   actorID,
-			ActorName: actorName,
-		}).Error; err == nil {
-			pushToUser(u.ID, titleFmt, pushBody(contentFmt))
-		}
+			seen[u.ID] = true
+			if err := db.DB.Create(&models.Notification{
+				UserID:    u.ID,
+				Kind:      kind,
+				Title:     titleFmt,
+				Content:   contentFmt,
+				ActorID:   actorID,
+				ActorName: actorName,
+			}).Error; err == nil {
+				pushToUser(u.ID, titleFmt, pushBody(contentFmt))
+			}
 		}
 	}
 }
