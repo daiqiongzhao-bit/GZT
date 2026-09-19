@@ -23,17 +23,29 @@
       <!-- 头部：标题 + 元信息 + 操作 -->
       <header class="kb-detail-head">
         <div class="dh-top">
-          <input
-            v-if="editing"
-            v-model="draft.title"
-            class="dh-title-input"
-            placeholder="请输入标题"
-            aria-required="true"
-          />
-          <span v-if="editing" class="dh-req" title="必填">*</span>
-          <h2 v-else class="dh-title" @dblclick="canEdit && startEdit()">{{ view.title }}</h2>
+          <div class="dh-title-wrap">
+            <div class="dh-title-row">
+              <input
+                v-if="editing"
+                v-model="draft.title"
+                class="dh-title-input"
+                placeholder="请输入标题"
+                aria-required="true"
+              />
+              <span v-if="editing" class="dh-req" title="必填">*</span>
+              <h2 v-else class="dh-title" @dblclick="canEdit && startEdit()">{{ view.title }}</h2>
+            </div>
+            <!-- v0.36.2：作者 / 更新于 / 浏览 / 协作者 移到标题下空白，常驻可见 -->
+            <div class="dh-sub dim">
+              {{ view.owner_name === currentUserName ? '我' : view.owner_name }} · 更新于 {{ fmtTime(view.updated_at || view.created_at) }}
+              <template v-if="view.view_count"> · 👁 {{ view.view_count }}</template>
+              <template v-if="editorsText(entry)"> · ✍ {{ editorsText(entry) }}</template>
+            </div>
+            <div v-if="!headOpen && editing && headSummary" class="dh-sub dh-collapsed-hint">📋 {{ headSummary }} · 点右上 ⌄ 展开字段</div>
+          </div>
 
           <div class="dh-ops">
+            <button class="icon-btn" :title="headOpen ? '收起字段与元信息' : '展开字段与元信息'" @click="headOpen = !headOpen">{{ headOpen ? '⌃' : '⌄' }}</button>
             <button class="icon-btn" :class="{ on: view.starred }" :title="view.starred ? '取消收藏' : '收藏'" @click="$emit('star', view)">{{ view.starred ? '★' : '☆' }}</button>
             <button
               v-if="view.owner_id === currentUserId || isSuper"
@@ -58,17 +70,14 @@
           </div>
         </div>
 
+        <!-- v0.36.2：元信息 + 表单整块可折叠（红线区域），编辑已有条目默认收起 -->
+        <div class="dh-collapsible" :class="{ collapsed: !headOpen }">
         <div class="dh-meta dim">
           <span class="ki-chip" :class="scopeChip(view.scope)">{{ scopeLabel(view.scope) }}</span>
           <span v-if="view.category" class="ki-chip accent">{{ view.category }}</span>
           <span v-if="isDiagram" class="ki-chip accent">{{ kindLabelOf }}</span>
           <span v-if="view.status === 'draft'" class="ki-chip warn">草稿</span>
           <span v-for="t in parseTags(view.tags)" :key="t" class="dh-tag">#{{ t }}</span>
-          <span class="dh-mtime">
-            {{ view.owner_name === currentUserName ? '我' : view.owner_name }} · 更新于 {{ fmtTime(view.updated_at || view.created_at) }}
-            <template v-if="view.view_count"> · 👁 {{ view.view_count }}</template>
-            <template v-if="editorsText(entry)"> · ✍ {{ editorsText(entry) }}</template>
-          </span>
         </div>
 
         <!-- 编辑态：基础字段 + 内容类型（v0.36.0 压成一行，空间让给画布） -->
@@ -137,6 +146,7 @@
               />
             </div>
           </label>
+        </div>
         </div>
       </header>
 
@@ -445,6 +455,17 @@ const tagDraft = ref('')
 const showCollab = ref(false)
 const dirty = ref(false)
 
+// v0.36.2：整块头部（标题 + 元信息 + 表单）可折叠；编辑已有条目时默认收起，把空间让给画布
+const headOpen = ref(true)
+const headSummary = computed(() => {
+  if (!props.editing) return ''
+  const p = []
+  if (props.draft.category) p.push(props.draft.category)
+  p.push(props.draft.status === 'draft' ? '草稿' : '已发布')
+  if (props.draft.tags && props.draft.tags.length) p.push(props.draft.tags.length + ' 个标签')
+  return p.join(' · ')
+})
+
 // 内容类型 chip 菜单（v0.32.0：从顶部卡片改为标题旁 chip）
 const rootKind = ref(null)
 const kindMenuOpen = ref(false)
@@ -565,7 +586,10 @@ function onContent(v) {
   }
 }
 
-watch(() => props.editing, (v) => { if (!v) { dirty.value = false; emit('dirty-change', false) } })
+watch(() => props.editing, (v) => {
+  if (!v) { dirty.value = false; emit('dirty-change', false); headOpen.value = true }
+  else if (props.draft && props.draft.id) { headOpen.value = false } // 编辑已有条目：头部默认收起
+})
 
 // 类型菜单：点击空白处自动收起
 function onDocClickKind(e) {
@@ -657,6 +681,14 @@ function printEntry() {
 .dh-title-input:focus { border-color: var(--accent); }
 .dh-req { flex: 0 0 auto; color: #dc2626; font-weight: 700; font-size: 16px; line-height: 34px; padding-left: 2px; }
 .dh-ops { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
+
+/* v0.36.2：标题列（标题行 + 作者/时间常驻行 + 折叠提示行） */
+.dh-title-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dh-title-row { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.dh-sub { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dh-collapsed-hint { color: var(--accent); }
+/* v0.36.2：头部折叠容器（元信息 + 表单整块收起/展开） */
+.dh-collapsible.collapsed { display: none; }
 
 .dh-meta {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
