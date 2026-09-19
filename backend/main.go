@@ -203,10 +203,11 @@ func main() {
 			auth.POST("/schedules/validate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ValidatePlan)
 			auth.POST("/schedules/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlan)
 
-			// 排班草稿：多版本暂存，定稿后再推送到正式班表
+			// 排班版本管理（v0.37.0）：改动后自动留档 + 多版本暂存/对比/回滚，定稿后再推送到正式班表
 			auth.GET("/shift-drafts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListPlanDrafts)
 			auth.POST("/shift-drafts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.SavePlanDraft)
 			auth.GET("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GetPlanDraft)
+			auth.PUT("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdatePlanDraft)
 			auth.DELETE("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeletePlanDraft)
 			auth.POST("/shift-drafts/:id/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlanDraft)
 

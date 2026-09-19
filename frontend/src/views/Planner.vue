@@ -27,8 +27,17 @@
             <span v-html="icons.plus"></span>{{ generating ? '生成中…' : '一键生成' }}
           </button>
           <button class="btn ghost" :disabled="!hasPlan || validing" @click="doValidate">{{ validing ? '校验中…' : '重新校验' }}</button>
-          <button class="btn ghost" :disabled="!hasPlan || savingDraft" @click="openSaveDraft">{{ savingDraft ? '暂存中…' : '暂存为草稿' }}</button>
-          <button class="btn ghost" :disabled="!canOperate" @click="openDrafts">草稿箱<template v-if="drafts.length"> ({{ drafts.length }})</template></button>
+          <button class="btn ghost" :disabled="!hasPlan || savingDraft" @click="openSaveDraft">{{ savingDraft ? '存版中…' : '存为版本' }}</button>
+          <button
+            class="btn ghost"
+            :disabled="!canOperate"
+            title="排班版本管理：改动自动留档，可对比差异、按「只补差异」回滚"
+            @click="openDrafts"
+          >
+            🕘 版本<template v-if="drafts.length"> ({{ drafts.length }})</template>
+            <i v-if="autoSaving" class="vs-dot saving" title="正在自动留档…"></i>
+            <i v-else-if="autoSavedAt" class="vs-dot" :title="'已自动留档 ' + autoSavedAt"></i>
+          </button>
           <button class="btn ghost" :disabled="!hasPlan || applying" @click="doApply">{{ applying ? '发布中…' : '发布到班表' }}</button>
         </div>
       </div>
@@ -448,40 +457,96 @@
       </template>
     </template>
 
-    <!-- 草稿箱：多版本暂存 / 读取 / 推送 -->
+    <!-- v0.37.0 排班版本管理：自动留档 / 差异对比 / 只补差异回滚 / 推送到正式班表 -->
     <div v-if="draftBox" class="picker-mask" @click.self="draftBox = false">
-      <div class="picker glass" style="max-width:680px">
+      <div class="picker glass" style="max-width:780px">
         <div class="pk-head">
-          <b>草稿箱</b>
-          <span class="section-sub">{{ deptName }} · 全部版本（跨月份）</span>
+          <b>🕘 排班版本管理</b>
+          <span class="section-sub">{{ deptName }} · 共 {{ drafts.length }} 个版本</span>
         </div>
 
-        <div class="pk-body" style="flex-direction:column;align-items:stretch;max-height:52vh;overflow:auto">
-          <p v-if="!drafts.length" class="hint" style="margin:0">
-            还没有草稿。生成班表后点「暂存为草稿」，可以把多个版本存起来慢慢挑。
+        <div class="vs-bar">
+          <input v-model="draftQuery" class="glass-input vs-search" placeholder="🔍 搜版本名 / 备注 / 创建人" />
+          <select v-model="draftSource" class="glass-input vs-sel" title="按版本来源筛选">
+            <option value="">全部来源</option>
+            <option value="generate">生成班表</option>
+            <option value="adjust">手动微调</option>
+            <option value="manual">手动存版</option>
+            <option value="apply">发布存档</option>
+            <option value="rollback">回滚存档</option>
+          </select>
+          <label class="vs-chk" title="不勾选=只补差异（只写入版本里的班次，不删除当前多出的排班）；勾选=完全还原该版本，版本里标为休息的排班也会被清掉">
+            <input type="checkbox" v-model="rollbackStrict" /> 回滚时完全还原
+          </label>
+        </div>
+
+        <div class="pk-body" style="flex-direction:column;align-items:stretch;max-height:48vh;overflow:auto">
+          <p v-if="!filteredDrafts.length" class="hint" style="margin:0">
+            {{ drafts.length ? '没有符合条件的版本，换个关键词或来源试试。' : '还没有版本。生成班表或手动微调后会自动留档，也可以点右下「存为版本」手动存一版。' }}
           </p>
-          <div v-for="d in drafts" :key="d.id" class="draft-row" :class="{ on: d.applied }">
+          <div v-for="d in filteredDrafts" :key="d.id" class="draft-row" :class="{ on: d.applied }">
             <div class="dr-main">
               <div class="dr-title">
+                <span class="vs-rev" :title="'同月第 ' + (d.rev || 0) + ' 个版本'">v{{ d.rev || 0 }}</span>
                 {{ d.name }}
                 <span class="tag">{{ d.year }} 年 {{ d.month }} 月</span>
-                <span v-if="d.applied" class="tag ok">已发布</span>
+                <span class="tag">{{ sourceLabel(d.source) }}</span>
+                <span v-if="d.auto" class="tag vs-tag-auto">自动</span>
+                <span v-if="d.applied" class="tag ok">当前发布版</span>
               </div>
               <div class="dr-meta">
-                {{ d.days }} 天 · {{ draftStat(d) }} · {{ d.creator }} · {{ fmtTime(d.created_at) }}
+                {{ d.days }} 天 · {{ draftStat(d) }} · {{ d.creator }} · {{ fmtTime(d.updated_at || d.created_at) }}
               </div>
               <div v-if="d.note" class="dr-note">{{ d.note }}</div>
             </div>
             <div class="dr-ops">
-              <button class="btn ghost sm" @click="loadDraft(d)">读取</button>
-              <button class="btn ghost sm" @click="applyDraft(d)">推送到班表</button>
+              <button class="btn ghost sm" title="整版载入编辑器（覆盖当前计划）" @click="loadDraft(d)">读取</button>
+              <button class="btn ghost sm" title="只把该版本里的班次补回当前计划，不删除当前多出的排班" @click="rollbackDraft(d)">回滚</button>
+              <button class="btn ghost sm" title="对比「当前编辑器的计划 → 该版本」的差异" @click="openDiff(d)">对比</button>
+              <button class="btn ghost sm" @click="renameDraft(d)">改名</button>
+              <button class="btn ghost sm" @click="applyDraft(d)">推送</button>
               <button class="btn ghost sm danger" @click="removeDraft(d)">删除</button>
             </div>
           </div>
         </div>
 
+        <!-- 差异面板：当前编辑器里的计划 → 选中的版本 -->
+        <div v-if="diffOf" class="vs-diff">
+          <div class="vs-diff-head">
+            <b>差异 v{{ diffOf.rev || 0 }} · {{ diffOf.name }}</b>
+            <span class="section-sub">当前计划 → 该版本</span>
+            <span class="vs-diff-sum">
+              <i class="add">+{{ diffRes.added.length }}</i>
+              <i class="chg">~{{ diffRes.changed.length }}</i>
+              <i class="del">-{{ diffRes.removed.length }}</i>
+            </span>
+            <button class="btn ghost sm" @click="diffOf = null">收起</button>
+          </div>
+          <div
+            v-if="!diffRes.added.length && !diffRes.changed.length && !diffRes.removed.length"
+            class="hint"
+            style="margin:0"
+          >
+            与当前编辑器里的计划完全一致。
+          </div>
+          <div v-else class="vs-diff-body">
+            <div v-for="(x, i) in diffRes.added" :key="'a' + i" class="vs-diff-line add">
+              + {{ x.date }} {{ x.name }} → {{ x.shift }}
+            </div>
+            <div v-for="(x, i) in diffRes.changed" :key="'c' + i" class="vs-diff-line chg">
+              ~ {{ x.date }} {{ x.name }}：{{ x.from }} → {{ x.to }}
+            </div>
+            <div v-for="(x, i) in diffRes.removed" :key="'r' + i" class="vs-diff-line del">
+              - {{ x.date }} {{ x.name }}：该版本为休息（当前是 {{ x.shift }}）
+            </div>
+          </div>
+        </div>
+
         <div class="pk-foot">
-          <span class="hint" style="margin-right:auto">推送会覆盖该部门本月的正式班表</span>
+          <span class="hint" style="margin-right:auto">
+            自动留档把同一人 5 分钟内的连续改动合并为一条；「推送」会覆盖该部门本月的正式班表
+          </span>
+          <button class="btn ghost" :disabled="!hasPlan" @click="openSaveDraft">存为版本</button>
           <button class="btn ghost" @click="draftBox = false">关闭</button>
         </div>
       </div>
@@ -897,6 +962,8 @@ async function doGenerate() {
     notes.value = r.notes || []
     warnings.value = r.warnings || []
     tab.value = 'preview'
+    // v0.37.0：生成后自动留档一版（来源=生成），随时可回退到刚生成的方案
+    await autoSave('generate', '一键生成的方案')
   } catch (e) {
     alert(e.response?.data?.error || '生成失败')
   } finally {
@@ -931,8 +998,18 @@ async function doApply() {
       dept_id: deptId.value, year: year.value, month: month.value, plan: plan.value
     })
     violations.value = r.violations || []
+    // v0.37.0：发布成功后自动留档，并标记为「当前发布版」
+    const sv = await autoSave('apply', '已发布到班表')
+    if (sv?.id) {
+      try {
+        await api.put(`/shift-drafts/${sv.id}`, { applied: true })
+      } catch (e) {
+        /* 标记失败不影响发布结果 */
+      }
+    }
     let out = `发布成功：写入 ${r.created} 条班次记录。`
     if (r.notes?.length) out += '\n\n' + r.notes.join('\n')
+    if (sv?.id) out += `\n\n已在版本管理里留档（v${sv.rev || '?'}，标记为当前发布版）。`
     alert(out)
   } catch (e) {
     alert(e.response?.data?.error || '发布失败')
@@ -941,9 +1018,9 @@ async function doApply() {
   }
 }
 
-// ---------- 草稿箱（多版本暂存）----------
+// ---------- 版本管理（v0.19.3 草稿箱 → v0.37.0 升级）----------
 // 生成后往往需要反复微调，定稿前不该直接覆盖正式班表。
-// 流程：生成预览 → 暂存多个版本 → 挑一版推送到正式班表。
+// 流程：生成预览 →（自动/手动）留档为版本 → 对比/补差回滚 → 挑一版推送到正式班表。
 const drafts = ref([])
 const draftBox = ref(false)
 const savingDraft = ref(false)
@@ -964,13 +1041,15 @@ async function fetchDrafts() {
 
 async function openDrafts() {
   await fetchDrafts()
+  diffOf.value = null
   draftBox.value = true
 }
 
 function draftStat(d) {
   try {
     const st = typeof d.stats === 'string' ? JSON.parse(d.stats || '{}') : (d.stats || {})
-    const err = st.error ?? st.errors ?? 0
+    // 自动留档由后端 validatePlan 写入 violations；手动存版写 error/warn —— 两种都兼容
+    const err = st.error ?? st.errors ?? st.violations ?? 0
     const warn = st.warn ?? st.warnings ?? 0
     if (!err && !warn) return '无违规'
     return `违规 ${err} 条${warn ? ` / 提醒 ${warn} 条` : ''}`
@@ -1001,12 +1080,16 @@ async function openSaveDraft() {
       name: name.trim() || defName,
       note: note.trim(),
       plan: plan.value,
+      // v0.37.0：手动存版 —— 不会被自动合并窗口覆盖、也不参与自动清理
+      source: 'manual',
+      auto: false,
       stats: {
         error: violations.value.filter((v) => v.level === 'error').length,
         warn: violations.value.filter((v) => v.level !== 'error').length
       }
     })
     await fetchDrafts()
+    diffOf.value = null
     draftBox.value = true
   } catch (e) {
     alert(e.response?.data?.error || '暂存失败')
@@ -1055,6 +1138,182 @@ async function applyDraft(d) {
     alert(e.response?.data?.error || '推送失败')
   } finally {
     applying.value = false
+  }
+}
+
+// ---------- v0.37.0 版本管理 ----------
+// 设计：改动后自动留档（后端按「同人 + 5 分钟」合并，避免刷屏）；
+// 版本可改名/备注/互相差异对比；「回滚」= 只把该版本里的班次补回当前计划，不删除当前多出的排班。
+const draftQuery = ref('')
+const draftSource = ref('')
+const rollbackStrict = ref(false) // 勾选=完全还原（版本里标为休息的也清掉）；默认只补差异
+const diffOf = ref(null)
+const diffRes = ref({ added: [], changed: [], removed: [] })
+const autoSaving = ref(false)
+const autoSavedAt = ref('')
+let autoTimer = null
+
+const filteredDrafts = computed(() => {
+  const q = draftQuery.value.trim().toLowerCase()
+  return drafts.value.filter((d) => {
+    if (draftSource.value && (d.source || 'manual') !== draftSource.value) return false
+    if (!q) return true
+    return [d.name, d.note, d.creator].some((x) => String(x || '').toLowerCase().includes(q))
+  })
+})
+
+function sourceLabel(s) {
+  return {
+    generate: '生成',
+    adjust: '微调',
+    manual: '手动存版',
+    apply: '发布存档',
+    rollback: '回滚',
+    import: '导入'
+  }[s] || '版本'
+}
+
+// 两份计划的差异：next 相对 base。休息视为「无排班」。
+function planDiff(base, next) {
+  const added = []
+  const changed = []
+  const removed = []
+  const dates = new Set([...Object.keys(base || {}), ...Object.keys(next || {})])
+  for (const date of [...dates].sort()) {
+    const b = (base || {})[date] || {}
+    const n = (next || {})[date] || {}
+    const names = new Set([...Object.keys(b), ...Object.keys(n)])
+    for (const name of [...names].sort()) {
+      const bs = b[name] || '休息'
+      const ns = n[name] || '休息'
+      if (bs === ns) continue
+      if (bs === '休息') added.push({ date, name, shift: ns })
+      else if (ns === '休息') removed.push({ date, name, shift: bs })
+      else changed.push({ date, name, from: bs, to: ns })
+    }
+  }
+  return { added, changed, removed }
+}
+
+// 「只补差异」合并：把版本里存在的班次写回当前计划；当前多出来的排班不动。
+// strict=true 时，版本里标为「休息」的排班也会转成休息（= 完全还原该版本）。
+function mergePlan(cur, ver, strict) {
+  const out = JSON.parse(JSON.stringify(cur || {}))
+  let added = 0
+  let changed = 0
+  let rest = 0
+  for (const date of Object.keys(ver || {})) {
+    const byName = ver[date] || {}
+    for (const name of Object.keys(byName)) {
+      const s = byName[name]
+      const had = out[date] ? out[date][name] : undefined
+      if (!s || s === '休息') {
+        if (strict && had && had !== '休息') {
+          out[date][name] = '休息'
+          rest++
+        }
+        continue
+      }
+      if (had === s) continue
+      if (!out[date]) out[date] = {}
+      out[date][name] = s
+      if (!had || had === '休息') added++
+      else changed++
+    }
+  }
+  return { plan: out, added, changed, rest }
+}
+
+// 自动留档：失败不打断主流程（版本是附加能力，不能拖垮排班本身）
+async function autoSave(source, note = '') {
+  if (!canOperate.value || !hasPlan.value) return null
+  autoSaving.value = true
+  try {
+    const r = await api.post('/shift-drafts', {
+      dept_id: deptId.value,
+      year: year.value,
+      month: month.value,
+      plan: plan.value,
+      source,
+      auto: true,
+      note
+      // stats 交给后端 validatePlan 计算（写入 violations），保证与「发布」时的判定一致
+    })
+    autoSavedAt.value = fmtTime(new Date())
+    if (draftBox.value) await fetchDrafts()
+    return r
+  } catch (e) {
+    return null
+  } finally {
+    autoSaving.value = false
+  }
+}
+
+// 微调类改动用防抖，2 秒内的连续点击只留一次自动留档
+function scheduleAutoSave(source, note) {
+  clearTimeout(autoTimer)
+  autoTimer = setTimeout(() => autoSave(source, note), 2000)
+}
+
+async function openDiff(d) {
+  try {
+    const r = await api.get(`/shift-drafts/${d.id}`)
+    diffRes.value = planDiff(plan.value || {}, r.plan || {})
+    diffOf.value = d
+  } catch (e) {
+    alert(e.response?.data?.error || '读取版本失败')
+  }
+}
+
+async function rollbackDraft(d) {
+  let r
+  try {
+    r = await api.get(`/shift-drafts/${d.id}`)
+  } catch (e) {
+    alert(e.response?.data?.error || '读取版本失败')
+    return
+  }
+  const ver = r.plan || {}
+  const diff = planDiff(plan.value || {}, ver)
+  const strict = rollbackStrict.value
+  const lines = [
+    `回滚到 v${d.rev || 0}「${d.name}」？`,
+    '',
+    `方式：${strict ? '完全还原（版本里标为「休息」的排班也会被清掉）' : '只补差异（只写入版本里的班次，不删除当前多出的排班）'}`,
+    `影响：新增 ${diff.added.length} 条 / 改班次 ${diff.changed.length} 条`,
+    strict
+      ? `转休息 ${diff.removed.length} 条`
+      : `（该版本为休息、当前却在上班的 ${diff.removed.length} 条将保留）`,
+    '',
+    '只改编辑器里的计划，不动正式班表。'
+  ]
+  if (!confirm(lines.join('\n'))) return
+  const m = mergePlan(plan.value || {}, ver, strict)
+  plan.value = m.plan
+  if (r.year) year.value = r.year
+  if (r.month) month.value = r.month
+  await doValidate()
+  await autoSave('rollback', `回滚到 v${d.rev || 0} ${d.name}`)
+  draftBox.value = false
+  diffOf.value = null
+  tab.value = 'preview'
+  alert(
+    `已回滚：新增 ${m.added} 条、改班次 ${m.changed} 条${m.rest ? `、转休息 ${m.rest} 条` : ''}。\n` +
+      '这只是编辑器里的计划，确认无误后点「发布到班表」才生效。'
+  )
+}
+
+async function renameDraft(d) {
+  const name = prompt('新的版本名：', d.name)
+  if (name === null) return
+  const note = prompt('备注（可留空）：', d.note || '')
+  if (note === null) return
+  try {
+    await api.put(`/shift-drafts/${d.id}`, { name: (name || '').trim() || d.name, note })
+    await fetchDrafts()
+    if (diffOf.value && diffOf.value.id === d.id) diffOf.value = { ...diffOf.value, name: name || d.name, note }
+  } catch (e) {
+    alert(e.response?.data?.error || '改名失败')
   }
 }
 
@@ -1185,6 +1444,8 @@ async function setCell(s) {
   plan.value[date][name] = s
   editCell.value = null
   await doValidate()
+  // v0.37.0：微调后自动留档（防抖 2s，后端再按「同人 5 分钟」合并，避免每次点都存一条）
+  scheduleAutoSave('adjust', '手动微调')
 }
 
 // 单元格级违规定位：把「人 + 日期区间」展开成可命中集合
@@ -1459,7 +1720,7 @@ thead .mx-name { background: var(--glass-strong); font-weight: 700; }
 .pk-btn.rest { color: var(--text-dim); }
 .pk-foot { display: flex; justify-content: flex-end; padding: 0 16px 14px; }
 
-/* 草稿箱 */
+/* 版本管理（v0.37.0 由草稿箱升级） */
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--glass-border); color: var(--text-dim); }
 .tag.ok { color: var(--accent); border-color: var(--accent); }
 .draft-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--overlay); }
@@ -1468,7 +1729,30 @@ thead .mx-name { background: var(--glass-strong); font-weight: 700; }
 .dr-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .dr-meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
 .dr-note { font-size: 11px; color: var(--text-dim); margin-top: 3px; white-space: pre-wrap; word-break: break-all; }
-.dr-ops { display: flex; gap: 6px; flex-shrink: 0; }
+.dr-ops { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+
+/* v0.37.0 版本管理：工具条 / 版本号 / 差异面板 */
+.vs-bar { display: flex; align-items: center; gap: 8px; padding: 0 16px 10px; flex-wrap: wrap; }
+.vs-search { flex: 1 1 200px; min-width: 160px; padding: 7px 10px; font-size: 12.5px; }
+.vs-sel { flex: 0 0 auto; padding: 7px 10px; font-size: 12.5px; }
+.vs-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.vs-rev { font-size: 11px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 0 5px; }
+.vs-tag-auto { border-style: dashed; }
+.vs-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 1px; }
+.vs-dot.saving { background: var(--text-dim); animation: vsPulse 1s infinite; }
+@keyframes vsPulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.vs-diff { border-top: 1px solid var(--glass-border); padding: 10px 16px 6px; }
+.vs-diff-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.vs-diff-sum { display: inline-flex; gap: 8px; margin-left: auto; }
+.vs-diff-sum i { font-style: normal; font-weight: 700; }
+.vs-diff-sum .add { color: #16a34a; }
+.vs-diff-sum .chg { color: #d97706; }
+.vs-diff-sum .del { color: #dc2626; }
+.vs-diff-body { max-height: 26vh; overflow: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.vs-diff-line { font-size: 11.5px; font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.7; }
+.vs-diff-line.add { color: #16a34a; }
+.vs-diff-line.chg { color: #d97706; }
+.vs-diff-line.del { color: #dc2626; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .btn.danger { color: var(--danger, #e5484d); }
 

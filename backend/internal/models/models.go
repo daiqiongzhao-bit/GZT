@@ -697,10 +697,12 @@ type PushSubscription struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ============ 排班草稿（v0.19.3）============
+// ============ 排班版本（v0.19.3 草稿 → v0.37.0 升级为版本管理）============
 //
 // 场景：排班生成后往往还要人工微调，没定稿前不该直接覆盖正式班表。
-// 这里提供「暂存多个版本 → 选定后再推送到正式班表」的能力。
+// v0.19.3：暂存多个版本 → 选定后再推送到正式班表。
+// v0.37.0：升级为「版本管理」——改动后自动留档（同窗口内的连续改动合并），
+// 版本可改名/备注/互相差异对比，并支持「只补差异」回滚到某个旧版本。
 type ShiftPlanDraft struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	DeptID    uint      `json:"dept_id" gorm:"index;not null"`
@@ -710,9 +712,19 @@ type ShiftPlanDraft struct {
 	Note      string    `json:"note" gorm:"size:512"`              // 备注
 	Content   string    `json:"content" gorm:"type:text;not null"` // JSON：{ "2026-09-01": {"张三":"早班", ...}, ... }
 	Stats     string    `json:"stats" gorm:"type:text"`            // JSON：违规数等信息快照
-	Applied   bool      `json:"applied" gorm:"default:false"`      // 是否已推送到正式班表
+	Applied   bool      `json:"applied" gorm:"default:false"`      // 是否已推送到正式班表（= 当前生效版本）
 	CreatorID uint      `json:"creator_id"`
 	Creator   string    `json:"creator" gorm:"size:64"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// ---- v0.37.0 版本管理 ----
+	// 来源：generate=生成班表 / adjust=手动微调 / manual=手动存版
+	//      / apply=发布前存档 / rollback=回滚产生的版本
+	Source string `json:"source" gorm:"size:24"`
+	// 是否系统自动留档。自动版可被「同部门+同月+同人+5 分钟内」的后续改动合并覆盖，
+	// 且每部门每月仅保留最近 maxAutoVersions 条；手动版永不自动清理。
+	Auto bool `json:"auto" gorm:"column:is_auto;default:false"`
+	// 同部门同月的版本序号（从 1 递增），界面上显示为 v1 / v2 …，便于口头指代
+	Rev int `json:"rev" gorm:"default:0"`
 }
