@@ -69,100 +69,77 @@
           </span>
         </div>
 
-        <!-- 编辑态：表单字段（分类 / 目录 / 状态 / 标签 / 可见范围） -->
-        <div v-if="editing" class="dh-form">
-          <!-- 内容类型只在新建时可选：HTML 与绘图 JSON 无法互转，编辑中切换必然丢内容 -->
-          <div v-if="!draft.id" class="dhf-row">
-            <label class="dhf-fld wide">
-              <span>内容类型</span>
-              <div class="kind-pick">
-                <button
-                  v-for="k in KIND_OPTIONS"
-                  :key="k.value"
-                  type="button"
-                  class="kind-opt"
-                  :class="{ on: (draft.kind || 'doc') === k.value }"
-                  @click="pickKind(k.value)"
-                >
-                  <span class="kind-ico">{{ k.icon }}</span>
-                  <span class="kind-txt">{{ k.label }}</span>
-                  <span class="kind-sub">{{ k.desc }}</span>
-                </button>
-              </div>
-            </label>
-          </div>
-          <div class="dhf-row">
-            <label class="dhf-fld">
-              <span>分类</span>
-              <input v-model="draft.category" class="glass-input" list="kbCatList" placeholder="如：活动SOP / 检查流程 / 话术" />
-              <datalist id="kbCatList">
-                <option v-for="c in categories" :key="c" :value="c" />
-              </datalist>
-            </label>
-            <label class="dhf-fld">
-              <span>所属父级</span>
-              <select v-model.number="draft.parent_id" class="glass-input">
-                <option :value="0">（顶级，无父级）</option>
-                <option v-for="p in parentCandidates" :key="p.id" :value="p.id">{{ p.title }}</option>
-              </select>
-            </label>
-            <label class="dhf-fld">
-              <span>状态</span>
-              <select v-model="draft.status" class="glass-input">
-                <option value="published">已发布</option>
-                <option value="draft">草稿（仅自己可见）</option>
-              </select>
-            </label>
-            <label class="dhf-fld">
-              <span>可见范围</span>
-              <select v-model="draft.scope" class="glass-input">
-                <option value="public" v-if="isSuper">全公司可见</option>
-                <option value="department">同部门共享</option>
-                <option value="private">仅自己可见</option>
-              </select>
-            </label>
-          </div>
-          <div class="dhf-row">
-            <label class="dhf-fld wide">
-              <span>标签</span>
-              <div class="tag-edit">
-                <span v-for="(t, i) in draft.tags" :key="t" class="chip pick-chip">
-                  {{ t }}<button type="button" class="x" @click="draft.tags.splice(i, 1)" aria-label="移除">×</button>
-                </span>
-                <input
-                  v-model="tagDraft"
-                  class="glass-input tag-input"
-                  placeholder="输入标签后回车添加"
-                  @keydown.enter.prevent="addTag"
-                />
-              </div>
-            </label>
-          </div>
-
-          <!-- 协作者（仅创建者 / 超管可调） -->
-          <div v-if="canSetEditors" class="dhf-collab">
-            <span class="dhf-label">协作者（可查看并编辑本条目）</span>
-            <div class="tag-edit">
-              <span v-for="(nm, i) in collabNames" :key="'c' + i" class="chip pick-chip">
-                {{ nm }}<button type="button" class="x" @click="draft.editor_ids.splice(i, 1)" aria-label="移除">×</button>
-              </span>
-              <button type="button" class="btn ghost sm" @click="showCollab = !showCollab">
-                {{ showCollab ? '收起名单' : '+ 添加协作者' }}
+        <!-- 编辑态：基础字段 + 内容类型（v0.36.0 压成一行，空间让给画布） -->
+        <div v-if="editing" class="dh-form dh-form-compact">
+          <div ref="rootKind" class="dhf-fld chip-fld">
+            <span class="dhf-label">内容</span>
+            <button
+              type="button"
+              class="kind-chip"
+              :class="curKind"
+              :disabled="!!draft.id"
+              @click="onKindChipClick"
+            >
+              <span class="kind-chip-ico">{{ kindMeta.icon }}</span>
+              <span class="kind-chip-txt">{{ kindMeta.label }}</span>
+              <span v-if="!draft.id" class="kind-chip-caret">▾</span>
+            </button>
+            <div v-if="kindMenuOpen" class="kind-menu" @click.stop>
+              <button
+                v-for="k in KIND_OPTIONS"
+                :key="k.value"
+                type="button"
+                class="kind-menu-item"
+                :class="{ on: curKind === k.value }"
+                @click="pickKind(k.value)"
+              >
+                <span class="kind-ico">{{ k.icon }}</span>
+                <span class="kind-txt">{{ k.label }}</span>
+                <span class="kind-sub">{{ k.desc }}</span>
               </button>
             </div>
-            <div v-if="showCollab" class="picker-list">
-              <label v-for="u in collabCandidates" :key="u.id" class="picker-row">
-                <input type="checkbox" :checked="draft.editor_ids.includes(u.id)" @change="toggleCollab(u.id)" />
-                <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
-              </label>
-              <div v-if="!collabCandidates.length" class="dim picker-empty">没有可选的同事</div>
-            </div>
           </div>
+          <label class="dhf-fld">
+            <span>分类</span>
+            <input v-model="draft.category" class="glass-input" list="kbCatList" placeholder="如：活动SOP / 检查流程 / 话术" />
+            <datalist id="kbCatList">
+              <option v-for="c in categories" :key="c" :value="c" />
+            </datalist>
+          </label>
+          <label class="dhf-fld">
+            <span>状态</span>
+            <select v-model="draft.status" class="glass-input">
+              <option value="published">已发布</option>
+              <option value="draft">草稿（仅自己可见）</option>
+            </select>
+          </label>
+          <label class="dhf-fld">
+            <span>所属父级</span>
+            <ParentTreePicker
+              v-model="draft.parent_id"
+              :items="parentCandidates"
+              :exclude-id="draft.id"
+            />
+          </label>
+          <label class="dhf-fld grow">
+            <span>标签</span>
+            <div class="tag-edit">
+              <span v-for="(t, i) in draft.tags" :key="t" class="chip pick-chip">
+                {{ t }}<button type="button" class="x" @click="draft.tags.splice(i, 1)" aria-label="移除">×</button>
+              </span>
+              <input
+                v-model="tagDraft"
+                class="glass-input tag-input"
+                placeholder="回车添加"
+                @keydown.enter.prevent="addTag"
+              />
+            </div>
+          </label>
         </div>
       </header>
 
       <!-- 正文：按内容类型渲染（doc=富文本 / mind=思维导图 / flow=流程图） -->
-      <div class="kb-detail-body" :class="{ 'kb-body-flush': isDiagram }">
+      <div class="kb-detail-body" :class="{ 'kb-body-flush': isDiagram, 'kb-body-canvas': editing && isDiagram }">
         <MindMapEditor
           v-if="curKind === 'mind'"
           ref="diagramRef"
@@ -196,6 +173,76 @@
         </template>
       </div>
 
+      <!-- 编辑态：附件 / 协作 / 可见范围（v0.36.0 折叠为一行，图形条目默认收起） -->
+      <details v-if="editing" class="dh-fold" :open="!isDiagram">
+        <summary class="dh-fold-bar">
+          <span class="dh-fold-tt">附件 · 协作 · 可见范围</span>
+          <span class="dh-fold-cnt dim">{{ attCount ? `已选 ${attCount} 个附件` : '点开展开设置' }}</span>
+          <span class="dh-fold-arrow">▾</span>
+        </summary>
+        <div class="dh-form dh-form-lower">
+        <!-- 附件：编辑时即可上传到中转缓存，保存后自动转正（单文件 ≤ 100MB） -->
+        <div class="dhf-attach">
+          <span class="dhf-label">附件</span>
+          <p class="att-hint dim">编辑时可上传，保存前文件缓存，保存后自动生成（单文件 ≤ 100MB）</p>
+          <div class="att-list">
+            <div v-for="a in pendingAtts" :key="'p' + a.tempId" class="att-item">
+              <span class="att-ico">{{ fileIcon(a.fileName) }}</span>
+              <span class="att-name">{{ a.fileName }}</span>
+              <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+              <button class="del danger" @click="$emit('remove-pending-att', a)">删除</button>
+            </div>
+            <template v-if="draft.id">
+              <div v-for="a in attachments" :key="'a' + a.id" class="att-item">
+                <span class="att-ico">{{ fileIcon(a.file_name) }}</span>
+                <span class="att-name">{{ a.file_name }}</span>
+                <span class="att-size dim">{{ fmtSize(a.size) }}</span>
+                <button class="del danger" @click="$emit('remove-att', a)">删除</button>
+              </div>
+            </template>
+            <div v-if="!pendingAtts.length && !(draft.id && attachments.length)" class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
+          </div>
+          <div class="att-upload-row">
+            <label v-if="canUpload" class="btn sm">+ 上传文件
+              <input type="file" multiple :disabled="uploading" @change="$emit('upload', $event)" hidden />
+            </label>
+            <span v-if="uploading" class="dim up-txt">上传中…</span>
+          </div>
+        </div>
+
+        <!-- 协作者（仅创建者 / 超管可调） -->
+        <div v-if="canSetEditors" class="dhf-collab">
+          <span class="dhf-label">协作（可查看并编辑本文档的同事）</span>
+          <div class="tag-edit">
+            <span v-for="(nm, i) in collabNames" :key="'c' + i" class="chip pick-chip">
+              {{ nm }}<button type="button" class="x" @click="draft.editor_ids.splice(i, 1)" aria-label="移除">×</button>
+            </span>
+            <button type="button" class="btn ghost sm" @click="showCollab = !showCollab">
+              {{ showCollab ? '收起名单' : '+ 添加协作者' }}
+            </button>
+          </div>
+          <div v-if="showCollab" class="picker-list">
+            <label v-for="u in collabCandidates" :key="u.id" class="picker-row">
+              <input type="checkbox" :checked="draft.editor_ids.includes(u.id)" @change="toggleCollab(u.id)" />
+              <span class="picker-name">{{ u.name }}<span v-if="u.dept" class="dim">（{{ u.dept.name }}）</span></span>
+            </label>
+            <div v-if="!collabCandidates.length" class="dim picker-empty">没有可选的同事</div>
+          </div>
+        </div>
+
+        <div class="dhf-row">
+          <label class="dhf-fld wide">
+            <span>可见范围</span>
+            <select v-model="draft.scope" class="glass-input">
+              <option value="public" v-if="isSuper">全公司可见</option>
+              <option value="department">同部门共享</option>
+              <option value="private">仅自己可见</option>
+            </select>
+          </label>
+        </div>
+        </div>
+      </details>
+
       <!-- 编辑态底栏 -->
       <footer v-if="editing" class="kb-detail-foot">
         <span class="df-tip dim">
@@ -205,7 +252,7 @@
         <div class="df-btns">
           <button class="btn ghost" @click="cancelEdit">取消</button>
           <button class="btn primary" :disabled="saving || !draft.title.trim()" @click="submit">
-            {{ saving ? '保存中…' : (draft.id ? '保存修改' : '保存') }}
+            {{ saving ? '创建中…' : (draft.id ? '保存修改' : '创建') }}
           </button>
         </div>
       </footer>
@@ -336,10 +383,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
 import MindMapEditor from '@/components/knowledge/MindMapEditor.vue'
 import FlowEditor from '@/components/knowledge/FlowEditor.vue'
+import ParentTreePicker from '@/components/knowledge/ParentTreePicker.vue'
 import { downloadBlob, downloadText, safeFileName, imageBlobToPdf } from '@/utils/diagram'
 
 const props = defineProps({
@@ -357,6 +405,7 @@ const props = defineProps({
   currentUserId: { type: [String, Number], default: 0 },
   currentUserName: { type: String, default: '' },
   attachments: { type: Array, default: () => [] },
+  pendingAtts: { type: Array, default: () => [] },
   uploading: { type: Boolean, default: false },
   comments: { type: Array, default: () => [] },
   versions: { type: Array, default: () => [] },
@@ -385,7 +434,7 @@ const props = defineProps({
 const emit = defineEmits([
   'start-edit', 'cancel-edit', 'submit', 'create',
   'star', 'pin', 'open-ref', 'reply', 'cancel-reply', 'del-comment', 'send-comment',
-  'restore', 'upload', 'preview-att', 'download-att', 'remove-att',
+  'restore', 'upload', 'preview-att', 'download-att', 'remove-att', 'remove-pending-att',
   'update:commentText', 'content-error', 'dirty-change',
 ])
 
@@ -393,6 +442,12 @@ const sub = ref('comments')
 const tagDraft = ref('')
 const showCollab = ref(false)
 const dirty = ref(false)
+
+// 内容类型 chip 菜单（v0.32.0：从顶部卡片改为标题旁 chip）
+const rootKind = ref(null)
+const kindMenuOpen = ref(false)
+const canUpload = computed(() => props.canEdit || !props.draft.id)
+const kindMeta = computed(() => KIND_OPTIONS.find((k) => k.value === curKind.value) || KIND_OPTIONS[0])
 
 // ---------- 图形条目（思维导图 / 流程图，v0.30.0）----------
 const diagramRef = ref(null)   // 指向当前渲染的图形编辑器（v-if 保证同时只有一个）
@@ -419,12 +474,19 @@ function markDirty() {
 }
 
 function pickKind(k) {
-  if ((props.draft.kind || 'doc') === k) return
+  if ((props.draft.kind || 'doc') === k) { kindMenuOpen.value = false; return }
   // 切换类型会把正文语义整个换掉（HTML ↔ 绘图 JSON 无法互转），已写内容必须确认放弃
-  if (String(props.draft.content || '').trim() && !confirm('切换内容类型会清空当前正文，确定继续吗？')) return
+  if (String(props.draft.content || '').trim() && !confirm('切换内容类型会清空当前正文，确定继续吗？')) { kindMenuOpen.value = false; return }
   props.draft.kind = k
   props.draft.content = ''
+  kindMenuOpen.value = false
   markDirty()
+}
+
+// 新建态点 chip 弹出类型菜单；编辑态（已有 id）只读不可切
+function onKindChipClick() {
+  if (props.draft.id) return
+  kindMenuOpen.value = !kindMenuOpen.value
 }
 
 function onDiagramDirty() { markDirty() }
@@ -503,6 +565,13 @@ function onContent(v) {
 
 watch(() => props.editing, (v) => { if (!v) { dirty.value = false; emit('dirty-change', false) } })
 
+// 类型菜单：点击空白处自动收起
+function onDocClickKind(e) {
+  if (kindMenuOpen.value && rootKind.value && !rootKind.value.contains(e.target)) kindMenuOpen.value = false
+}
+onMounted(() => document.addEventListener('click', onDocClickKind))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClickKind))
+
 function addTag() {
   const t = tagDraft.value.trim()
   if (t && !props.draft.tags.includes(t)) props.draft.tags.push(t)
@@ -514,6 +583,7 @@ function toggleCollab(uid) {
   else props.draft.editor_ids.push(uid)
 }
 
+const attCount = computed(() => (props.pendingAtts || []).length + (props.draft.id ? (props.attachments || []).length : 0))
 const collabNames = computed(() => (props.draft.editor_ids || []).map((id) => {
   const u = (props.collabCandidates || []).find((x) => x.id === id)
   return u ? u.name : ('#' + id)
@@ -723,4 +793,84 @@ function printEntry() {
 
 /* 图形编辑器自带边框与提示条，正文区收紧留白，把空间让给画布 */
 .kb-detail-body.kb-body-flush { padding: 10px 10px 14px; }
+/* v0.36.0：编辑态图形条目 —— 画布吃掉正文区全部剩余高度（表单一行、附件折叠） */
+.kb-detail-body.kb-body-canvas {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px 12px 8px;
+}
+.kb-body-canvas .mm,
+.kb-body-canvas .wfc { flex: 1 1 auto; height: auto; min-height: 480px; }
+/* 只读查看：给足高度 */
+.kb-detail-body.kb-body-flush .mm,
+.kb-detail-body.kb-body-flush .wfc { min-height: max(560px, calc(100vh - 420px)); }
+
+/* v0.36.0：基础字段压成一行（内容类型 chip / 分类 / 状态 / 所属父级 / 标签） */
+.dh-form-compact { flex-direction: row; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
+.dh-form-compact .dhf-fld { flex: 1 1 150px; min-width: 140px; }
+.dh-form-compact .dhf-fld.grow { flex: 1.8 1 220px; }
+.chip-fld { flex: 0 0 auto !important; min-width: 0 !important; position: relative; }
+.chip-fld .kind-menu { left: 0; }
+
+/* v0.36.0：附件/协作/可见范围 折叠条 */
+.dh-fold { border-top: 1px solid var(--hairline); margin-top: 8px; }
+.dh-fold-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 18px; cursor: pointer; user-select: none;
+  font-size: 12.5px; color: var(--text-dim); list-style: none;
+}
+.dh-fold-bar::-webkit-details-marker { display: none; }
+.dh-fold-bar:hover { color: var(--accent); }
+.dh-fold-tt { font-weight: 600; }
+.dh-fold-cnt { font-size: 11.5px; }
+.dh-fold-arrow { margin-left: auto; font-size: 10px; transition: transform .15s; }
+.dh-fold[open] .dh-fold-arrow { transform: rotate(180deg); }
+.dh-fold .dh-form-lower { margin-top: 0; padding-top: 2px; }
+
+/* ---------- 内容类型 chip（v0.32.0：从顶部卡片改为标题旁 chip）---------- */
+.dh-content-head {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px 0; flex: 0 0 auto;
+}
+.dh-content-head .dhf-label { font-size: 11.5px; color: var(--text-faint); font-weight: 600; }
+.kind-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--accent); color: var(--accent);
+  background: var(--accent-soft); border-radius: 999px;
+  padding: 5px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.kind-chip[disabled] { cursor: default; opacity: .95; }
+.kind-chip-ico { font-size: 13px; line-height: 1; }
+.kind-chip-caret { font-size: 9px; opacity: .8; }
+.kind-menu {
+  position: absolute; left: 18px; top: calc(100% - 2px); z-index: 30;
+  min-width: 232px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg-1); border: 1px solid var(--glass-border); border-radius: 12px;
+  box-shadow: 0 12px 30px var(--overlay);
+}
+.kind-menu-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 8px 11px; text-align: left; cursor: pointer;
+  color: var(--text); background: transparent; border: 0; border-radius: 8px;
+  font-size: 13px;
+}
+.kind-menu-item:hover { background: var(--overlay-2); }
+.kind-menu-item.on { background: var(--accent-soft); }
+.kind-menu-item .kind-ico { font-size: 14px; line-height: 1.1; }
+.kind-menu-item .kind-txt { font-size: 13px; font-weight: 600; }
+.kind-menu-item .kind-sub { font-size: 11px; color: var(--text-faint); }
+
+/* 编辑态下半部表单（附件 / 协作 / 可见范围） */
+.dh-form-lower { margin-top: 14px; padding: 0 18px; gap: 12px; }
+.dhf-attach { display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--hairline); padding-top: 12px; }
+.dhf-attach .att-hint { font-size: 11.5px; margin: 0; }
+.dhf-attach .att-list { display: flex; flex-direction: column; gap: 6px; }
+.dhf-attach .att-item { display: flex; align-items: center; gap: 9px; border: 1px solid var(--glass-border); border-radius: 9px; padding: 6px 9px; min-width: 0; }
+.dhf-attach .att-ico { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; background: var(--overlay-2); border-radius: 6px; flex: 0 0 auto; }
+.dhf-attach .att-name { flex: 1 1 auto; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dhf-attach .att-size { flex: 0 0 auto; font-size: 11px; }
+.dhf-attach .att-empty { font-size: 12.5px; }
+.dhf-attach .att-upload-row { display: flex; align-items: center; gap: 10px; }
 </style>

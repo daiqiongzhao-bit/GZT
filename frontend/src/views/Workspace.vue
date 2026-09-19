@@ -115,6 +115,8 @@
           <span class="kb-af clear-all" @click="kQuery=''; kCategory=''; kTag=''; kMine=false; kStarred=false; kParent=''; loadK()">清除全部</span>
         </div>
 
+        <!-- v0.35.0：内容区 + 详情包一层相对容器，详情在内容区内铺满（不再全屏遮罩） -->
+        <div class="kb-body">
         <!-- 内容区：卡片网格 / 统计 / 回收站 -->
         <div class="kb-content">
           <template v-if="kbView === 'stats'">
@@ -224,6 +226,7 @@
               :current-user-id="auth.user?.id || 0"
               :current-user-name="auth.user?.username || ''"
               :attachments="kAtts"
+              :pending-atts="pendingAtts"
               :uploading="uploading"
               :comments="kComments"
               :versions="kVersions"
@@ -263,11 +266,13 @@
               @preview-att="previewAtt"
               @download-att="downloadAtt"
               @remove-att="removeAtt"
+              @remove-pending-att="removePendingAtt"
               @update:comment-text="(v) => kCommentText = v"
               @content-error="(m) => toast(m, 'error')"
             />
           </div>
         </transition>
+        </div><!-- /.kb-body -->
       </div>
 
       <!-- 模板选择弹窗 -->
@@ -2831,17 +2836,25 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 
 @keyframes kb-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 详情 / 编辑 右侧抽屉 */
+/* 详情 / 编辑：v0.35.0 起在知识库内容区内铺满（.kb-body 相对容器），顶部工具栏保持可见 */
+.kb-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .kb-drawer-mask {
-  position: fixed; inset: 0; z-index: 90;
-  background: rgba(15, 23, 42, .38);
-  display: flex; justify-content: flex-end;
+  position: absolute; inset: 0; z-index: 40;
+  background: transparent;
+  display: flex;
 }
 /* 自动保存草稿恢复横幅（v0.31.0）：浮在抽屉上层，左上角，点「恢复/丢弃」二选一 */
 .kb-draft-bar {
   position: absolute; top: 14px; left: 14px; z-index: 2;
   display: flex; align-items: center; gap: 10px;
-  max-width: min(560px, calc(100vw - 28px));
+  max-width: min(560px, calc(100% - 28px));
   padding: 10px 14px; border-radius: 12px;
   background: var(--bg-1); border: 1px solid var(--glass-border);
   box-shadow: 0 12px 32px rgba(15, 23, 42, .22);
@@ -2851,13 +2864,14 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 .kb-draft-acts { display: flex; gap: 8px; margin-left: auto; flex: none; }
 .kb-draft-bar .btn.sm { padding: 4px 10px; font-size: 12px; }
 .kb-drawer-panel.kb-detail-pane {
-  width: min(940px, 94vw);
-  max-width: 94vw;
+  /* v0.35.0：铺满知识库内容区（红框区域），不再是视口级全屏 */
+  width: 100%;
+  max-width: 100%;
   height: 100%;
   min-height: 0;
   background: var(--bg-1);
-  border-left: 1px solid var(--glass-border);
-  box-shadow: -10px 0 36px rgba(15, 23, 42, .2);
+  border-left: none;
+  box-shadow: none;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
@@ -2869,7 +2883,7 @@ textarea.ta { resize: vertical; line-height: 1.6; }
 /* 窄屏：抽屉占满 */
 @media (max-width: 760px) {
   .kb-shell { height: calc(100vh - 150px); min-height: 380px; border-radius: 12px; }
-  .kb-drawer-panel.kb-detail-pane { width: 100vw; max-width: 100vw; }
+  .kb-drawer-panel.kb-detail-pane { width: 100%; max-width: 100%; }
   .kb-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 9px; padding: 10px; }
 }
 </style>
