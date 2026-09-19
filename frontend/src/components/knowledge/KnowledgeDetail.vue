@@ -22,7 +22,7 @@
     <template v-else>
       <!-- 头部：标题 + 元信息 + 操作 -->
       <header class="kb-detail-head">
-        <div class="dh-top">
+        <div class="dh-top" :class="{ 'dh-top-edit': editing }">
           <div class="dh-title-wrap">
             <div class="dh-title-row">
               <input
@@ -35,12 +35,82 @@
               <span v-if="editing" class="dh-req" title="必填">*</span>
               <h2 v-else class="dh-title" @dblclick="canEdit && startEdit()">{{ view.title }}</h2>
             </div>
-            <!-- v0.36.2：作者 / 更新于 / 浏览 / 协作者 移到标题下空白，常驻可见 -->
-            <div class="dh-sub dim">
+            <!-- v0.36.2：作者 / 更新于 / 浏览 / 协作者 移到标题下空白（阅读态常驻）
+                 v0.36.4：编辑态头部已压成一行，此处不再占行，编辑时隐藏、保存后恢复 -->
+            <div v-if="!editing" class="dh-sub dim">
               {{ view.owner_name === currentUserName ? '我' : view.owner_name }} · 更新于 {{ fmtTime(view.updated_at || view.created_at) }}
               <template v-if="view.view_count"> · 👁 {{ view.view_count }}</template>
               <template v-if="editorsText(entry)"> · ✍ {{ editorsText(entry) }}</template>
             </div>
+          </div>
+
+          <!-- v0.36.4：编辑态把「内容 / 分类 / 状态 / 所属父级 / 标签」并入标题同一行，
+               整块头部从 3 行压到 1 行，纵向空间全部让给画布（窄屏自动换行，不溢出） -->
+          <div v-if="editing" class="dh-form dh-form-compact dh-inline">
+            <div ref="rootKind" class="dhf-fld chip-fld">
+              <span class="dhf-label">内容</span>
+              <button
+                type="button"
+                class="kind-chip"
+                :class="curKind"
+                :disabled="!!draft.id"
+                @click="onKindChipClick"
+              >
+                <span class="kind-chip-ico">{{ kindMeta.icon }}</span>
+                <span class="kind-chip-txt">{{ kindMeta.label }}</span>
+                <span v-if="!draft.id" class="kind-chip-caret">▾</span>
+              </button>
+              <div v-if="kindMenuOpen" class="kind-menu" @click.stop>
+                <button
+                  v-for="k in KIND_OPTIONS"
+                  :key="k.value"
+                  type="button"
+                  class="kind-menu-item"
+                  :class="{ on: curKind === k.value }"
+                  @click="pickKind(k.value)"
+                >
+                  <span class="kind-ico">{{ k.icon }}</span>
+                  <span class="kind-txt">{{ k.label }}</span>
+                  <span class="kind-sub">{{ k.desc }}</span>
+                </button>
+              </div>
+            </div>
+            <label class="dhf-fld">
+              <span>分类</span>
+              <input v-model="draft.category" class="glass-input" list="kbCatList" placeholder="如：活动SOP / 检查流程 / 话术" />
+              <datalist id="kbCatList">
+                <option v-for="c in categories" :key="c" :value="c" />
+              </datalist>
+            </label>
+            <label class="dhf-fld">
+              <span>状态</span>
+              <select v-model="draft.status" class="glass-input">
+                <option value="published">已发布</option>
+                <option value="draft">草稿（仅自己可见）</option>
+              </select>
+            </label>
+            <label class="dhf-fld">
+              <span>所属父级</span>
+              <ParentTreePicker
+                v-model="draft.parent_id"
+                :items="parentCandidates"
+                :exclude-id="draft.id"
+              />
+            </label>
+            <label class="dhf-fld grow">
+              <span>标签</span>
+              <div class="tag-edit">
+                <span v-for="(t, i) in draft.tags" :key="t" class="chip pick-chip">
+                  {{ t }}<button type="button" class="x" @click="draft.tags.splice(i, 1)" aria-label="移除">×</button>
+                </span>
+                <input
+                  v-model="tagDraft"
+                  class="glass-input tag-input"
+                  placeholder="回车添加"
+                  @keydown.enter.prevent="addTag"
+                />
+              </div>
+            </label>
           </div>
 
           <div class="dh-ops">
@@ -77,73 +147,6 @@
           <span v-for="t in parseTags(view.tags)" :key="t" class="dh-tag">#{{ t }}</span>
         </div>
 
-        <!-- 编辑态：基础字段 + 内容类型（v0.36.0 压成一行，空间让给画布） -->
-        <div v-if="editing" class="dh-form dh-form-compact">
-          <div ref="rootKind" class="dhf-fld chip-fld">
-            <span class="dhf-label">内容</span>
-            <button
-              type="button"
-              class="kind-chip"
-              :class="curKind"
-              :disabled="!!draft.id"
-              @click="onKindChipClick"
-            >
-              <span class="kind-chip-ico">{{ kindMeta.icon }}</span>
-              <span class="kind-chip-txt">{{ kindMeta.label }}</span>
-              <span v-if="!draft.id" class="kind-chip-caret">▾</span>
-            </button>
-            <div v-if="kindMenuOpen" class="kind-menu" @click.stop>
-              <button
-                v-for="k in KIND_OPTIONS"
-                :key="k.value"
-                type="button"
-                class="kind-menu-item"
-                :class="{ on: curKind === k.value }"
-                @click="pickKind(k.value)"
-              >
-                <span class="kind-ico">{{ k.icon }}</span>
-                <span class="kind-txt">{{ k.label }}</span>
-                <span class="kind-sub">{{ k.desc }}</span>
-              </button>
-            </div>
-          </div>
-          <label class="dhf-fld">
-            <span>分类</span>
-            <input v-model="draft.category" class="glass-input" list="kbCatList" placeholder="如：活动SOP / 检查流程 / 话术" />
-            <datalist id="kbCatList">
-              <option v-for="c in categories" :key="c" :value="c" />
-            </datalist>
-          </label>
-          <label class="dhf-fld">
-            <span>状态</span>
-            <select v-model="draft.status" class="glass-input">
-              <option value="published">已发布</option>
-              <option value="draft">草稿（仅自己可见）</option>
-            </select>
-          </label>
-          <label class="dhf-fld">
-            <span>所属父级</span>
-            <ParentTreePicker
-              v-model="draft.parent_id"
-              :items="parentCandidates"
-              :exclude-id="draft.id"
-            />
-          </label>
-          <label class="dhf-fld grow">
-            <span>标签</span>
-            <div class="tag-edit">
-              <span v-for="(t, i) in draft.tags" :key="t" class="chip pick-chip">
-                {{ t }}<button type="button" class="x" @click="draft.tags.splice(i, 1)" aria-label="移除">×</button>
-              </span>
-              <input
-                v-model="tagDraft"
-                class="glass-input tag-input"
-                placeholder="回车添加"
-                @keydown.enter.prevent="addTag"
-              />
-            </div>
-          </label>
-        </div>
       </header>
 
       <!-- 正文：按内容类型渲染（doc=富文本 / mind=思维导图 / flow=流程图） -->
@@ -829,6 +832,17 @@ function printEntry() {
 .dh-form-compact .dhf-fld.grow { flex: 1.8 1 220px; }
 .chip-fld { flex: 0 0 auto !important; min-width: 0 !important; position: relative; }
 .chip-fld .kind-menu { left: 0; }
+
+/* v0.36.4：编辑态整块头部压成一行 —— 标题 + 内容/分类/状态/所属父级/标签 + 操作 同排。
+   省下的 2 行纵向空间全部给画布；窗口变窄时自动换行，不会溢出。 */
+.dh-top-edit { flex-wrap: wrap; align-items: center; }
+.dh-top-edit .dh-title-wrap { flex: 1 1 200px; min-width: 170px; }
+.dh-top-edit .dh-title-row { align-items: center; }
+.dh-top-edit .dh-title-input { padding: 6px 10px; font-size: 15px; }
+.dh-top-edit .dh-req { line-height: 1.2; }
+.dh-form-compact.dh-inline { margin-top: 0; flex: 3 1 440px; gap: 6px 12px; }
+.dh-form-compact.dh-inline .dhf-fld { flex: 1 1 116px; min-width: 100px; gap: 5px; }
+.dh-form-compact.dh-inline .dhf-fld.grow { flex: 1.4 1 132px; }
 
 /* v0.36.0：附件/协作/可见范围 折叠条 */
 .dh-fold { border-top: 1px solid var(--hairline); margin-top: 8px; }
