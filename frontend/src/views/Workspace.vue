@@ -1,8 +1,9 @@
 <template>
   <div class="workspace">
+    <!-- v0.36.3：页面 tabs 投送到全局顶栏（桌面端）；移动端（≤820px 顶栏隐藏）降级为原地渲染。
+         桌面端 .ws-head 整行隐藏，把这一行空间让给内容/画布。 -->
     <div class="ws-head">
-      <h2 class="page-title">知识库</h2>
-      <div class="ws-tool">
+      <Teleport to="#topbar-slot" :disabled="isMobile">
         <div class="tabs">
           <button class="tab" :class="{ active: tab === 'knowledge' }" @click="switchTab('knowledge')">
             迷你知识库<template v-if="tab==='knowledge'&&auth.user"> · 沉淀方法/流程</template>
@@ -16,46 +17,19 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;vertical-align:-2px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
           打包下载 zip
         </button>
-      </div>
+      </Teleport>
     </div>
 
     <!-- ========== 迷你知识库 ========== -->
     <!-- ========== 迷你知识库（v0.28.0 三栏布局） ========== -->
     <template v-if="tab === 'knowledge'">
       <div class="kb-shell" :class="{ 'kb-narrow': kbNarrow }">
-        <!-- 顶栏：标题 + 全局动作 -->
+        <!-- 顶栏：标题 + 搜索/筛选 + 全局动作（v0.36.3 把原筛选条合并为一行，并缩短搜索框，给内容/画布腾高度） -->
         <div class="kb-topbar">
           <h3 class="section-title kb-title">
             知识库
             <span class="section-sub">{{ knowledge.length }} 条<template v-if="trash.length"> · 回收站 {{ trash.length }}</template></span>
           </h3>
-          <div class="kb-topacts">
-            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
-            <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
-            <button
-              v-if="auth.isSuper"
-              class="btn ghost sm"
-              title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移（仅超级管理员）"
-              @click="exportBundle"
-            >📦 打包 zip</button>
-            <div class="kb-menu-wrap" @click.stop>
-              <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
-                ⬆ 导出 <i class="caret">▾</i>
-              </button>
-              <transition name="pop">
-                <div v-if="exportMenu" class="kb-menu" @click.stop>
-                  <button class="menu-item" @click="pickExport(exportMarkdown)"><span class="mi-ico">📝</span><span>Markdown（.md）</span></button>
-                  <button class="menu-item" @click="pickExport(exportDoc)"><span class="mi-ico">📄</span><span>Word（.doc）</span></button>
-                  <button class="menu-item" @click="pickExport(exportK)"><span class="mi-ico">📃</span><span>纯文本（.txt）</span></button>
-                </div>
-              </transition>
-            </div>
-            <button class="btn primary sm" @click="openNewK">＋ 新建</button>
-          </div>
-        </div>
-
-        <!-- 筛选条：搜索 + 排序 + 目录 + 视图切换 + 快捷筛选 -->
-        <div class="kb-toolbar">
           <div class="kb-search-box">
             <input
               class="kb-search"
@@ -82,6 +56,29 @@
           <div class="kb-quick">
             <button class="kb-toggle" :class="{ on: kStarred }" title="只看收藏" @click="kStarred = !kStarred; loadK()">⭐</button>
             <button class="kb-toggle" :class="{ on: kMine }" title="只看我写的" @click="kMine = !kMine; loadK()">✍</button>
+          </div>
+          <div class="kb-topacts">
+            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
+            <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
+            <button
+              v-if="auth.isSuper"
+              class="btn ghost sm"
+              title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移（仅超级管理员）"
+              @click="exportBundle"
+            >📦 打包 zip</button>
+            <div class="kb-menu-wrap" @click.stop>
+              <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
+                ⬆ 导出 <i class="caret">▾</i>
+              </button>
+              <transition name="pop">
+                <div v-if="exportMenu" class="kb-menu" @click.stop>
+                  <button class="menu-item" @click="pickExport(exportMarkdown)"><span class="mi-ico">📝</span><span>Markdown（.md）</span></button>
+                  <button class="menu-item" @click="pickExport(exportDoc)"><span class="mi-ico">📄</span><span>Word（.doc）</span></button>
+                  <button class="menu-item" @click="pickExport(exportK)"><span class="mi-ico">📃</span><span>纯文本（.txt）</span></button>
+                </div>
+              </transition>
+            </div>
+            <button class="btn primary sm" @click="openNewK">＋ 新建</button>
           </div>
         </div>
 
@@ -999,6 +996,12 @@ const $msg = proxy?.$msg
 const auth = useAuthStore()
 
 const tab = ref('knowledge')
+
+// v0.36.3：桌面端把页面 tabs 投送到全局顶栏；移动端（≤820px 顶栏 display:none）降级为原地渲染
+const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth <= 820 : false)
+function onWinResize() { isMobile.value = window.innerWidth <= 820 }
+onMounted(() => window.addEventListener('resize', onWinResize))
+onUnmounted(() => window.removeEventListener('resize', onWinResize))
 
 // ---------- 通用 ----------
 function toast(t, type = 'success') { $msg ? $msg[type](t) : alert(t) }
@@ -2259,6 +2262,8 @@ watch(tab, (t) => { if (t === 'handover') loadHandovers(); if (t === 'logs') loa
 .page-title { font-size: 20px; font-weight: 700; margin: 0; }
 .ws-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 .ws-tool { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* v0.36.3：桌面端 .ws-head 的 tabs/打包按钮已投送到全局顶栏，整行隐藏以腾出空间；移动端仍原地渲染 */
+@media (min-width: 821px) { .ws-head { display: none; } }
 .export-bundle { white-space: nowrap; font-size: 12.5px; padding: 8px 14px; color: var(--accent); border-color: rgba(79,70,229,0.3); }
 .export-bundle:hover { background: var(--accent-soft); }
 .panel { padding: 18px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glass-border); margin-bottom: 18px; }
@@ -2668,15 +2673,14 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 11px 14px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--hairline);
   background: var(--overlay);
 }
 .kb-title { margin: 0; white-space: nowrap; }
-.kb-topacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kb-topacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 
 /* 筛选条 */
 .kb-toolbar {
@@ -2688,7 +2692,7 @@ textarea.ta { resize: vertical; line-height: 1.6; }
   padding: 10px 14px;
   border-bottom: 1px solid var(--hairline);
 }
-.kb-search-box { flex: 1 1 240px; min-width: 180px; }
+.kb-search-box { flex: 1 1 170px; min-width: 140px; max-width: 280px; }
 .kb-search {
   width: 100%;
   border: 1px solid var(--glass-border);

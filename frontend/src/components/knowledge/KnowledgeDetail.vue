@@ -41,11 +41,9 @@
               <template v-if="view.view_count"> · 👁 {{ view.view_count }}</template>
               <template v-if="editorsText(entry)"> · ✍ {{ editorsText(entry) }}</template>
             </div>
-            <div v-if="!headOpen && editing && headSummary" class="dh-sub dh-collapsed-hint">📋 {{ headSummary }} · 点右上 ⌄ 展开字段</div>
           </div>
 
           <div class="dh-ops">
-            <button class="icon-btn" :title="headOpen ? '收起字段与元信息' : '展开字段与元信息'" @click="headOpen = !headOpen">{{ headOpen ? '⌃' : '⌄' }}</button>
             <button class="icon-btn" :class="{ on: view.starred }" :title="view.starred ? '取消收藏' : '收藏'" @click="$emit('star', view)">{{ view.starred ? '★' : '☆' }}</button>
             <button
               v-if="view.owner_id === currentUserId || isSuper"
@@ -70,9 +68,8 @@
           </div>
         </div>
 
-        <!-- v0.36.2：元信息 + 表单整块可折叠（红线区域），编辑已有条目默认收起 -->
-        <div class="dh-collapsible" :class="{ collapsed: !headOpen }">
-        <div class="dh-meta dim">
+        <!-- v0.36.3：元信息仅阅读态展示；编辑态与下方表单（分类/状态/标签）重复，隐藏以压缩头部 -->
+        <div v-if="!editing" class="dh-meta dim">
           <span class="ki-chip" :class="scopeChip(view.scope)">{{ scopeLabel(view.scope) }}</span>
           <span v-if="view.category" class="ki-chip accent">{{ view.category }}</span>
           <span v-if="isDiagram" class="ki-chip accent">{{ kindLabelOf }}</span>
@@ -146,7 +143,6 @@
               />
             </div>
           </label>
-        </div>
         </div>
       </header>
 
@@ -455,17 +451,6 @@ const tagDraft = ref('')
 const showCollab = ref(false)
 const dirty = ref(false)
 
-// v0.36.2：整块头部（标题 + 元信息 + 表单）可折叠；编辑已有条目时默认收起，把空间让给画布
-const headOpen = ref(true)
-const headSummary = computed(() => {
-  if (!props.editing) return ''
-  const p = []
-  if (props.draft.category) p.push(props.draft.category)
-  p.push(props.draft.status === 'draft' ? '草稿' : '已发布')
-  if (props.draft.tags && props.draft.tags.length) p.push(props.draft.tags.length + ' 个标签')
-  return p.join(' · ')
-})
-
 // 内容类型 chip 菜单（v0.32.0：从顶部卡片改为标题旁 chip）
 const rootKind = ref(null)
 const kindMenuOpen = ref(false)
@@ -586,10 +571,7 @@ function onContent(v) {
   }
 }
 
-watch(() => props.editing, (v) => {
-  if (!v) { dirty.value = false; emit('dirty-change', false); headOpen.value = true }
-  else if (props.draft && props.draft.id) { headOpen.value = false } // 编辑已有条目：头部默认收起
-})
+watch(() => props.editing, (v) => { if (!v) { dirty.value = false; emit('dirty-change', false) } })
 
 // 类型菜单：点击空白处自动收起
 function onDocClickKind(e) {
@@ -686,9 +668,6 @@ function printEntry() {
 .dh-title-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .dh-title-row { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
 .dh-sub { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dh-collapsed-hint { color: var(--accent); }
-/* v0.36.2：头部折叠容器（元信息 + 表单整块收起/展开） */
-.dh-collapsible.collapsed { display: none; }
 
 .dh-meta {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
@@ -843,8 +822,10 @@ function printEntry() {
 .kb-detail-body.kb-body-flush .wfc { min-height: max(560px, calc(100vh - 420px)); }
 
 /* v0.36.0：基础字段压成一行（内容类型 chip / 分类 / 状态 / 所属父级 / 标签） */
-.dh-form-compact { flex-direction: row; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
-.dh-form-compact .dhf-fld { flex: 1 1 150px; min-width: 140px; }
+.dh-form-compact { flex-direction: row; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; align-items: center; }
+/* v0.36.3：label 与控件同行，把 内容/分类/状态/所属父级/标签 压成一行 */
+.dh-form-compact .dhf-fld { flex: 1 1 150px; min-width: 140px; flex-direction: row; align-items: center; gap: 6px; }
+.dh-form-compact .dhf-fld > span, .dh-form-compact .dhf-label { white-space: nowrap; }
 .dh-form-compact .dhf-fld.grow { flex: 1.8 1 220px; }
 .chip-fld { flex: 0 0 auto !important; min-width: 0 !important; position: relative; }
 .chip-fld .kind-menu { left: 0; }

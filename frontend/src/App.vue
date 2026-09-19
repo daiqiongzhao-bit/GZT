@@ -74,6 +74,8 @@
       <main class="main">
         <header class="topbar glass">
           <div class="top-title">{{ pageTitle }}</div>
+          <!-- v0.36.3：页面级 tabs 投送插槽（当前仅工作区/知识库使用）；空插槽自动隐藏，不影响其它页面 -->
+          <div class="topbar-slot" id="topbar-slot"></div>
           <div class="today">
             <span>{{ todayText }}</span>
             <button class="theme-toggle bell-wrap" :title="notifUnread > 0 ? '有 ' + notifUnread + ' 条未读通知' : '站内通知'" @click="openNotifs">
@@ -845,6 +847,9 @@ async function initPush() {
 </script>
 
 <style>
+/* v0.36.3：顶栏插槽 —— 承载页面级 tabs（由 Workspace 投送）。空时自动隐藏，零副作用。 */
+.topbar-slot { display: flex; align-items: center; gap: 8px; margin-left: 18px; flex: 1 1 auto; min-width: 0; }
+.topbar-slot:empty { display: none; }
 /* 上传企业 Logo 后去除侧边栏品牌 logo 的蓝紫底 */
 .logo.has-logo { background: transparent; box-shadow: none; }
 .boot { position: relative; z-index: 2; height: 100%; display: grid; place-items: center; }
