@@ -27,8 +27,10 @@
             v-if="editing"
             v-model="draft.title"
             class="dh-title-input"
-            placeholder="请输入标题 *"
+            placeholder="请输入标题"
+            aria-required="true"
           />
+          <span v-if="editing" class="dh-req" title="必填">*</span>
           <h2 v-else class="dh-title" @dblclick="canEdit && startEdit()">{{ view.title }}</h2>
 
           <div class="dh-ops">
@@ -653,6 +655,7 @@ function printEntry() {
   font-size: 16px; font-weight: 700; outline: none;
 }
 .dh-title-input:focus { border-color: var(--accent); }
+.dh-req { flex: 0 0 auto; color: #dc2626; font-weight: 700; font-size: 16px; line-height: 34px; padding-left: 2px; }
 .dh-ops { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
 
 .dh-meta {
@@ -679,10 +682,11 @@ function printEntry() {
 .kb-detail-foot {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 10px 18px; border-top: 1px solid var(--hairline);
-  background: var(--bg-1); flex-wrap: wrap;
-  /* ⚠️ v0.28.1：即便极端情况下容器未正确约束高度，底栏也固定在右栏底部可见，
-     杜绝「写多了按钮被顶出视口、点不到保存」的问题。 */
-  position: sticky; bottom: 0; z-index: 5;
+  background: var(--bg-1); flex-wrap: wrap; z-index: 5;
+  /* v0.36.1：底栏作为抽屉面板的 flex 末子，自然落在面板底部，始终可见
+     （编辑区内部滚动，底栏不被带出）。不再用 sticky——它的滚动祖先是整页，
+     页面一滚动会贴到视口底部、压住全局页脚。 */
+  box-shadow: 0 -3px 10px rgba(15,23,42,0.06);
 }
 .df-tip { font-size: 11.5px; }
 .df-btns { display: flex; gap: 8px; }
