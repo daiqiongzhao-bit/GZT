@@ -1,7 +1,7 @@
 services:
   shift-workbench:
     build: .
-    image: daiqiongzhao/gzt:v0.40.1
+    image: daiqiongzhao/gzt:v0.40.2
     container_name: shift-workbench
     ports:
       - "8090:8080"
