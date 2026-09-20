@@ -27,6 +27,18 @@ const CtxClaimsKey = "claims"
 // PermManageKey 是"当前用户可管理的部门 ID 集合"的上下文键（nil 表示不受限）。
 const PermManageDeptKey = "rbac_manage_depts"
 
+// PermSetKey 是"当前用户权限集合（rbac.PermSet）"的上下文键。
+//
+// 为什么要把权限集合放进上下文：某些业务模块自带**模块级准入闸门**
+// （典型：wecompush 的 AccessGuard，历史实现只看 users.role 的内置角色白名单，
+// 导致按 RBAC 授权给自定义角色的人"给了权限却进不去"）。那些模块不能 import 本包
+// （会形成 system → 业务模块 → ... 的耦合），本包也不该 import 它们。
+// 折中：闸门在这里把已经算好的权限集合放进 gin.Context，业务模块按同一字符串
+// 字面量取用（与 CtxClaimsKey 的做法一致，避免导入环）。
+//
+// 生命周期：每次请求一份（PermsOf 自带 60s 缓存，无额外开销）。
+const PermSetKey = "rbac_perms"
+
 // ---------------------------------------------------------------- 拦截模式
 
 const (
@@ -373,6 +385,11 @@ func GuardByPath() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
 			return
 		}
+		// ★ 无论下面走哪条分支，都先把权限集合放进上下文：
+		//   业务模块的模块级闸门（wecompush.AccessGuard）依赖它做"与 RBAC 同口径"的准入判定。
+		perms := PermsOf(c)
+		c.Set(PermSetKey, perms)
+
 		perm, declared := LookupPerm(c.Request.Method, c.FullPath())
 		if !declared {
 			key := c.Request.Method + " " + c.FullPath()
@@ -397,7 +414,7 @@ func GuardByPath() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if PermsOf(c).Has(perm) {
+		if perms.Has(perm) {
 			c.Next()
 			return
 		}

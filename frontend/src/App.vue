@@ -291,10 +291,12 @@ const ready = ref(false)
 // 导航项按权限显示（v0.39.0 RBAC）：
 //   · navItems[].perm 为空 → 登录即可见（改造前行为）
 //   · 有 perm → 必须持有该权限才显示（权限未加载时 can() 放行，避免刷新瞬间菜单全空）
-//   · 企微推送额外要求后端白名单（auth.canWecom 内含 RBAC 权限 + wpAccess 白名单双重判定）
-// 前端只是体验层，真正的闸门在后端 GuardByPath（无权限直接 403）。
+//   · 企微推送走 auth.canWecom：以 RBAC 的 wecompush:view 为主判据，
+//     模块白名单只是叠加的兼容项（v0.40.0 修正：原来"两个都满足才显示"，
+//     导致按 RBAC 给自定义角色授权后导航依然不出现）
+// 前端只是体验层，真正的闸门在后端 GuardByPath + wecompush.AccessGuard（无权限直接 403）。
 const visibleNav = computed(() =>
-  navItems.filter((n) => auth.can(n.perm) && (!n.wecom || auth.canWecom))
+  navItems.filter((n) => (n.wecom ? auth.canWecom : auth.can(n.perm)))
 )
 
 // 左下角 / 顶部版本号（取 /api/version，一次即可）

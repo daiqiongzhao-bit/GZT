@@ -15,12 +15,21 @@ import * as api from '@/api'
 
 const PERM_CACHE_KEY = 'sw_perms'
 
+// 权限快照缓存有效期。
+//
+// ★ 为什么必须有 TTL：管理员在「角色管理」里改完权限后，如果浏览器一直沿用
+//   内存/sessionStorage 里的旧快照，就会出现现场这种"权限已经改了、页面还是老样子"
+//   的错觉（实测：取消了「首页」权限，导航里仍显示概览，点进去后端记 403）。
+//   折中：缓存只用于**首屏防闪**，5 分钟内有效；应用每次启动都会强制重取一次。
+const PERM_CACHE_TTL = 5 * 60 * 1000
+
 function readCache() {
   try {
     const raw = sessionStorage.getItem(PERM_CACHE_KEY)
     if (!raw) return null
     const o = JSON.parse(raw)
     if (!o || !Array.isArray(o.perms)) return null
+    if (!o.at || Date.now() - o.at > PERM_CACHE_TTL) return null
     return o
   } catch (e) {
     return null
@@ -67,11 +76,18 @@ export const useAuthStore = defineStore('auth', {
       const arr = Array.isArray(list) ? list : [list]
       return arr.some((p) => s.can(p))
     },
-    // 能否进入「企微推送」：RBAC 权限 + 后端下发的白名单双重判定
+    /**
+     * 能否进入「企微推送」。
+     *
+     * ★ 主判据是 RBAC 的 wecompush:view —— 角色管理页勾上「企微推送 → 查看」即可见。
+     *   历史实现要求"RBAC 权限 + 模块白名单"**同时**满足，导致按 RBAC 给自定义角色
+     *   授权后导航依然不出现（现场原话："我给了企微推送权限，他反而没有"）。
+     *   现在把模块白名单降级为**叠加的兼容项**（旧配置里给内置角色整体放行的场景），
+     *   权限体系保持单一真源。
+     */
     canWecom: (s) => {
-      if (!s.can('wecompush:view')) return false
-      if (s.wpAccess) return !!s.wpAccess.can_access
-      return ['super_admin', 'dept_admin'].includes(s.user?.role)
+      if (s.can('wecompush:view')) return true
+      return !!s.wpAccess?.can_access
     },
     // 能否修改「企微推送」的角色权限（仅超管）
     canConfigWecom: (s) => !!s.wpAccess?.can_config,
@@ -124,7 +140,8 @@ export const useAuthStore = defineStore('auth', {
         try {
           sessionStorage.setItem(PERM_CACHE_KEY, JSON.stringify({
             perms: this.perms, wildcard: this.wildcard,
-            role_keys: this.roleKeys, scope: this.permScope, enforce: this.permEnforce
+            role_keys: this.roleKeys, scope: this.permScope, enforce: this.permEnforce,
+            at: Date.now() // 写入时间戳，供 readCache 判断新鲜度
           }))
         } catch (e) { /* 隐私模式下 sessionStorage 可能不可写 */ }
       } catch (e) {

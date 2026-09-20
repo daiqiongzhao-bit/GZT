@@ -1,5 +1,5 @@
 <template>
-  <div class="dash">
+  <div v-if="canView" class="dash">
     <!-- 首页品牌区：Logo + 公司名 + 当日日期 -->
     <div class="dash-hero">
       <img v-if="!logoFailed" :src="logoUrl" class="hero-logo" alt="Logo" @error="logoFailed = true" />
@@ -216,6 +216,24 @@
       </section>
     </div>
   </div>
+
+  <!-- ================= 无「首页」权限时的兜底视图 =================
+       路由对 '/' 永不拦截（否则无权限的人会被重定向成死循环），因此准入必须在这一层补齐：
+       没勾「首页 → 查看」的角色不应该看到工作台数据，也不该反复请求后面会被 403 的接口。 -->
+  <div v-else class="noaccess">
+    <div class="na-card">
+      <div class="na-icon" v-html="blockIcon"></div>
+      <h3 class="na-title">当前账号未开通「首页」查看权限</h3>
+      <p class="na-desc">
+        你的角色没有勾选「首页 → 查看」。这不是故障 —— 系统按最小权限原则默认不放开首页。
+      </p>
+      <ul class="na-list">
+        <li>需要一个模块？让管理员在「设置 → 角色管理」里给对应角色勾上该模块的「查看」权限。</li>
+        <li>权限变更后<b>刷新页面</b>（Ctrl+F5）即可生效，无需重新登录。</li>
+      </ul>
+      <p class="na-tip">当前可见的左侧菜单项由你的角色权限决定；若一项都没有，请联系系统管理员。</p>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -228,6 +246,12 @@ import brand from '@/brand'
 import EmptyState from '@/components/EmptyState.vue'
 
 const auth = useAuthStore()
+
+// 是否持有「首页」查看权限（dashboard:view）。
+// 无权限时不渲染工作台、也不发请求 —— 否则后台会一路记「权限不足」，
+// 现场容易被误读成"超级管理员权限不足"（实际是某个未授权角色在轮询首页）。
+const canView = computed(() => auth.can('dashboard:view'))
+const blockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
 
 // 首页 Logo：已上传企业 Logo 跟随设置，否则用内置图标
 const logoFailed = ref(false)
@@ -372,11 +396,13 @@ async function toggle(t) {
 }
 
 onMounted(async () => {
+  if (!canView.value) return // 无「首页」权限：不发请求（后端会 403，只会污染运行日志）
   await refreshDash()
   useAutoRefresh(refreshDash, true)
 })
 async function refreshDash() {
   loadPref()
+  if (!canView.value) return
   const [d, sc, deps] = await Promise.all([api.get('/dashboard'), api.get('/schedules'), api.get('/departments')])
   dash.value = d
   schedules.value = sc
@@ -467,4 +493,17 @@ onUnmounted(() => useAutoRefresh(refreshDash, false))
   .panels { grid-template-columns: 1fr; }
   .duty-table .col-dept { width: auto; }
 }
+
+/* ---- 无「首页」权限时的兜底卡片 ---- */
+.noaccess { display: flex; align-items: center; justify-content: center; min-height: 58vh; padding: 24px; }
+.na-card {
+  max-width: 580px; width: 100%; text-align: center; padding: 30px 26px;
+  border-radius: var(--radius); background: var(--bg-1); border: 1px solid var(--glass-border);
+}
+.na-icon { width: 44px; height: 44px; margin: 0 auto 14px; color: var(--text-faint); }
+.na-icon :deep(svg) { width: 44px; height: 44px; display: block; }
+.na-title { margin: 0 0 8px; font-size: 16px; }
+.na-desc { margin: 0 0 12px; color: var(--text-dim); font-size: 13px; line-height: 1.75; }
+.na-list { text-align: left; margin: 0 0 12px; padding-left: 20px; color: var(--text-dim); font-size: 13px; line-height: 1.9; }
+.na-tip { margin: 0; color: var(--text-faint); font-size: 12px; }
 </style>

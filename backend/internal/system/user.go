@@ -274,10 +274,28 @@ func (h *H) UpdateUser(c *gin.Context) {
 		"on_leave": u.OnLeave, "in_group": u.InGroup,
 		"role_ids": h.userRoleIDs(u.ID)}
 
-	// 提权防护：改角色绑定同样受"不得授予高于自己"的垂直校验约束
-	if err := h.assertCanGrant(c, req.RoleIDs); err != nil {
-		fail(c, http.StatusForbidden, err.Error())
-		return
+	// ★ 角色相关校验**只在"角色集合真的变了"时生效**（v0.40.0）：
+	//
+	//  1) 字段级鉴权：角色绑定由「编辑用户」这一个入口承载后，必须单独校验
+	//     system:user:authRole，否则**只要有「编辑用户」就能改角色** ——
+	//     相对改造前（角色是独立接口 /system/user/authRole、独立权限点）属于越权放开。
+	//
+	//  2) 提权防护：仍受"不得授予高于自己的角色"约束。
+	//
+	//  为什么必须加"变了才算"这个前提（实测踩到）：编辑弹窗会把该用户**现有的**
+	//  角色清单原样回传。若不加判断，一个只有「编辑用户」权限的管理员提交表单时，
+	//  请求里带着 role_ids=[执行者]（他本人不持有该角色），会直接被提权校验拦成 403 ——
+	//  表现是"他连同事的手机号都改不了"。提交一份与现状相同的清单不是授权动作。
+	rolesChanged := len(req.RoleIDs) > 0 && !sameIDSet(h.userRoleIDs(u.ID), req.RoleIDs)
+	if rolesChanged {
+		if !HasPerm(c, PSysUserAuthRole) {
+			fail(c, http.StatusForbidden, "无权调整该用户的角色（需要「分配角色」权限）")
+			return
+		}
+		if err := h.assertCanGrant(c, req.RoleIDs); err != nil {
+			fail(c, http.StatusForbidden, err.Error())
+			return
+		}
 	}
 
 	if req.DeptID != 0 && req.DeptID != u.DeptID {
@@ -586,6 +604,30 @@ func nvl(a, b string) string {
 		return b
 	}
 	return a
+}
+
+// sameIDSet 判断两个 ID 切片是否等价（顺序无关）。
+// 用于"角色绑定到底变没变"的判断 —— 变了才要求 system:user:authRole，
+// 避免改个手机号也要带「分配角色」权限。
+func sameIDSet(a, b []uint) bool {
+	set := make(map[uint]struct{}, len(a))
+	for _, x := range a {
+		set[x] = struct{}{}
+	}
+	if len(set) != len(b) {
+		return false
+	}
+	seen := make(map[uint]struct{}, len(b))
+	for _, x := range b {
+		if _, ok := set[x]; !ok {
+			return false
+		}
+		if _, dup := seen[x]; dup {
+			return false // 重复项视为不等价，交给上层按"变更"处理
+		}
+		seen[x] = struct{}{}
+	}
+	return true
 }
 
 const pwdAlphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789@#%"

@@ -9,10 +9,12 @@
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="setTab('syslog')">运行日志</button>
       <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="setTab('backup')">备份</button>
 
-      <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示 -->
+      <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示。
+           v0.40.0：「系统管理」不再是"点不动的灰标签"—— 它本身是一个可打开的页，
+           进去是若干入口卡片，点卡片进入对应子模块（谁有权限谁出现）。 -->
       <template v-if="sysTabs.length">
         <span class="tab-gap" aria-hidden="true"></span>
-        <span class="tab-group">系统管理</span>
+        <button class="tab" :class="{ active: tab === 'syshome' }" @click="setTab('syshome')">系统管理</button>
         <button
           v-for="t in sysTabs"
           :key="t.key"
@@ -513,7 +515,12 @@
             <span class="log-time">{{ fmt(l.created_at) }}</span>
             <span class="log-level" :style="sysLevelStyle(l.level)">{{ l.level }}</span>
             <span class="log-src"><em class="src-none">{{ l.source || '—' }}</em></span>
-            <span class="log-action" :title="l.detail || l.message">{{ l.message }}</span>
+            <span class="log-action" :title="l.detail || l.message">
+              <span class="la-msg">{{ l.message }}</span>
+              <!-- v0.40.0：把 detail 解析成"谁 / 哪条接口 / 缺什么权限"。
+                   只显示一句「权限不足」时，管理员会误以为是超管被拦（实测踩过）。 -->
+              <span v-if="sysDetail(l)" class="la-detail">{{ sysDetail(l) }}</span>
+            </span>
           </div>
           <div v-if="!sysLogs.length" class="empty">暂无运行日志（系统正常运行时不会自动写入，仅在发生 panic / 5xx / 调度异常时记录）</div>
         </div>
@@ -595,6 +602,28 @@
     <!-- ==================== v0.39.1 系统管理（原侧栏四项并入设置） ====================
          组件自带 .adm-page 版式（页面级卡片），这里不再套 .panel，避免出现"卡中卡"。
          每块都带权限判断：无权时整块不渲染，配合 onMounted 的兜底只会停在「个人信息」。 -->
+    <!-- 系统管理总入口：点得动、能自解释"这些模块是干什么的" -->
+    <section v-if="tab === 'syshome' && sysTabs.length" class="panel">
+      <h3 class="section-title">
+        系统管理
+        <span class="section-sub">当前账号可见 {{ sysTabs.length }} 项（按角色权限过滤）</span>
+      </h3>
+      <div class="sys-cards">
+        <button v-for="t in sysTabs" :key="t.key" class="sys-card" @click="setTab(t.key)">
+          <span class="sc-title">{{ t.label }}</span>
+          <span class="sc-desc">{{ t.desc }}</span>
+          <span class="sc-go">进入 →</span>
+        </button>
+      </div>
+      <p class="adm-hint" style="margin-top:12px;">
+        看不到某个模块 = 你的角色没有被授予该模块的「查看」权限。
+        权限由超级管理员在「角色管理 → 权限配置」里按模块逐项勾选。
+      </p>
+    </section>
+
+    <!-- 系统管理四个子模块（懒加载）
+         组件自带 .adm-page 版式（页面级卡片），这里不再套 .panel，避免出现"卡中卡"。
+         每块都带权限判断：无权时整块不渲染，配合 onMounted 的兜底只会停在「个人信息」。 -->
     <section v-if="tab === 'sysuser' && auth.can('system:user:list')" class="sys-embed">
       <SystemUserPage />
     </section>
@@ -639,17 +668,17 @@ const SystemDeptPage = defineAsyncComponent(() => import('@/views/SystemDept.vue
 
 // perm 与后端 system/routeperm.go 的 perms 逐字符一致；无权则该项不出现
 const SYS_TABS = [
-  { key: 'sysuser', label: '用户管理', perm: 'system:user:list' },
-  { key: 'sysrole', label: '角色管理', perm: 'system:role:list' },
-  { key: 'sysmenu', label: '菜单管理', perm: 'system:menu:list' },
-  { key: 'sysdept', label: '部门管理', perm: 'system:dept:list' }
+  { key: 'sysuser', label: '用户管理', perm: 'system:user:list', desc: '建账号、分配角色、启停用、重置密码、导入导出' },
+  { key: 'sysrole', label: '角色管理', perm: 'system:role:list', desc: '自定义角色能做什么、能看哪些部门；一个用户可挂多个角色' },
+  { key: 'sysmenu', label: '菜单管理', perm: 'system:menu:list', desc: '系统里有哪些模块与按钮，以及它们对应的权限标识' },
+  { key: 'sysdept', label: '部门管理', perm: 'system:dept:list', desc: '组织架构（部门树）与班次时间、整月配色的维护' }
 ]
 const sysTabs = computed(() => SYS_TABS.filter((t) => auth.can(t.perm)))
 
 // v0.39.1：'dept' / 'user' 两个老 tab 已合并进「系统管理 → 部门管理 / 用户管理」，
 // 因此从 TAB_KEYS 里摘掉 —— ?tab=dept / ?tab=user 也会落到「个人信息」，
 // 不会再把用户带回已被取代的旧界面。
-const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout']
+const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout', 'syshome']
   .concat(SYS_TABS.map((t) => t.key))
 const initTab = String(route.query.tab || '')
 const tab = ref(TAB_KEYS.includes(initTab) ? initTab : 'me')
@@ -1190,6 +1219,26 @@ function sysLevelStyle(lv) {
   return { color: '#3b82f6', borderColor: '#3b82f6' }
 }
 
+// 运行日志的 detail 是各模块自定义的 JSON。这里统一"说人话"：
+// 权限类日志必须一眼看出「谁 / 哪条接口 / 缺什么权限」，否则只会看到一句
+// 「权限不足（观察期仅记录）」，容易被误读成超级管理员被拦（现场实际问过）。
+function sysDetail(l) {
+  if (!l || !l.detail) return ''
+  let d
+  try { d = JSON.parse(l.detail) } catch (e) { return String(l.detail).slice(0, 200) }
+  if (!d || typeof d !== 'object') return String(l.detail).slice(0, 200)
+  const parts = []
+  if (d.operator_name || d.operator_id) parts.push(`操作人：${d.operator_name || '#' + d.operator_id}`)
+  if (d.role) parts.push(`角色：${d.role}`)
+  if (d.method && d.route) parts.push(`接口：${d.method} ${d.route}`)
+  else if (d.route) parts.push(`接口：${d.route}`)
+  if (d.perm) parts.push(`缺少权限：${d.perm}`)
+  if (d.target_name) parts.push(`对象：${d.target_name}`)
+  if (d.action) parts.push(`动作：${d.action}`)
+  if (d.ip) parts.push(`IP：${d.ip}`)
+  return parts.length ? parts.join(' · ') : JSON.stringify(d)
+}
+
 // 审计日志保留天数（仅超管）
 const logRetention = ref(90)
 const logRetentionSaving = ref(false)
@@ -1328,6 +1377,23 @@ onMounted(async () => {
 /* v0.39.1 系统管理分组：与常规 tab 之间加一道竖线 + 组标题，避免四个新 tab 看着像散装入口 */
 .tab-gap { width: 1px; align-self: stretch; margin: 2px 6px; background: var(--glass-border); }
 .tab-group { font-size: 12px; color: var(--text-faint); letter-spacing: 0.5px; padding: 0 2px; white-space: nowrap; }
+
+/* ---- 系统管理总入口卡片 ---- */
+.sys-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
+.sys-card {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 14px 16px; border-radius: var(--radius); text-align: left; cursor: pointer;
+  background: var(--bg-1); border: 1px solid var(--glass-border); color: inherit;
+}
+.sys-card:hover { border-color: var(--accent, #6366f1); transform: translateY(-1px); }
+.sc-title { font-size: 14px; font-weight: 600; }
+.sc-desc { font-size: 12px; color: var(--text-dim); line-height: 1.65; }
+.sc-go { font-size: 12px; color: var(--accent, #6366f1); margin-top: 2px; }
+
+/* ---- 运行日志：detail 摘要 ---- */
+.log-action { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.la-msg { font-size: 12.5px; }
+.la-detail { font-size: 11.5px; color: var(--text-faint); word-break: break-all; }
 /* 嵌入的系统管理页自带 .adm-page（含 .panel 卡片），外层不再加内边距，避免"卡中卡" */
 .sys-embed { display: block; }
 .tab { border: 1px solid var(--glass-border); background: var(--glass); color: var(--text-dim); padding: 9px 16px; border-radius: 12px; cursor: pointer; font-size: 13px; }

@@ -56,8 +56,11 @@ router.beforeEach(async (to) => {
   }
   if (auth.isAuthed && !auth.user) {
     await auth.fetchMe()
-    // 登录后同步一次权限快照与企微推送白名单（决定导航项与路由准入）
-    await Promise.all([auth.fetchPerms(), auth.fetchWpAccess()])
+    // ★ 强制刷新（force=true），不沿用 sessionStorage 里的旧快照。
+    //   历史实现这里传的是默认的 force=false，而 permLoaded 已被缓存置为 true，
+    //   于是"权限明明改了、刷新页面也不生效"（现场：取消了首页权限仍显示概览）。
+    //   刷新页面 = 一次新的会话状态，应当以服务端为准。
+    await Promise.all([auth.fetchPerms(true), auth.fetchWpAccess()])
   }
   if (to.meta.public && auth.isAuthed && auth.user) {
     return { path: '/' }

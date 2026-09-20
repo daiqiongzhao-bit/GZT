@@ -55,6 +55,21 @@
         —— 这是服务端强制注入的过滤条件，前端传参无法突破。
       </p>
 
+      <!-- 多部门管理时：顶部直接切部门，比每次去下拉里翻找快得多 -->
+      <div v-if="deptOptions.length > 1" class="dept-switch">
+        <span class="ds-label">切换部门</span>
+        <button class="ds-chip" :class="{ on: q.dept_id === '' }" @click="switchDept('')">
+          全部 <span class="ds-n">{{ deptOptions.length }}</span>
+        </button>
+        <button
+          v-for="o in deptOptions"
+          :key="o.value"
+          class="ds-chip"
+          :class="{ on: String(q.dept_id) === String(o.value) }"
+          @click="switchDept(o.value)"
+        >{{ cleanDeptLabel(o.label) }}</button>
+      </div>
+
       <!-- ================= 批量操作栏 ================= -->
       <div v-if="batchMode" class="adm-batch">
         <div class="adm-batch-row">
@@ -100,7 +115,6 @@
               <th>角色</th>
               <th>状态</th>
               <th>最近登录</th>
-              <th class="num">令牌版本</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -123,45 +137,22 @@
                 <span v-else class="chip ok">正常</span>
                 <span v-if="u.on_leave" class="chip warn">休假</span>
                 <span v-if="u.in_group" class="chip" style="color:#16a34a;border-color:#16a34a66">群内</span>
-                <span v-if="onlineMap[u.id]" class="chip ok" :title="onlineTitle(u.id)">在线 {{ fmtOnline(onlineMap[u.id]) }}</span>
                 <span v-if="u.must_change_pwd" class="chip">待改密</span>
+                <!-- 在线：明确是"哪个端"在线（网页 / PWA / 插件），而不是笼统一句"在线" -->
+                <span
+                  v-if="onlineOf(u.id)"
+                  class="chip ok"
+                  :title="onlineTitle(u.id)"
+                >{{ onlineOf(u.id).label }}在线 {{ fmtOnline(onlineOf(u.id).sec) }}</span>
               </td>
               <td class="dim nowrap">{{ u.last_login_at || '—' }}</td>
-              <td class="num dim">{{ u.token_version }}</td>
               <td>
                 <div class="adm-row-actions">
-                  <button v-if="auth.can('system:user:edit')" class="adm-link" @click="openEdit(u)">编辑</button>
-                  <button v-if="auth.can('system:user:authRole')" class="adm-link" @click="openRole(u)">分配角色</button>
-                  <button v-if="auth.can('system:user:resetPwd')" class="adm-link" @click="doResetPwd(u)">重置密码</button>
-
-                  <!-- 更多：高危 / 低频动作收进下拉，避免一行 7 个按钮 -->
-                  <div v-if="hasMore(u)" class="adm-ops" @click.stop>
-                    <button class="adm-link" :class="{ on: opsOpen === u.id }" @click="opsOpen = opsOpen === u.id ? 0 : u.id">更多 ▾</button>
-                    <div v-if="opsOpen === u.id" class="adm-ops-drop">
-                      <button v-if="auth.can('system:log:unlock')" class="adm-op" @click="doUnlock(u)">解锁登录</button>
-                      <button
-                        v-if="auth.can('system:user:forceLogout')"
-                        class="adm-op"
-                        :disabled="!onlineMap[u.id]"
-                        :title="onlineMap[u.id] ? '' : '该用户当前不在线'"
-                        @click="doForceLogout(u)"
-                      >强制下线<span v-if="!onlineMap[u.id]" class="adm-op-hint">离线</span></button>
-                      <button
-                        v-if="auth.can('system:user:edit')"
-                        class="adm-op"
-                        :disabled="u.id === auth.user?.id"
-                        :title="u.id === auth.user?.id ? '不能禁用当前登录账号' : ''"
-                        @click="toggleFrozen(u)"
-                      >{{ u.frozen ? '启用账号' : '禁用账号' }}</button>
-                      <button
-                        v-if="auth.can('system:user:remove')"
-                        class="adm-op danger"
-                        :disabled="u.id === auth.user?.id"
-                        :title="u.id === auth.user?.id ? '不能删除当前登录账号' : ''"
-                        @click="doDelete(u)"
-                      >删除用户</button>
-                    </div>
-                  </div>
+                  <!-- v0.40.0：行内只留一个入口。
+                       分配角色 / 重置密码 / 解锁 / 强制下线 / 禁用 / 删除 都是"改这个用户"的一部分，
+                       全部收进「编辑」弹窗 —— 一行 4 个按钮既难扫读，也容易误点高危动作。 -->
+                  <button v-if="canEditUser" class="adm-link" @click="openEdit(u)">编辑</button>
+                  <span v-else class="dim">—</span>
                 </div>
               </td>
             </tr>
@@ -215,57 +206,94 @@
         </div>
 
         <div class="adm-field">
-          <label class="fld">角色 *（可多选，数据范围取并集；功能权限取并集）</label>
-          <div class="adm-tree" style="max-height:180px">
+          <label class="fld">角色 *（可多选 —— 一个人可以同时是「排班主管」和「知识库编辑」，权限取并集）</label>
+          <div class="adm-tree" style="max-height:190px">
             <div v-for="r in roles" :key="r.id" class="adm-tree-row">
               <label>
-                <input class="adm-check" type="checkbox" :value="r.id" v-model="edit.form.role_ids" />
-                <span class="nm">{{ r.role_name }} <span class="chip" style="margin-left:4px">{{ r.role_key }}</span></span>
+                <input
+                  class="adm-check"
+                  type="checkbox"
+                  :value="r.id"
+                  v-model="edit.form.role_ids"
+                  :disabled="roleLocked"
+                />
+                <span class="nm">
+                  {{ r.role_name }}
+                  <span class="chip" style="margin-left:5px">{{ scopeName(r.data_scope) }}</span>
+                </span>
               </label>
             </div>
             <div v-if="!roles.length" class="empty">加载角色中…</div>
           </div>
+          <p v-if="roleLocked" class="adm-hint" style="margin-top:6px;color:#d97706;">
+            你没有「分配角色」权限，角色勾选已锁定（姓名、手机号、部门等资料仍可修改）。
+          </p>
+          <p v-else class="adm-hint" style="margin-top:6px;">
+            只勾「查看」的角色 = 只能看；勾了「修改 / 删除」才有对应能力。
+            想改角色能做什么，去「角色管理 → 权限配置」。
+          </p>
         </div>
 
-        <label class="adm-inline">
-          <input class="adm-check" type="checkbox" v-model="edit.form.in_group" />
-          已加入企业微信通知群（到点推送会 @TA，名单中不重复列出）
-        </label>
-        <label class="adm-inline">
-          <input class="adm-check" type="checkbox" v-model="edit.form.on_leave" />
-          休假 / 停职（不计入「全员」当班与推送）
-        </label>
-
-        <div class="adm-modal-foot">
-          <button class="btn ghost" @click="edit.show = false">取消</button>
-          <button class="btn primary" :disabled="saving" @click="submitEdit">{{ saving ? '保存中…' : '保存' }}</button>
+        <div class="adm-field">
+          <label class="fld">账号状态</label>
+          <label class="adm-inline">
+            <input class="adm-check" type="checkbox" v-model="edit.form.in_group" />
+            已加入企业微信通知群（到点推送会 @TA）
+          </label>
+          <label class="adm-inline">
+            <input class="adm-check" type="checkbox" v-model="edit.form.on_leave" />
+            休假 / 停职（不计入「全员」当班与推送）
+          </label>
+          <label v-if="!edit.isCreate" class="adm-inline">
+            <input
+              class="adm-check"
+              type="checkbox"
+              v-model="edit.form.frozen"
+              :disabled="edit.id === auth.user?.id"
+            />
+            禁用该账号（立即无法登录，不能禁用当前登录的自己）
+          </label>
         </div>
-      </div>
-    </div>
 
-    <!-- ================= 分配角色 ================= -->
-    <div v-if="roleDlg.show" class="adm-mask" @click.self="roleDlg.show = false">
-      <div class="adm-modal">
-        <h3>分配角色</h3>
-        <p class="adm-modal-sub">{{ roleDlg.username }} —— 改变角色会立即令该用户的旧令牌失效（强制重新登录）</p>
-        <div class="adm-alert warn">
-          只能分配<b>自己也有权分配</b>的角色（不能分配权限高于自己的角色）；
-          系统必须保留至少 1 个启用状态的超级管理员，因此不能摘掉最后一个超管。
-        </div>
-        <div class="adm-tree">
-          <div v-for="r in roles" :key="r.id" class="adm-tree-row">
-            <label>
-              <input class="adm-check" type="checkbox" :value="r.id" v-model="roleDlg.role_ids" />
-              <span class="nm">
-                {{ r.role_name }} <span class="chip" style="margin-left:4px">{{ r.role_key }}</span>
-                <span class="chip" style="margin-left:4px">{{ scopeName(r.data_scope) }}</span>
+        <!-- 高危 / 低频动作：默认收起，避免误点 -->
+        <div v-if="!edit.isCreate" class="adm-fold">
+          <button class="adm-fold-head" @click="editMore = !editMore">
+            <span class="tri">{{ editMore ? '▾' : '▸' }}</span>其他操作（重置密码 / 解锁 / 踢下线 / 删除）
+          </button>
+          <div v-if="editMore" class="adm-fold-body">
+            <div class="op-row">
+              <button v-if="auth.can('system:user:resetPwd')" class="btn ghost sm" @click="doResetPwd(edit.row)">重置密码</button>
+              <span class="op-desc">生成随机临时密码并使旧令牌失效，本人首次登录须改密</span>
+            </div>
+            <div v-if="auth.can('system:log:unlock')" class="op-row">
+              <button class="btn ghost sm" @click="doUnlock(edit.row)">解锁登录</button>
+              <span class="op-desc">解除连续输错密码导致的锁定（5 次失败锁 15 分钟）</span>
+            </div>
+            <div v-if="auth.can('system:user:forceLogout')" class="op-row">
+              <button class="btn ghost sm" :disabled="!onlineOf(edit.id)" @click="doForceLogout(edit.row)">强制下线</button>
+              <span class="op-desc">
+                {{ onlineOf(edit.id) ? '该用户当前有在线会话，点击后其全部设备需重新登录' : '该用户当前不在线' }}
               </span>
-            </label>
+            </div>
+            <div v-if="auth.can('system:user:remove')" class="op-row">
+              <button
+                class="btn danger sm"
+                :disabled="edit.id === auth.user?.id"
+                @click="doDelete(edit.row)"
+              >删除账号</button>
+              <span class="op-desc">连同角色绑定一并删除，不可撤销</span>
+            </div>
           </div>
         </div>
+
         <div class="adm-modal-foot">
-          <button class="btn ghost" @click="roleDlg.show = false">取消</button>
-          <button class="btn primary" :disabled="saving" @click="submitRole">保存</button>
+          <span v-if="!canSaveUser" class="adm-hint" style="margin-right:auto;color:#d97706;">
+            你没有「{{ edit.isCreate ? '新增用户' : '编辑用户' }}」权限，此处只能查看
+          </span>
+          <button class="btn ghost" @click="edit.show = false">取消</button>
+          <button class="btn primary" :disabled="saving || !canSaveUser" @click="submitEdit">
+            {{ saving ? '保存中…' : '保存' }}
+          </button>
         </div>
       </div>
     </div>
@@ -310,14 +338,19 @@ const roleLabel = (r) => ({ super_admin: '超级管理员', dept_admin: '部门�
 const canBatch = computed(() => auth.canAny([
   'system:user:edit', 'system:user:resetPwd', 'system:user:forceLogout', 'system:user:remove'
 ]))
-// 行内「更多」下拉是否有可选项
-function hasMore(u) {
-  const self = u.id === auth.user?.id
-  return auth.can('system:log:unlock') ||
-    auth.can('system:user:forceLogout') ||
-    (auth.can('system:user:edit') && !self) ||
-    (auth.can('system:user:remove') && !self)
-}
+// 行内「编辑」入口：只要对用户有任意一项管理能力就显示。
+// 按钮本身只做展示，各项动作在弹窗内仍按各自权限点单独门控（后端 GuardByPath 兜底）。
+const canEditUser = computed(() => auth.canAny([
+  'system:user:edit', 'system:user:authRole', 'system:user:resetPwd',
+  'system:user:forceLogout', 'system:user:remove', 'system:log:unlock'
+]))
+// 角色勾选是否锁定：编辑已有用户时需要有「分配角色」权限（后端同样做字段级校验）；
+// 新建用户不受限 —— 创建时分配角色是流程必需，由「新增用户」权限覆盖。
+const canAssignRole = computed(() => auth.can('system:user:authRole'))
+const roleLocked = computed(() => !edit.isCreate && !canAssignRole.value)
+// 保存按钮门控：新建要「新增用户」权限，编辑要「编辑用户」权限。
+// 只有「分配角色」而没有「编辑」的人打开弹窗时，保存会被禁用（后端 routeperm 同样会 403）。
+const canSaveUser = computed(() => (edit.isCreate ? auth.can('system:user:add') : auth.can('system:user:edit')))
 
 // ---------------------------------------------------------------- 列表
 async function load() {
@@ -332,7 +365,6 @@ async function load() {
     total.value = r.total || 0
     // 勾选态跨页保留没有意义（批量动作只作用于已选 id），换页即清空
     selectedIds.value = []
-    opsOpen.value = 0
     loadSessions()
   } catch (e) {
     rows.value = []
@@ -365,15 +397,37 @@ async function loadRoles() {
 // ---------------------------------------------------------------- 在线状态
 // GET /api/sessions 要求 system:user:sessions（部门管理员被显式排除），
 // 因此取不到时只是不显示「在线」标签，不影响其它功能。
-const onlineMap = ref({})
+//
+// 返回值里 clients = 登录端（web / pwa / extension）。只显示"在线"信息量太低 ——
+// 管理员真正想知道的是"他是在电脑网页上、还是装了 PWA、还是在浏览器插件里挂着"。
+const CLIENT_LABEL = { web: '网页', pwa: 'PWA', extension: '插件' }
+const onlineMap = ref({}) // user_id → { sec, clients, count, ips, loginAt, lastSeen }
 async function loadSessions() {
   if (!auth.can('system:user:sessions')) { onlineMap.value = {}; return }
   try {
     const list = await api.get('/sessions')
     const m = {}
-    for (const s of (Array.isArray(list) ? list : [])) m[s.user_id] = s.online_sec || 0
+    for (const s of (Array.isArray(list) ? list : [])) {
+      m[s.user_id] = {
+        sec: s.online_sec || 0,
+        clients: s.clients || [],
+        count: s.count || 1,
+        ips: s.ips || [],
+        loginAt: s.login_at || '',
+        lastSeen: s.last_seen || ''
+      }
+    }
     onlineMap.value = m
   } catch (e) { onlineMap.value = {} }
+}
+function onlineOf(id) {
+  const o = onlineMap.value[id]
+  if (!o) return null
+  return { label: clientText(o.clients), sec: o.sec }
+}
+function clientText(clients) {
+  const arr = (clients || []).map((c) => CLIENT_LABEL[c] || c)
+  return arr.length ? arr.join(' / ') : '网页'
 }
 function fmtOnline(sec) {
   const s = Number(sec) || 0
@@ -382,8 +436,10 @@ function fmtOnline(sec) {
   return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm'
 }
 function onlineTitle(id) {
-  const s = onlineMap.value[id]
-  return `在线时长 ${fmtOnline(s)}（15 分钟内有活跃请求即视为在线）`
+  const o = onlineMap.value[id]
+  return `在线 ${fmtOnline(o.sec)}（15 分钟内有请求即视为在线）
+登录端：${clientText(o.clients)}${o.count > 1 ? `，共 ${o.count} 个会话` : ''}
+${o.ips.length ? 'IP：' + o.ips.join(', ') + '\n' : ''}最近活跃：${o.lastSeen || '—'}`
 }
 
 // ---------------------------------------------------------------- 导入 / 导出
@@ -426,7 +482,6 @@ async function importUsers(e) {
 const batchMode = ref(false)
 const selectedIds = ref([])
 const batchDept = ref(0)
-const opsOpen = ref(0) // 行内「更多 ▾」当前展开的用户 id（0 = 全部收起）
 const allSelected = computed(() => rows.value.length > 0 && selectedIds.value.length === rows.value.length)
 function toggleAll(e) {
   // 不允许批量作用于当前登录账号（后端也会拒绝，这里提前排除以免"选了却没生效"）
@@ -512,19 +567,22 @@ async function batchDelete() {
 }
 
 // ---------------------------------------------------------------- 新增 / 编辑
+// row：当前编辑的列表行（危险操作的确认文案要用到姓名，操作后也要刷新）
 const edit = reactive({
-  show: false, isCreate: true, id: 0,
-  form: { username: '', password: '', name: '', emp_no: '', mobile: '', dept_id: 0, role_ids: [], in_group: false, on_leave: false }
+  show: false, isCreate: true, id: 0, row: null,
+  form: { username: '', password: '', name: '', emp_no: '', mobile: '', dept_id: 0, role_ids: [], in_group: false, on_leave: false, frozen: false }
 })
+const editMore = ref(false) // 「其他操作」折叠区
 
 function openCreate() {
   Object.assign(edit, {
-    show: true, isCreate: true, id: 0,
+    show: true, isCreate: true, id: 0, row: null,
     form: {
       username: '', password: '', name: '', emp_no: '', mobile: '',
-      dept_id: auth.user?.dept_id || 0, role_ids: [], in_group: false, on_leave: false
+      dept_id: auth.user?.dept_id || 0, role_ids: [], in_group: false, on_leave: false, frozen: false
     }
   })
+  editMore.value = false
   if (!roles.value.length) loadRoles()
 }
 
@@ -539,20 +597,21 @@ async function openEdit(u) {
     } catch (e) { /* 忽略，按空处理 */ }
   }
   Object.assign(edit, {
-    show: true, isCreate: false, id: u.id,
+    show: true, isCreate: false, id: u.id, row: u,
     form: {
       username: u.username, password: '', name: u.name, emp_no: u.emp_no || '',
       mobile: u.mobile || '', dept_id: u.dept_id, role_ids: [...roleIds],
-      in_group: !!u.in_group, on_leave: !!u.on_leave
+      in_group: !!u.in_group, on_leave: !!u.on_leave, frozen: !!u.frozen
     }
   })
+  editMore.value = false
 }
 
 async function submitEdit() {
   const f = edit.form
   if (!f.username) { alert('请填写登录名'); return }
   if (!f.dept_id) { alert('请选择归属部门'); return }
-  if (!f.role_ids.length) { alert('请至少为用户分配 1 个角色（系统不再隐式补 executor）'); return }
+  if (!f.role_ids.length) { alert('请至少为用户分配 1 个角色（系统不再隐式补执行者）'); return }
   if (edit.isCreate && (!f.password || f.password.length < 6)) { alert('初始密码至少 6 位'); return }
   saving.value = true
   try {
@@ -568,6 +627,11 @@ async function submitEdit() {
         dept_id: f.dept_id, role_ids: f.role_ids,
         in_group: f.in_group, on_leave: f.on_leave
       })
+      // 启用 / 禁用走独立接口（PUT /system/user 不承载 frozen，避免"改个名字顺手把账号启停改了"）
+      const was = !!edit.row?.frozen
+      if (f.frozen !== was) {
+        await api.post('/system/user/changeStatus', { id: edit.id, frozen: f.frozen })
+      }
     }
     edit.show = false
     await load()
@@ -576,30 +640,8 @@ async function submitEdit() {
   } finally { saving.value = false }
 }
 
-// ---------------------------------------------------------------- 分配角色
-const roleDlg = reactive({ show: false, id: 0, username: '', role_ids: [] })
-async function openRole(u) {
-  if (!roles.value.length) await loadRoles()
-  let ids = u.role_ids || []
-  if (!ids.length) {
-    try {
-      const d = await api.get(`/system/user/detail/${u.id}`)
-      ids = d.role_ids || []
-    } catch (e) { /* ignore */ }
-  }
-  Object.assign(roleDlg, { show: true, id: u.id, username: u.username, role_ids: [...ids] })
-}
-async function submitRole() {
-  if (!roleDlg.role_ids.length) { alert('请至少为用户分配 1 个角色'); return }
-  saving.value = true
-  try {
-    await api.post('/system/user/authRole', { id: roleDlg.id, role_ids: roleDlg.role_ids })
-    roleDlg.show = false
-    await load()
-  } catch (e) {
-    alert(errMsg(e, '分配角色失败'))
-  } finally { saving.value = false }
-}
+// 角色分配已并入「编辑」弹窗（同一个表单里改资料 + 改角色，一次提交）。
+// 单独弹窗的语义问题：改完角色还要回来再改部门，两次请求、两次 token 失效。
 
 // ---------------------------------------------------------------- 其它动作
 async function doResetPwd(u) {
@@ -611,26 +653,19 @@ async function doResetPwd(u) {
   } catch (e) { alert(errMsg(e, '重置密码失败')) }
 }
 
-async function toggleFrozen(u) {
-  const next = !u.frozen
-  if (next && !confirm(`确定禁用「${u.name || u.username}」吗？该账号将立即无法登录。`)) return
-  try {
-    await api.post('/system/user/changeStatus', { id: u.id, frozen: next })
-    await load()
-  } catch (e) { alert(errMsg(e, '修改状态失败')) }
-}
-
 async function doDelete(u) {
+  if (!u) return
   if (!confirm(`确定删除「${u.name || u.username}」吗？\n该操作会同时解除其全部角色绑定，且不可撤销。`)) return
   try {
     await api.post(`/system/user/delete/${u.id}`)
+    edit.show = false // 被删的用户已不存在，弹窗必须关掉
     await load()
   } catch (e) { alert(errMsg(e, '删除失败')) }
 }
 
 // 解锁登录：解除该账号在所有 IP 上的登录失败锁定（连续 5 次失败会锁 15 分钟）
 async function doUnlock(u) {
-  opsOpen.value = 0
+  if (!u) return
   try {
     const r = await api.post('/auth/unlock', { username: u.username })
     const n = r.cleared || 0
@@ -642,7 +677,7 @@ async function doUnlock(u) {
 
 // 强制下线：递增 token_version + 清会话，该用户所有设备需重新登录
 async function doForceLogout(u) {
-  opsOpen.value = 0
+  if (!u) return
   if (!confirm(`强制下线「${u.name || u.username}」？\n其所有设备的令牌立即失效，需重新登录。`)) return
   try {
     await api.post(`/users/${u.id}/force-logout`)
@@ -650,13 +685,47 @@ async function doForceLogout(u) {
   } catch (e) { alert(errMsg(e, '强制下线失败')) }
 }
 
+// ---------------------------------------------------------------- 部门切换
+// 顶部"切换部门"：仅在当前登录人**能管多个部门**时出现（数据范围过滤后的部门数 > 1）。
+function cleanDeptLabel(label) {
+  return String(label || '').replace(/^[\s　]*└?\s*/, '')
+}
+function switchDept(v) {
+  q.dept_id = v === '' ? '' : v
+  page.value = 1
+  load()
+}
+
 function errMsg(e, dft) {
   return (e && e.response && e.response.data && e.response.data.error) || dft
 }
 
 onMounted(async () => {
-  // 行内「更多 ▾」：点击页面其它地方自动收起（下拉自身用 @click.stop 阻挡冒泡）
-  document.addEventListener('click', () => { opsOpen.value = 0 })
   await Promise.all([load(), loadDepts(), loadRoles()])
 })
 </script>
+
+<style scoped>
+/* ---- 顶部「切换部门」 ---- */
+.dept-switch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+.ds-label { font-size: 12px; color: var(--text-faint); margin-right: 2px; }
+.ds-chip {
+  padding: 3px 11px; border-radius: 999px; border: 1px solid var(--glass-border);
+  background: transparent; cursor: pointer; font-size: 12.5px; color: var(--text-dim);
+}
+.ds-chip:hover { border-color: var(--accent, #6366f1); color: inherit; }
+.ds-chip.on { background: var(--accent, #6366f1); border-color: var(--accent, #6366f1); color: #fff; }
+.ds-n { opacity: 0.72; font-size: 11px; }
+
+/* ---- 弹窗内折叠区 ---- */
+.adm-fold { border: 1px solid var(--glass-border); border-radius: 10px; margin: 10px 0; overflow: hidden; }
+.adm-fold-head {
+  width: 100%; text-align: left; background: transparent; border: 0; cursor: pointer;
+  padding: 9px 12px; font-size: 13px; color: var(--text-dim);
+}
+.adm-fold-head:hover { background: rgba(127, 127, 127, 0.06); }
+.adm-fold-body { padding: 4px 14px 12px; }
+.tri { display: inline-block; width: 14px; color: var(--text-faint); }
+.op-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.op-desc { font-size: 12px; color: var(--text-faint); line-height: 1.6; }
+</style>

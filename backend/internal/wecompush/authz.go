@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"shiftworkbench/internal/models"
+	"shiftworkbench/internal/rbac"
 )
 
 // ctxUserKey 与 middleware.CtxUserKey 的值保持一致。
@@ -17,6 +18,13 @@ import (
 // wecompush → middleware → db → wecompush 的导入环，Go 直接拒绝编译（已实测踩坑）。
 // models 是叶子包（不 import 任何内部包），因此只依赖 models 是安全的。
 const ctxUserKey = "claims"
+
+// ctxPermSetKey 与 system.PermSetKey 的值保持一致（同一字符串字面量，避免导入 system 包）。
+// 全局闸门 system.GuardByPath 会在每个已认证请求上写入当前用户的权限集合。
+const ctxPermSetKey = "rbac_perms"
+
+// viewPerm 是本模块的页面级权限标识，与 system.PWpView 同字面量。
+const viewPerm = "wecompush:view"
 
 // claimsFromCtx 取当前登录用户（等价于 middleware.GetClaims，但避免导入环）
 func claimsFromCtx(c *gin.Context) *models.Claims {
@@ -107,7 +115,10 @@ func (h *H) AccessRoles() []string {
 	return normalizeAccessRoles(arr)
 }
 
-// HasAccess 指定角色是否可访问本模块（超级管理员恒可）
+// HasAccess 指定角色是否在**角色白名单**内（超级管理员恒可）。
+//
+// ★ 注意：这不是唯一的准入依据。自 v0.40.0 起，RBAC 的 wecompush:view 权限是主通道
+// （见 CanEnter）—— 白名单只用于"没有 RBAC 权限、但按内置角色整体放行"的历史配置兼容。
 func (h *H) HasAccess(role string) bool {
 	if role == string(models.RoleSuperAdmin) {
 		return true
@@ -120,7 +131,42 @@ func (h *H) HasAccess(role string) bool {
 	return false
 }
 
-// AccessGuard 模块级访问闸门：不在白名单内的角色一律 403。
+// rbacAllows 从上下文取当前用户权限集合，判断是否持有本模块的查看权限。
+//
+// 上下文里的集合由 system.GuardByPath 写入（含超管通配），因此这里与全局闸门口径完全一致。
+func rbacAllows(c *gin.Context) bool {
+	v, ok := c.Get(ctxPermSetKey)
+	if !ok {
+		return false
+	}
+	ps, ok2 := v.(rbac.PermSet)
+	if !ok2 {
+		return false
+	}
+	return ps.Has(viewPerm)
+}
+
+// CanEnter 是本模块的**唯一准入判定**（AccessGuard 与 /access 接口共用）。
+//
+// 三条放行路径，任一命中即可：
+//  1. users.role = 超级管理员（避免把自己锁在门外）
+//  2. RBAC 持有 wecompush:view（角色管理页勾选「企微推送 → 查看」）
+//  3. 落在角色白名单内（「企微推送 → 设置 → 访问权限」，兼容历史配置）
+//
+// ★ 为什么加了第 2 条：v0.39.x 时准入只看内置角色枚举，按 RBAC 给**自定义角色**
+//   勾了企微推送权限的人依然被 403 / 导航不显示（现场原话："我给了企微推送权限，
+//   他反而没有"）。权限体系必须单一真源，模块白名单只能是叠加的例外，不能是否决项。
+func (h *H) CanEnter(c *gin.Context, role string) bool {
+	if role == string(models.RoleSuperAdmin) {
+		return true
+	}
+	if rbacAllows(c) {
+		return true
+	}
+	return h.HasAccess(role)
+}
+
+// AccessGuard 模块级访问闸门：既无 RBAC 权限、也不在白名单内的角色一律 403。
 func (h *H) AccessGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cl := claimsFromCtx(c)
@@ -128,12 +174,12 @@ func (h *H) AccessGuard() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
 			return
 		}
-		if h.HasAccess(string(cl.Role)) {
+		if h.CanEnter(c, string(cl.Role)) {
 			c.Next()
 			return
 		}
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-			"error": "「企微推送」仅管理员可访问，如需开通请联系超级管理员",
+			"error": "无「企微推送」访问权限，如需开通请联系超级管理员（角色管理 → 勾选该角色 → 企微推送 → 查看）",
 		})
 	}
 }
@@ -148,12 +194,15 @@ func (h *H) GetAccess(c *gin.Context) {
 		role = string(cl.Role)
 	}
 	allowed := h.AccessRoles()
+	viaRbac := rbacAllows(c)
 	ok(c, gin.H{
 		"roles":         roleOptions,
 		"allowed_roles": allowed,
 		"my_role":       role,
-		"can_access":    h.HasAccess(role),
-		"can_config":    role == string(models.RoleSuperAdmin), // 仅超管可改权限
+		"can_access":    h.CanEnter(c, role),
+		// 准入依据：true = 来自 RBAC 角色权限（角色管理页勾选），false = 来自模块白名单
+		"via_rbac":   viaRbac,
+		"can_config": role == string(models.RoleSuperAdmin), // 仅超管可改权限
 	})
 }
 
