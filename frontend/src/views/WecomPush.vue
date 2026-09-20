@@ -184,6 +184,22 @@
           <label class="wp-field"><span>Secret</span><input v-model="auth.secretInput" type="password" placeholder="机器人 Secret" /></label>
           <button class="wp-btn primary" @click="manualAuth">手动授权</button>
         </div>
+
+        <!-- 访问权限：仅超级管理员可见可改 -->
+        <div class="glass wp-card" v-if="canConfig">
+          <div class="wp-card-h">访问权限（仅超级管理员可设置）</div>
+          <div class="wp-muted sm" style="margin-bottom:10px">
+            勾选哪些角色可以<b>查看和修改</b>「企微推送」。超级管理员始终保留权限、不可取消；
+            未勾选的角色看不到入口，即使直接访问接口也会被拒绝。
+          </div>
+          <label class="wp-field row" v-for="r in perm.roles" :key="r.value">
+            <span>{{ r.label }}</span>
+            <input type="checkbox" :value="r.value" v-model="perm.selected" :disabled="r.value === 'super_admin'" />
+          </label>
+          <button class="wp-btn primary" style="margin-top:10px" :disabled="perm.saving" @click="saveAccess">
+            {{ perm.saving ? '保存中…' : '保存权限' }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -291,6 +307,38 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import * as api from '@/api'
 import { icons } from '@/icons'
+import { useAuthStore } from '@/store/auth'
+
+// 全局登录态（用于判断当前用户能否设置「访问权限」）
+const store = useAuthStore()
+
+// ---------- 访问权限（默认仅管理员；超管可调白名单）----------
+// 仅超级管理员可修改，见后端 UpdateAccess（PUT /wecom-push/access）
+const canConfig = computed(() => store.canConfigWecom)
+const perm = reactive({ roles: [], selected: [], saving: false })
+
+async function loadAccess() {
+  if (!store.canConfigWecom) return // 非超管不拉，省一次请求
+  try {
+    const r = await api.get('/wecom-push/access')
+    perm.roles = r.roles || []
+    perm.selected = [...(r.allowed_roles || [])]
+  } catch { /* 读取失败保持原样，不打断页面 */ }
+}
+
+async function saveAccess() {
+  perm.saving = true
+  try {
+    const r = await api.put('/wecom-push/access', { allowed_roles: perm.selected })
+    perm.selected = [...(r.allowed_roles || [])]
+    await store.fetchWpAccess() // 同步全局权限，导航项随之更新
+    toast('权限已保存', 'success')
+  } catch (e) {
+    toast(errMsg(e), 'error')
+  } finally {
+    perm.saving = false
+  }
+}
 
 const tab = ref('overview')
 const loading = ref(false)
@@ -381,7 +429,7 @@ async function refreshCli() {
   catch (e) { toast(errMsg(e), 'error') }
 }
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadTasks(), loadLogs(), loadSettings(), loadGroups(), loadAuthStatus()])
+  await Promise.all([loadSummary(), loadTasks(), loadLogs(), loadSettings(), loadGroups(), loadAuthStatus(), loadAccess()])
 }
 
 // 任务表单

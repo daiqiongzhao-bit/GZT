@@ -42,7 +42,7 @@
         </div>
 
         <nav class="nav">
-          <router-link v-for="n in navItems" :key="n.to" :to="n.to" class="nav-item" active-class="active">
+          <router-link v-for="n in visibleNav" :key="n.to" :to="n.to" class="nav-item" active-class="active">
             <span class="nav-ico" v-html="n.icon"></span>
             <span>{{ n.label }}</span>
             <span v-if="n.to === '/tasks' && badgeTotal > 0" class="nav-badge" :class="{ danger: badgeOverdue > 0 }">{{ badgeTotal }}</span>
@@ -113,7 +113,7 @@
 
       <!-- 底部悬浮导航（移动端） -->
       <nav class="mobile-nav">
-        <router-link v-for="n in navItems" :key="n.to" :to="n.to" active-class="active">
+        <router-link v-for="n in visibleNav" :key="n.to" :to="n.to" active-class="active">
           <span v-html="n.icon"></span>
           <span>{{ n.label }}</span>
           <span v-if="n.to === '/tasks' && badgeTotal > 0" class="nav-badge" :class="{ danger: badgeOverdue > 0 }">{{ badgeTotal }}</span>
@@ -288,6 +288,14 @@ const route = useRoute()
 const router = useRouter()
 const ready = ref(false)
 
+// 「企微推送」导航项按权限显示：默认仅管理员（超管 + 部门管理员）可见，
+// 白名单由超级管理员在「企微推送 → 设置 → 访问权限」里调整。
+// 前端只是体验层，真正的闸门在后端 AccessGuard（无权限者直接 403）。
+const WECOM_PATHS = ['/wecom-push']
+const visibleNav = computed(() =>
+  navItems.filter((n) => !WECOM_PATHS.includes(n.to) || auth.canWecom)
+)
+
 // 左下角 / 顶部版本号（取 /api/version，一次即可）
 // 顺带做「应用壳版本自检」：页面里的壳版本（构建时注入 index.html 的 meta）
 // 与服务端版本不一致 = 用户在跑旧壳，提示刷新，避免「点了菜单没反应」。
@@ -442,7 +450,10 @@ async function doForceChangePwd() {
 }
 
 onMounted(async () => {
-  if (auth.token) await auth.fetchMe()
+  if (auth.token) {
+    await auth.fetchMe()
+    await auth.fetchWpAccess() // 决定「企微推送」导航项是否显示
+  }
   await loadBrand() // 公开接口，未登录也能拿到企业名
   // 浏览器标签 title 跟随企业名（默认：企业任务通知管理）
   document.title = brand.company_name || "企业任务通知管理"
