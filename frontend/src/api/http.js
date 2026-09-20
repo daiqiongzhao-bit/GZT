@@ -23,7 +23,23 @@ http.interceptors.response.use(
     const status = err.response?.status
     if (status === 401) {
       localStorage.removeItem('sw_token')
-      if (location.pathname !== '/login') location.href = '/login'
+      if (location.pathname !== '/login') {
+        // ★ 走 router 而不是 location.href（v0.40.4）：
+        //   location.href 是整页重载，会白屏闪一下、丢掉 SPA 状态，而且与 router 双轨。
+        //   改用 router.replace 前必须**同时清空 Pinia 里的登录态**，
+        //   否则守卫会把 /login 判成"已登录访问公开页"再弹回首页（导航被吃掉）。
+        //   动态 import 是为了绕开 http → store/auth → api → http 的循环依赖。
+        Promise.all([import('@/store/auth'), import('@/router')])
+          .then(([{ useAuthStore }, { default: router }]) => {
+            const a = useAuthStore()
+            a.token = ''
+            a.user = null
+            a.wpAccess = null
+            a.invalidatePerms()
+            return router.replace('/login')
+          })
+          .catch(() => { location.href = '/login' }) // router 不可用时退回硬跳转
+      }
     }
     return Promise.reject(err)
   }

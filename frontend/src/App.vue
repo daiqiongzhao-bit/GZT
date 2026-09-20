@@ -425,6 +425,9 @@ const todayText = computed(() =>
 )
 
 function onLogout() {
+  // ★ 顺序不能改（v0.40.4）：auth.logout() 内部**同步**清空 token/user/权限，
+  //   所以紧接着的 replace 不会命中守卫里「已登录访问 /login 就弹回首页」那条，
+  //   全程无"闪一下主界面"。也**不要**改成 await——远端通知是有意不阻塞导航的。
   auth.logout()
   router.replace('/login')
 }

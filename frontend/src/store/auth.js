@@ -1,5 +1,8 @@
 import { defineStore } from 'pinia'
 import * as api from '@/api'
+// 直接用底层实例：登出通知要显式带旧令牌（见 logout() 注释），
+// 而 @/api 的 post(url, data) 包装没有透传 config 的口子。
+import http from '@/api/http'
 
 // ============================================================================
 // v0.39.0 RBAC：前端权限态
@@ -170,17 +173,32 @@ export const useAuthStore = defineStore('auth', {
       this.permLoaded = false
       try { sessionStorage.removeItem(PERM_CACHE_KEY) } catch (e) { /* ignore */ }
     },
-    async logout() {
-      // 通知后端使当前令牌失效（令 token_version 自增）
-      try {
-        await api.post('/logout')
-      } catch { /* 后端不可达也照常本地登出 */ }
+    // 退出登录。
+    //
+    // ★★ 为什么"清本地态"必须发生在任何 await 之前（v0.40.4 修的真实缺陷）：
+    //    调用方 onLogout() 的写法是 `auth.logout(); router.replace('/login')` ——
+    //    replace 是同步发起的。历史实现把 `await api.post('/logout')` 放在最前面，
+    //    于是 replace 触发导航时 this.token / this.user 还没清，
+    //    路由守卫 router/index.js 里这条就会命中：
+    //        if (to.meta.public && auth.isAuthed && auth.user) return { path: '/' }
+    //    → 导航被改道回首页，用户会看到**主界面闪一下**，
+    //    随后首页请求带着已失效令牌拿 401、被 http.js 兜底硬跳回 /login 才变成登录页。
+    //    先同步清空 → 守卫读到 isAuthed=false → /login 正常渲染，全程无闪烁。
+    logout() {
+      const stale = this.token
+      // ① 同步清空本地登录态（顺序不可调换）
       this.token = ''
       this.user = null
       this.wpAccess = null
-      // ★ 必须清权限缓存：同一浏览器切换账号时否则会沿用上一个账号的菜单
+      // 必须清权限缓存：同一浏览器切换账号时否则会沿用上一个账号的菜单
       this.invalidatePerms()
       localStorage.removeItem('sw_token')
+      if (!stale) return Promise.resolve()
+      // ② 再后台尽力通知后端令该令牌失效（不阻塞导航，失败也不影响本地登出）。
+      //    显式带上旧令牌：localStorage 上面已清空，请求拦截器不会再自动附加，
+      //    否则这次 /logout 退化成匿名请求、旧令牌实际并未失效（安全回归）。
+      return http.post('/logout', null, { headers: { Authorization: 'Bearer ' + stale } })
+        .catch(() => { /* 后端不可达也照常本地登出 */ })
     }
   }
 })

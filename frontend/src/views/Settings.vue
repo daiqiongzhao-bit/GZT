@@ -889,7 +889,10 @@ function downloadBackup(b) { downloadAuth('backups/' + b.id + '/download') }
 async function restoreBackup(b) { if (!confirm(`确认还原备份「${b.name}」？当前数据将被覆盖，且操作不可撤销！`)) return; try { await api.post('/backups/' + b.id + '/restore'); alert('已还原，页面将自动刷新'); setTimeout(() => location.reload(), 800) } catch (e) { alert(e.response?.data?.error || '还原失败') } }
 async function deleteBackup(b) { if (!confirm(`删除备份「${b.name}」？`)) return; try { await api.del('/backups/' + b.id); await loadBackups() } catch (e) { alert(e.response?.data?.error || '删除失败') } }
 
-// 退出登录
+// 退出登录。
+// ★ 顺序不能改（v0.40.4）：auth.logout() 内部**同步**清空 token/user/权限，
+//   所以紧接着的 replace 不会命中守卫里「已登录访问 /login 就弹回首页」那条，
+//   全程无"闪一下主界面"。也不要改成 await auth.logout()——远端通知有意不阻塞导航。
 function onLogout() { auth.logout(); router.replace('/login') }
 
 // 切换 tab 时按需加载

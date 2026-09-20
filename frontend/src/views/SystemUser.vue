@@ -297,6 +297,71 @@
         </div>
       </div>
     </div>
+
+    <!-- ============ 临时密码结果（v0.40.4） ============
+         原来用原生 alert 显示临时密码，弹窗里的文本既选不中也复制不了；
+         而临时密码是"只出现这一次"的凭据，管理员必须能当场带走。
+         故改为结果弹窗：密码等宽大字 + 复制按钮（含非安全上下文降级）+ 整段单击选中。 -->
+    <div v-if="pwdRes.show" class="adm-mask" @click.self="pwdRes.show = false">
+      <div class="adm-modal" role="dialog" aria-modal="true" aria-label="临时密码">
+        <div class="pwd-head">
+          <span class="pwd-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          </span>
+          <div class="pwd-head-t">
+            <h3>{{ pwdRes.batch ? '批量重置完成' : '密码已重置' }}</h3>
+            <p class="adm-modal-sub">
+              <template v-if="pwdRes.batch">共 {{ pwdRes.items.length }} 个账号拿到了新密码</template>
+              <template v-else>{{ pwdRes.name }}<template v-if="pwdRes.username"> · {{ pwdRes.username }}</template></template>
+            </p>
+          </div>
+        </div>
+
+        <!-- 单个用户：密码大字 + 复制 -->
+        <div v-if="!pwdRes.batch" class="pwd-row">
+          <code class="pwd-code" tabindex="0" title="点击整段选中，可直接 Ctrl+C" @click="pickText">{{ pwdRes.password }}</code>
+          <button
+            class="btn primary pwd-cp"
+            :class="{ done: pwdCopied === 'one' }"
+            @click="copyText(pwdRes.password, 'one')"
+          >{{ pwdCopied === 'one' ? '已复制' : '复制' }}</button>
+        </div>
+        <p v-if="pwdCopyFail" class="pwd-cpfail">自动复制被浏览器拦截，请点击密码框全选后按 Ctrl+C 复制。</p>
+
+        <!-- 批量：逐行复制 + 复制全部（制表符分隔，可直接粘进 Excel 两列） -->
+        <template v-else>
+          <div class="pwd-batch-bar">
+            <span class="pwd-batch-n">成功 {{ pwdRes.items.length }} 人</span>
+            <button
+              class="btn ghost sm pwd-cp-all"
+              :class="{ done: pwdCopied === 'all' }"
+              @click="copyAllPwd"
+            >{{ pwdCopied === 'all' ? '已复制全部' : '复制全部' }}</button>
+          </div>
+          <div class="pwd-list">
+            <div v-for="(it, i) in pwdRes.items" :key="i" class="pwd-li">
+              <span class="pwd-li-n" :title="it.name">{{ it.name }}</span>
+              <code class="pwd-li-p" tabindex="0" title="点击整段选中，可直接 Ctrl+C" @click="pickText">{{ it.password }}</code>
+              <button
+                class="btn ghost sm pwd-cp-sm"
+                :class="{ done: pwdCopied === 'i' + i }"
+                @click="copyText(it.password, 'i' + i)"
+              >{{ pwdCopied === 'i' + i ? '已复制' : '复制' }}</button>
+            </div>
+            <p v-if="pwdCopyFail" class="pwd-cpfail">自动复制被浏览器拦截，请点击密码框全选后按 Ctrl+C 复制。</p>
+            <p v-if="pwdRes.fail" class="pwd-fail">失败 {{ pwdRes.fail }} 人：{{ pwdRes.failMsgs.join('；') }}</p>
+          </div>
+        </template>
+
+        <div class="adm-alert warn pwd-warn">
+          请通过安全渠道告知本人；首次登录会强制改密。<b>关闭后这些密码不再显示</b>，请先复制留存。
+        </div>
+
+        <div class="adm-modal-foot">
+          <button class="btn ghost" @click="pwdRes.show = false">我已复制，关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -548,15 +613,18 @@ async function batchForceLogout() {
 async function batchResetPwd() {
   if (!needSel()) return
   if (!confirm(`重置已选 ${selectedIds.value.length} 人的密码？\n系统会为每人生成临时密码，旧令牌全部失效，首次登录强制改密。`)) return
-  const pwds = []
+  const items = []
   const r = await eachSelected(async (id, u) => {
     const res = await api.post('/system/user/resetPwd', { id })
-    pwds.push(`${u ? u.name || u.username : '#' + id} → ${res.password}`)
+    items.push({ name: (u && (u.name || u.username)) || ('#' + id), password: res.password || '' })
   })
-  let msg = `重置完成：成功 ${r.ok} 人`
-  if (r.fail) msg += `，失败 ${r.fail} 人\n` + r.msgs.slice(0, 8).join('\n')
-  if (pwds.length) msg += '\n\n临时密码（请通过安全渠道告知本人）：\n' + pwds.slice(0, 20).join('\n')
-  alert(msg)
+  // v0.40.4：结果改为弹窗展示（逐行可复制 + 复制全部），不再拼进 alert 文本
+  pwdCopied.value = ''
+  Object.assign(pwdRes, {
+    show: true, batch: true,
+    name: '', username: '', password: '',
+    items, fail: r.fail, failMsgs: r.msgs.slice(0, 8)
+  })
   load()
 }
 async function batchDelete() {
@@ -573,6 +641,73 @@ const edit = reactive({
   form: { username: '', password: '', name: '', emp_no: '', mobile: '', dept_id: 0, role_ids: [], in_group: false, on_leave: false, frozen: false }
 })
 const editMore = ref(false) // 「其他操作」折叠区
+
+// ---------------------------------------------------------------- 临时密码结果
+// 重置密码后弹出的结果卡：临时密码是"只出现这一次"的凭据，
+// 必须让管理员能一键复制带走（原生 alert 里的文字选不中也复制不了）。
+const pwdRes = reactive({
+  show: false, batch: false,
+  name: '', username: '', password: '',
+  items: [],     // 批量：[{ name, password }]
+  fail: 0, failMsgs: []
+})
+// 当前处于"已复制"反馈态的按钮标识（1.6s 后自动回落）
+const pwdCopied = ref('')
+// 两条复制通道都失败时的行内提示（不用 window.prompt —— 阻塞式，打断操作）
+const pwdCopyFail = ref(false)
+
+// 复制到剪贴板。
+//
+// ★★ 必须有 execCommand 降级：线上是 http://…:8090，属于**非安全上下文**，
+//    此时 navigator.clipboard 是 undefined（不是"报错"，是根本不存在），
+//    只写 clipboard 分支的话按钮点下去毫无反应。
+function copyText(text, key) {
+  const flash = () => {
+    pwdCopyFail.value = false
+    pwdCopied.value = key
+    setTimeout(() => { if (pwdCopied.value === key) pwdCopied.value = '' }, 1600)
+  }
+  const warn = () => {
+    pwdCopyFail.value = true
+    setTimeout(() => { pwdCopyFail.value = false }, 3000)
+  }
+  const legacy = () => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.top = '-1000px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    ta.setSelectionRange(0, ta.value.length)
+    let ok = false
+    try { ok = document.execCommand('copy') } catch (e) { ok = false }
+    document.body.removeChild(ta)
+    if (ok) flash()
+    else warn()
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(flash).catch(legacy)
+  } else {
+    legacy()
+  }
+}
+
+// 批量复制：姓名<TAB>密码，一行一条 —— 粘进 Excel / 微信都是整齐两列
+function copyAllPwd() {
+  copyText(pwdRes.items.map((it) => `${it.name}\t${it.password}`).join('\n'), 'all')
+}
+
+// 单击整段选中：即使不点复制按钮，也能直接 Ctrl+C 带走
+function pickText(e) {
+  const el = e.currentTarget
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
 
 function openCreate() {
   Object.assign(edit, {
@@ -648,7 +783,14 @@ async function doResetPwd(u) {
   if (!confirm(`确定重置「${u.name || u.username}」的密码吗？\n重置后该用户旧令牌立即失效，且下次登录必须改密。`)) return
   try {
     const r = await api.post('/system/user/resetPwd', { id: u.id })
-    alert(`已重置。临时密码：${r.password}\n（请通过安全渠道告知本人；首次登录强制改密）`)
+    // v0.40.4：改用结果弹窗而不是 alert，临时密码才能一键复制
+    pwdCopied.value = ''
+    Object.assign(pwdRes, {
+      show: true, batch: false,
+      name: u.name || u.username, username: u.username || '',
+      password: r.password || '',
+      items: [], fail: 0, failMsgs: []
+    })
     await load()
   } catch (e) { alert(errMsg(e, '重置密码失败')) }
 }
@@ -728,4 +870,49 @@ onMounted(async () => {
 .tri { display: inline-block; width: 14px; color: var(--text-faint); }
 .op-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
 .op-desc { font-size: 12px; color: var(--text-faint); line-height: 1.6; }
+
+/* ---- 临时密码结果弹窗（v0.40.4） ---- */
+.pwd-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px; }
+.pwd-ico {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center;
+  background: rgba(5, 150, 105, 0.13); color: var(--ok, #059669);
+}
+.pwd-head-t { min-width: 0; }
+.pwd-head-t h3 { margin: 0 0 3px; }
+.pwd-head-t .adm-modal-sub { margin: 0; }
+
+/* 密码本体：等宽 + 大字距，避免 l/1、O/0 看错 */
+.pwd-row { display: flex; align-items: stretch; gap: 8px; }
+.pwd-code, .pwd-li-p {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  background: var(--overlay);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  cursor: text;
+}
+.pwd-code { flex: 1 1 auto; min-width: 0; font-size: 17px; font-weight: 600; letter-spacing: 1.2px; padding: 11px 13px; overflow-x: auto; white-space: nowrap; }
+.pwd-code::selection, .pwd-li-p::selection { background: var(--accent-soft, rgba(79, 70, 229, 0.18)); }
+.pwd-code:focus-visible, .pwd-li-p:focus-visible { outline: 2px solid var(--accent, #6366f1); outline-offset: 2px; }
+
+.pwd-cp { flex: none; padding: 0 16px; }
+/* 用 button.pwd-*.done（0,2,1）压过 .btn.primary / .btn.ghost（0,2,0），不依赖打包顺序 */
+button.pwd-cp.done, button.pwd-cp-sm.done, button.pwd-cp-all.done {
+  background: var(--ok, #059669); border-color: var(--ok, #059669); color: #fff;
+}
+
+.pwd-batch-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pwd-batch-n { font-size: 12px; color: var(--text-dim); }
+.pwd-cp-all { margin-left: auto; }
+
+.pwd-list { max-height: 260px; overflow: auto; border: 1px solid var(--glass-border); border-radius: 10px; }
+.pwd-li { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 11px; border-bottom: 1px solid var(--glass-border); }
+.pwd-li:last-child { border-bottom: 0; }
+.pwd-li-n { flex: none; width: 68px; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwd-li-p { flex: 1 1 auto; min-width: 0; font-size: 13px; letter-spacing: 0.6px; padding: 4px 9px; overflow-x: auto; white-space: nowrap; }
+.pwd-cp-sm { flex: none; }
+.pwd-fail { margin: 0; padding: 7px 11px; font-size: 12px; color: var(--danger); background: var(--overlay); }
+.pwd-cpfail { margin: 7px 0 0; font-size: 12px; color: var(--warn, #d97706); line-height: 1.6; }
+.pwd-warn { margin: 14px 0 0; }
 </style>
