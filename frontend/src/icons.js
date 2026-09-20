@@ -44,10 +44,10 @@ export const navItems = [
   { to: '/tasks', label: '任务', icon: icons.tasks, perm: 'task:view' },
   { to: '/workspace', label: '知识库', icon: icons.workspace, perm: 'knowledge:view' },
   { to: '/wecom-push', label: '企微推送', icon: icons.wecom, perm: 'wecompush:view', wecom: true },
-  { to: '/system/users', label: '用户管理', icon: icons.users, perm: 'system:user:list' },
-  { to: '/system/roles', label: '角色管理', icon: icons.shield, perm: 'system:role:list' },
-  { to: '/system/menus', label: '菜单管理', icon: icons.menu, perm: 'system:menu:list' },
-  { to: '/system/depts', label: '部门管理', icon: icons.building, perm: 'system:dept:list' },
+  // v0.39.1：原侧栏的「用户管理 / 角色管理 / 菜单管理 / 部门管理」四项已并入
+  //         设置页的「系统管理」分组（见 Settings.vue 的 SYS_TABS / sysTabs）。
+  //         侧栏不再为它们单独占位 —— 否则和设置页里的「人员 / 部门」并列，
+  //         同一张 users / departments 表会出现两个入口，口径不一致。
   // 设置页保持"登录可见"：页面内部各区块由各自的 perms 控制（改造前即如此）
   { to: '/settings', label: '设置', icon: icons.settings }
 ]

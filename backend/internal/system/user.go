@@ -35,6 +35,7 @@ type userRow struct {
 	DeptName      string   `json:"dept_name"`
 	Frozen        bool     `json:"frozen"`
 	OnLeave       bool     `json:"on_leave"`
+	InGroup       bool     `json:"in_group"`
 	MustChangePwd bool     `json:"must_change_pwd"`
 	TokenVersion  uint     `json:"token_version"`
 	LastLoginAt   string   `json:"last_login_at"`
@@ -93,7 +94,7 @@ func (h *H) ListUsers(c *gin.Context) {
 		r := userRow{
 			ID: u.ID, Username: u.Username, Name: u.Name, EmpNo: u.EmpNo, Mobile: u.Mobile,
 			Role: string(u.Role), DeptID: u.DeptID, DeptName: deptNames[u.DeptID],
-			Frozen: u.Frozen, OnLeave: u.OnLeave, MustChangePwd: u.MustChangePwd,
+			Frozen: u.Frozen, OnLeave: u.OnLeave, InGroup: u.InGroup, MustChangePwd: u.MustChangePwd,
 			TokenVersion: u.TokenVersion, CreatedAt: u.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 		if u.LastLoginAt != nil {
@@ -167,6 +168,9 @@ type userSaveReq struct {
 	DeptID   uint   `json:"dept_id"`
 	RoleIDs  []uint `json:"role_ids"`
 	OnLeave  bool   `json:"on_leave"`
+	// InGroup：是否已在企业微信通知群里（v0.39.1 从旧「设置 → 人员」并入）。
+	// 到点推送会 @TA，且在「未入群」名单里不再重复列出。
+	InGroup bool `json:"in_group"`
 }
 
 // CreateUser 新增用户：角色必填（方案 §13.4 部分采纳）。
@@ -219,7 +223,7 @@ func (h *H) CreateUser(c *gin.Context) {
 	u := models.User{
 		Username: req.Username, PasswordHash: string(hash), Name: nvl(req.Name, req.Username),
 		EmpNo: req.EmpNo, Mobile: req.Mobile, Role: firstRole, DeptID: req.DeptID,
-		MustChangePwd: true, OnLeave: req.OnLeave,
+		MustChangePwd: true, OnLeave: req.OnLeave, InGroup: req.InGroup,
 	}
 	err = rbac.WithWrite(h.DB, func(tx *gorm.DB) error {
 		var n int64
@@ -267,6 +271,7 @@ func (h *H) UpdateUser(c *gin.Context) {
 		return
 	}
 	before := gin.H{"name": u.Name, "emp_no": u.EmpNo, "mobile": u.Mobile, "dept_id": u.DeptID,
+		"on_leave": u.OnLeave, "in_group": u.InGroup,
 		"role_ids": h.userRoleIDs(u.ID)}
 
 	// 提权防护：改角色绑定同样受"不得授予高于自己"的垂直校验约束
@@ -289,10 +294,12 @@ func (h *H) UpdateUser(c *gin.Context) {
 	u.EmpNo = req.EmpNo
 	u.Mobile = req.Mobile
 	u.OnLeave = req.OnLeave
+	u.InGroup = req.InGroup
 
 	err := rbac.WithWrite(h.DB, func(tx *gorm.DB) error {
 		if err := tx.Model(&models.User{}).Where("id = ?", u.ID).Updates(map[string]interface{}{
-			"name": u.Name, "emp_no": u.EmpNo, "mobile": u.Mobile, "dept_id": u.DeptID, "on_leave": u.OnLeave,
+			"name": u.Name, "emp_no": u.EmpNo, "mobile": u.Mobile, "dept_id": u.DeptID,
+			"on_leave": u.OnLeave, "in_group": u.InGroup,
 		}).Error; err != nil {
 			return err
 		}
@@ -321,6 +328,7 @@ func (h *H) UpdateUser(c *gin.Context) {
 	}
 	writeAudit(c, "user", u.ID, u.Username, "update", before,
 		gin.H{"name": u.Name, "emp_no": u.EmpNo, "mobile": u.Mobile, "dept_id": u.DeptID,
+			"on_leave": u.OnLeave, "in_group": u.InGroup,
 			"role_ids": h.userRoleIDs(u.ID)})
 	ok(c, gin.H{"id": u.ID})
 }

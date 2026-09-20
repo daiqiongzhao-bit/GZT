@@ -244,7 +244,10 @@ func MenuSeed() []seedMenu {
 		),
 
 		dir("系统管理", "settings",
-			page("用户管理", "/system/users", "SystemUser", PSysUserList,
+			// v0.39.1：这四个页面已并入「设置」页的「系统管理」分组，侧栏不再单独出现。
+			// path 写 /settings?tab=xxx 是为了让「菜单管理」里看到的位置与实际入口一致
+			// （前端导航由 icons.js 静态维护，这里只用于展示与授权）。
+			page("用户管理", "/settings?tab=sysuser", "Settings", PSysUserList,
 				btn("新增用户", PSysUserAdd),
 				btn("编辑用户", PSysUserEdit),
 				btn("删除用户", PSysUserRemove),
@@ -255,19 +258,19 @@ func MenuSeed() []seedMenu {
 				btn("强制下线", PSysUserForceOut),
 				btn("在线会话", PSysUserSessions),
 			),
-			page("角色管理", "/system/roles", "SystemRole", PSysRoleList,
+			page("角色管理", "/settings?tab=sysrole", "Settings", PSysRoleList,
 				btn("新增角色", PSysRoleAdd),
 				btn("编辑角色", PSysRoleEdit),
 				btn("删除角色", PSysRoleRemove),
 				btn("分配菜单权限", PSysRoleMenu),
 				btn("分配数据范围", PSysRoleDataScop),
 			),
-			page("菜单管理", "/system/menus", "SystemMenu", PSysMenuList,
+			page("菜单管理", "/settings?tab=sysmenu", "Settings", PSysMenuList,
 				btn("新增菜单", PSysMenuAdd),
 				btn("编辑菜单", PSysMenuEdit),
 				btn("删除菜单", PSysMenuRemove),
 			),
-			page("部门管理", "/system/depts", "SystemDept", PSysDeptList,
+			page("部门管理", "/settings?tab=sysdept", "Settings", PSysDeptList,
 				btn("新增部门", PSysDeptAdd),
 				btn("编辑部门", PSysDeptEdit),
 				btn("删除部门", PSysDeptRemove),
@@ -344,10 +347,20 @@ func RoleSeeds() []seedRole {
 				"dashboard:", "schedule:", "task:", "knowledge:", "worklog:", "handover:",
 				"wsattach:", "notify:", "wecompush:", "common:",
 				"system:user:", "system:template:", "system:webhook:", "system:log:",
+				// v0.39.1：部门管理页对部门管理员开放**只读**（原来"设置 → 部门"里
+				// 部门管理员能看到部门列表并配置班次上下班时间，改造后入口搬到
+				// 「系统管理 → 部门管理」，因此必须给 system:dept:list 才能进得去；
+				// 增/删/改仍由下面的 DenyExact 挡住，与改造前"增删部门仅超管"一致）。
+				"system:dept:",
 			},
 			DenyExact: []string{
 				// 提权/收权类动作不下放（方案 §8.3）：改角色绑定、强制下线、查看会话
 				PSysUserAuthRole, PSysUserForceOut, PSysUserSessions,
+				// 部门增删改不下放（与改造前一致：部门管理员只配班次，不建/不删部门）
+				PSysDeptAdd, PSysDeptEdit, PSysDeptRemove,
+				// 解锁登录：handler 按 username 全局清锁定记录（不区分部门），
+				// 改造前即 super_admin 独占，保持不放宽。
+				PSysLogUnlock,
 				// 越权风险：模块访问白名单由超管独占
 				PWpAccessConfig,
 				// 知识库全量导出含全部门内容（改造前即 super_admin 独占）
@@ -470,7 +483,35 @@ func Seed() (map[string]int, error) {
 		}
 		stat["user_roles_backfilled"] = int(res.RowsAffected)
 
-		// 5) 部门管理员/执行者若一个部门都没有，给个安全的兜底：不改动任何数据，
+		// 5) ★ 反向撤销：DenyExact 是**硬边界**，必须对"已经授权过的行"同样生效。
+		//
+		// 为什么需要这一步：上面的授权循环只做 INSERT（幂等新增），DenyExact 只能阻止
+		// 新增。当某个 perm 被**事后**加入 DenyExact（例如 v0.39.1 把「解锁登录」收归
+		// 超管独占）时，历史库里已有的 role_menus 行不会被清掉 —— 表现为"代码说该拦，
+		// 实测却 200/400 过闸门"。这里显式删除，且删除是幂等的。
+		//
+		// 语义：DenyExact 里列的 perm 对**内置角色**是"永不允许"。
+		// 管理员通过角色管理页给内置角色额外授权仍然有效，但如果授的是 DenyExact 里的
+		// 提权/越权类权限，下次启动会被收回 —— 这是刻意的（安全边界高于便利性）。
+		for _, rs := range RoleSeeds() {
+			if len(rs.DenyExact) == 0 {
+				continue
+			}
+			var r models.SysRole
+			if err := tx.Where("role_key = ?", rs.Key).First(&r).Error; err != nil {
+				return err
+			}
+			for _, p := range rs.DenyExact {
+				d := tx.Exec(`DELETE FROM role_menus WHERE role_id = ? AND menu_id IN
+				              (SELECT id FROM menus WHERE perms = ?)`, r.ID, p)
+				if d.Error != nil {
+					return d.Error
+				}
+				stat["role_menus_revoked"] += int(d.RowsAffected)
+			}
+		}
+
+		// 6) 部门管理员/执行者若一个部门都没有，给个安全的兜底：不改动任何数据，
 		//    仅确保 seed 出来的角色 data_scope 与模板一致（管理员改过就不覆盖）
 		return nil
 	}); err != nil {

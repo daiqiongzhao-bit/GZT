@@ -72,9 +72,9 @@ func main() {
 	if st, err := system.Seed(); err != nil {
 		logger.Info("server", "RBAC 播种异常（服务继续启动，权限按 fail-closed 生效）: %v", err)
 	} else {
-		logger.Info("server", "RBAC 就绪：接口声明 %d 条，菜单新增 %d，角色新增 %d，授权 %d，用户角色回填 %d，拦截模式=%s",
+		logger.Info("server", "RBAC 就绪：接口声明 %d 条，菜单新增 %d，角色新增 %d，授权 %d，撤销 %d，用户角色回填 %d，拦截模式=%s",
 			system.RoutePermCount(), st["menus_created"], st["roles_created"],
-			st["role_menus"], st["user_roles_backfilled"], system.EnforceMode())
+			st["role_menus"], st["role_menus_revoked"], st["user_roles_backfilled"], system.EnforceMode())
 	}
 	if probs := system.SelfCheck(); len(probs) > 0 {
 		for _, p := range probs {

@@ -39,7 +39,7 @@ table.adm-table .nowrap { white-space: nowrap; }
 .adm-tree-mark { color: var(--text-faint); margin-right: 5px; flex: none; }
 
 /* ---- 行内操作 ---- */
-.adm-row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.adm-row-actions { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .adm-link {
   background: none; border: 1px solid transparent; color: var(--accent);
   cursor: pointer; font-size: 12px; padding: 3px 7px; border-radius: 8px; line-height: 1.3;
@@ -129,6 +129,44 @@ table.adm-table .nowrap { white-space: nowrap; }
 .adm-kv .k { color: var(--text-faint); }
 .adm-kv .v { color: var(--text); word-break: break-all; }
 
+/* ---- 行内「更多 ▾」下拉（v0.39.1 用户管理：高危/低频动作收进下拉）---- */
+.adm-ops { position: relative; }
+.adm-link.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.adm-ops-drop {
+  position: absolute; right: 0; top: 28px; z-index: 40; min-width: 152px;
+  background: var(--glass-strong); border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm); padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.adm-op {
+  text-align: left; padding: 8px 10px; border: none; background: transparent;
+  color: var(--text); border-radius: 8px; cursor: pointer; font-size: 13px;
+  white-space: nowrap; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.adm-op:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.adm-op.danger { color: var(--danger); }
+.adm-op.danger:hover:not(:disabled) { background: rgba(225, 29, 72, 0.10); }
+.adm-op:disabled { color: var(--text-faint); cursor: not-allowed; }
+.adm-op-hint { font-size: 11px; color: var(--text-faint); }
+
+/* ---- 批量操作栏（v0.39.1 用户管理）---- */
+.adm-batch {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; margin: 10px 0 2px;
+  background: var(--overlay); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.adm-batch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.adm-batch-count { font-size: 12.5px; color: var(--accent); font-weight: 600; }
+.adm-batch code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; padding: 1px 5px; border-radius: 5px; background: var(--overlay-2);
+}
+
+/* ---- 文件选择伪装成按钮（批量导入）---- */
+.adm-imp-label { display: inline-flex; align-items: center; cursor: pointer; }
+
 /* ---- 面板内小标题（与 .section-title 区分：不占整行、无下边距）---- */
 .adm-sub-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -150,3 +188,61 @@ table.adm-table .nowrap { white-space: nowrap; }
   .adm-modal { padding: 16px; }
   .adm-toolbar .glass-input { min-width: 120px; }
 }
+
+/* ============================================================
+   v0.39.1 班次配置（从「设置 → 部门」并入「系统管理 → 部门管理」）
+   —— 原样式在 Settings.vue 的 <style scoped> 里，scoped 无法作用到
+      本页 DOM，因此在这里以 .adm- 前缀重建一份；Settings 里的旧样式
+      随该 tab 一起进入不可达状态，不冲突。
+   ============================================================ */
+.adm-shift-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  background: var(--overlay-2); border: 1px solid var(--glass-border);
+  color: var(--text-dim); margin-right: 5px; white-space: nowrap;
+}
+.adm-sc-dot {
+  width: 14px; height: 14px; border-radius: 50%; cursor: pointer; display: inline-block;
+  flex: none; border: 2px solid transparent; box-sizing: border-box;
+  transition: transform 0.1s, border-color 0.1s;
+}
+.adm-sc-dot.sm { width: 11px; height: 11px; cursor: default; border-width: 0; }
+.adm-sc-dot:hover { transform: scale(1.15); }
+.adm-sc-dot.on { border-color: var(--text); }
+.adm-sc-color {
+  width: 28px; height: 28px; padding: 0; border: 1px solid var(--glass-border);
+  border-radius: 8px; background: transparent; cursor: pointer; flex: none;
+}
+.adm-sc-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.adm-sc-color::-webkit-color-swatch { border: none; border-radius: 6px; }
+.sc-hex { width: 100px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.adm-shift-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 240px; overflow-y: auto; margin-bottom: 12px;
+}
+.adm-shift-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--overlay); border: 1px solid var(--glass-border);
+}
+.adm-shift-name { font-size: 13px; color: var(--text); font-weight: 600; }
+.adm-shift-time { font-size: 12.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.adm-shift-spacer { flex: 1; }
+
+.adm-shift-picker {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; margin-bottom: 12px;
+  background: var(--overlay); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.adm-shift-picker-title { font-size: 11.5px; color: var(--text-faint); }
+.adm-shift-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.adm-shift-add {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; border-radius: var(--radius-sm);
+  background: var(--overlay); border: 1px solid var(--glass-border);
+}
+.adm-shift-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.adm-shift-sep { color: var(--text-faint); font-size: 12px; }

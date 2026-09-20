@@ -24,11 +24,15 @@ const routes = [
   { path: '/wecom-push', name: 'wecom-push', component: () => import('@/views/WecomPush.vue'), meta: { title: '企微推送', wecom: true, perm: 'wecompush:view' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置' } },
 
-  // ---- v0.39.0 RBAC 系统管理（四个子模块）----
-  { path: '/system/users', name: 'system-users', component: () => import('@/views/SystemUser.vue'), meta: { title: '用户管理', perm: 'system:user:list' } },
-  { path: '/system/roles', name: 'system-roles', component: () => import('@/views/SystemRole.vue'), meta: { title: '角色管理', perm: 'system:role:list' } },
-  { path: '/system/menus', name: 'system-menus', component: () => import('@/views/SystemMenu.vue'), meta: { title: '菜单管理', perm: 'system:menu:list' } },
-  { path: '/system/depts', name: 'system-depts', component: () => import('@/views/SystemDept.vue'), meta: { title: '部门管理', perm: 'system:dept:list' } },
+  // ---- v0.39.1 系统管理：四个子模块已并入「设置」页的「系统管理」分组 ----
+  // 侧栏不再单独出现；旧地址保留重定向，书签 / 外链 / 深链仍然可用。
+  // 注意：redirect 在路由解析阶段完成，beforeEach 的 perm 校验不会作用到它，
+  //       因此准入由设置页的 sysTabs 过滤兜底（无权时自动退回「个人信息」），
+  //       真正的边界依旧是后端 GuardByPath。
+  { path: '/system/users', redirect: { path: '/settings', query: { tab: 'sysuser' } } },
+  { path: '/system/roles', redirect: { path: '/settings', query: { tab: 'sysrole' } } },
+  { path: '/system/menus', redirect: { path: '/settings', query: { tab: 'sysmenu' } } },
+  { path: '/system/depts', redirect: { path: '/settings', query: { tab: 'sysdept' } } },
 
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ]

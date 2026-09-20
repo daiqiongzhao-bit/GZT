@@ -1,15 +1,26 @@
 <template>
   <div class="settings">
     <div class="tabs">
-      <button class="tab" :class="{ active: tab === 'me' }" @click="tab = 'me'">个人信息</button>
-      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'brand' }" @click="tab = 'brand'">企业信息</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'dept' }" @click="tab = 'dept'">部门</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'user' }" @click="tab = 'user'">人员</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'tmpl' }" @click="tab = 'tmpl'">模板</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'hook' }" @click="tab = 'hook'">通知</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'log' }" @click="tab = 'log'">操作审计</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="tab = 'syslog'">运行日志</button>
-      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="tab = 'backup'">备份</button>
+      <button class="tab" :class="{ active: tab === 'me' }" @click="setTab('me')">个人信息</button>
+      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'brand' }" @click="setTab('brand')">企业信息</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'tmpl' }" @click="setTab('tmpl')">模板</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'hook' }" @click="setTab('hook')">通知</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'log' }" @click="setTab('log')">操作审计</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="setTab('syslog')">运行日志</button>
+      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="setTab('backup')">备份</button>
+
+      <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示 -->
+      <template v-if="sysTabs.length">
+        <span class="tab-gap" aria-hidden="true"></span>
+        <span class="tab-group">系统管理</span>
+        <button
+          v-for="t in sysTabs"
+          :key="t.key"
+          class="tab"
+          :class="{ active: tab === t.key }"
+          @click="setTab(t.key)"
+        >{{ t.label }}</button>
+      </template>
     </div>
 
     <!-- 个人信息 -->
@@ -80,6 +91,11 @@
         <button class="btn ghost" :disabled="tzSaving" @click="saveTimezone">{{ tzSaving ? '应用中…' : '保存时区' }}</button>
       </div>
     </section>
+
+    <!-- ⚠️ v0.39.1 已下线（DEPRECATED / 不可达）：下面的「部门与班次」与「人员」两块
+         已合并进「系统管理 → 部门管理 / 用户管理」，且 'dept' / 'user' 已从 TAB_KEYS 移除，
+         因此 tab 永远不等于这两个值 —— 这两块保留只是为了让回退有据可查，界面上不可见。
+         确认新版稳定后可以整段删除（连同脚本里 loadUsers/addUser/runBatch/shifts 等函数）。 -->
 
     <!-- 部门（超管管理，部门管/超管可配班次时间） -->
     <section v-if="tab === 'dept' && auth.canManage" class="panel">
@@ -575,20 +591,85 @@
       <p class="hint" style="color:var(--text-dim); font-size:13px; margin:0 0 16px; line-height:1.6;">点击下方按钮退出当前登录，并令本设备令牌立即失效。</p>
       <button class="btn danger" @click="onLogout" style="max-width:260px; margin:0 auto;">退出登录</button>
     </section>
+
+    <!-- ==================== v0.39.1 系统管理（原侧栏四项并入设置） ====================
+         组件自带 .adm-page 版式（页面级卡片），这里不再套 .panel，避免出现"卡中卡"。
+         每块都带权限判断：无权时整块不渲染，配合 onMounted 的兜底只会停在「个人信息」。 -->
+    <section v-if="tab === 'sysuser' && auth.can('system:user:list')" class="sys-embed">
+      <SystemUserPage />
+    </section>
+    <section v-if="tab === 'sysrole' && auth.can('system:role:list')" class="sys-embed">
+      <SystemRolePage />
+    </section>
+    <section v-if="tab === 'sysmenu' && auth.can('system:menu:list')" class="sys-embed">
+      <SystemMenuPage />
+    </section>
+    <section v-if="tab === 'sysdept' && auth.can('system:dept:list')" class="sys-embed">
+      <SystemDeptPage />
+    </section>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, watch, defineAsyncComponent } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import * as api from '@/api'
 import { useAuthStore } from '@/store/auth'
 import { brand, loadBrand } from '@/brand'
 import { deptOptions, indentOf } from '@/utils/dept'
 
 const auth = useAuthStore()
+const route = useRoute()
 const router = useRouter()
-const tab = ref('me')
+
+// ---------------------------------------------------------------------------
+// v0.39.1 系统管理：原先挂在侧栏的四项（用户/角色/菜单/部门）并入设置页
+//
+// 为什么这样收口：这四项与设置页原有的「人员 / 部门与班次」操作的是**同一张
+// users / departments 表**，但走的是两套接口（/system/user/list 有数据范围过滤，
+// 旧 /users 是登录即可的通讯录接口）。两个入口并存 = 部门管理员在旧页面能看全
+// 公司人员。因此统一为：侧栏只留「设置」，四个模块在设置页内作为一级 tab。
+//
+// 组件用 defineAsyncComponent 懒加载：不进 Settings 主 chunk，切到该 tab 才拉取。
+// ---------------------------------------------------------------------------
+const SystemUserPage = defineAsyncComponent(() => import('@/views/SystemUser.vue'))
+const SystemRolePage = defineAsyncComponent(() => import('@/views/SystemRole.vue'))
+const SystemMenuPage = defineAsyncComponent(() => import('@/views/SystemMenu.vue'))
+const SystemDeptPage = defineAsyncComponent(() => import('@/views/SystemDept.vue'))
+
+// perm 与后端 system/routeperm.go 的 perms 逐字符一致；无权则该项不出现
+const SYS_TABS = [
+  { key: 'sysuser', label: '用户管理', perm: 'system:user:list' },
+  { key: 'sysrole', label: '角色管理', perm: 'system:role:list' },
+  { key: 'sysmenu', label: '菜单管理', perm: 'system:menu:list' },
+  { key: 'sysdept', label: '部门管理', perm: 'system:dept:list' }
+]
+const sysTabs = computed(() => SYS_TABS.filter((t) => auth.can(t.perm)))
+
+// v0.39.1：'dept' / 'user' 两个老 tab 已合并进「系统管理 → 部门管理 / 用户管理」，
+// 因此从 TAB_KEYS 里摘掉 —— ?tab=dept / ?tab=user 也会落到「个人信息」，
+// 不会再把用户带回已被取代的旧界面。
+const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout']
+  .concat(SYS_TABS.map((t) => t.key))
+const initTab = String(route.query.tab || '')
+const tab = ref(TAB_KEYS.includes(initTab) ? initTab : 'me')
+
+// 切 tab 时把状态同步到 ?tab=xxx：刷新、分享链接、旧 /system/* 深链都能落回同一屏
+function setTab(v) {
+  tab.value = v
+  const q = { ...route.query }
+  if (v === 'me') delete q.tab
+  else q.tab = v
+  if (route.path === '/settings' && String(route.query.tab || '') === String(q.tab || '')) return
+  router.replace({ path: '/settings', query: q })
+}
+
+// 允许从外部（如旧地址重定向）带着 tab 进来
+watch(() => route.query.tab, (v) => {
+  const k = String(v || 'me')
+  if (TAB_KEYS.includes(k) && k !== tab.value) tab.value = k
+})
+
 const roleMap = { super_admin: '超级管理员', dept_admin: '部门管理员', executor: '执行者' }
 const typeLabel = (t) => ({ wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书' }[t] || '企业微信')
 
@@ -1189,8 +1270,6 @@ watch(tab, (v) => {
   if (v === 'syslog' && auth.canManage) { sysPage.value = 0; loadSysLogs() }
   if (v === 'tmpl' && auth.canManage) loadTemplates()
   if (v === 'hook' && auth.canManage) { loadHooks(); if (auth.isSuper) { loadSMTP(); loadDailySummary() } }
-  if (v === 'user' && auth.canManage) { loadUsers(); if (auth.isSuper) loadSessions() }
-  if (v === 'dept' && auth.canManage) { loadDepts(); loadShiftConfigs() }
   if (v === 'brand' && auth.isSuper) loadOverdueGrace()
 })
 
@@ -1228,26 +1307,29 @@ async function importUsers(e) {
 }
 
 onMounted(async () => {
-  // 点击页面空白处收起人员操作菜单 / 关闭班次颜色选择器
-  document.addEventListener('click', (e) => {
-    opsOpen.value = 0
-    closeColorPicker(e)
-  })
+  // 系统管理 tab 的准入兜底：直接从旧地址 /system/xxx 进来但无对应权限时，
+  // 该 tab 不在 sysTabs 里（区块也不渲染），这里退回「个人信息」而不是留空白。
+  if (SYS_TABS.some((t) => t.key === tab.value) && !sysTabs.value.some((t) => t.key === tab.value)) {
+    setTab('me')
+  }
   await loadBrand()
   if (auth.canManage) {
-    await Promise.all([loadDepts(), loadUsers(), loadHooks(), loadLogs()])
-    // 人员创建默认选第一个部门；Webhook 部门不设默认（必选，避免绑错部门收不到推送）
-    if (departments.value.length) { if (!u.dept_id) u.dept_id = departments.value[0].id }
+    // departments 仍需加载：通知（Webhook）的部门下拉复用它
+    await Promise.all([loadDepts(), loadHooks(), loadLogs()])
     if (auth.isSuper) loadSMTP()
     if (auth.isSuper) loadLogRetention()
-    if (auth.isSuper) loadSessions()
     if (auth.isSuper) loadOverdueGrace()
   }
 })
 </script>
 
 <style scoped>
-.tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+/* v0.39.1 系统管理分组：与常规 tab 之间加一道竖线 + 组标题，避免四个新 tab 看着像散装入口 */
+.tab-gap { width: 1px; align-self: stretch; margin: 2px 6px; background: var(--glass-border); }
+.tab-group { font-size: 12px; color: var(--text-faint); letter-spacing: 0.5px; padding: 0 2px; white-space: nowrap; }
+/* 嵌入的系统管理页自带 .adm-page（含 .panel 卡片），外层不再加内边距，避免"卡中卡" */
+.sys-embed { display: block; }
 .tab { border: 1px solid var(--glass-border); background: var(--glass); color: var(--text-dim); padding: 9px 16px; border-radius: 12px; cursor: pointer; font-size: 13px; }
 .tab.active { background: var(--glass-strong); color: var(--text); border-color: var(--glass-border-strong); }
 
