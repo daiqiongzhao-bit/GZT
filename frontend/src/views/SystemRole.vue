@@ -6,7 +6,7 @@
         <span class="section-sub">角色是唯一的授权枢纽：同时承载「能做什么」（功能权限）与「能看谁」（数据范围）</span>
       </h2>
       <div class="adm-actions">
-        <button class="btn" :disabled="loading" @click="load">刷新</button>
+        <button class="btn" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新' }}</button>
         <button v-if="auth.can('system:role:add')" class="btn primary" @click="openCreate">新增角色</button>
       </div>
     </div>
@@ -26,36 +26,43 @@
         </div>
       </div>
 
-      <div class="adm-tablewrap">
-        <table class="adm-table">
+      <div class="adm-tablewrap" @click="opsOpen = 0">
+        <table class="adm-table role-table">
           <thead>
             <tr>
               <th>角色名称</th>
-              <th>可查看的部门（数据范围）</th>
+              <th>数据范围</th>
+              <th class="num">成员</th>
+              <th>权限开通</th>
               <th>状态</th>
-              <th class="num">成员数</th>
-              <th class="num">已开通</th>
-              <th>说明</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="r in rows" :key="r.id">
-              <td>
-                {{ r.role_name }}
-                <span v-if="r.builtin" class="chip accent" style="margin-left:6px">内置</span>
+              <td class="rl-name">
+                <span class="rl-title">
+                  {{ r.role_name }}
+                  <span v-if="r.builtin" class="chip accent rl-builtin">内置</span>
+                </span>
+                <span v-if="r.remark" class="rl-remark">{{ r.remark }}</span>
               </td>
               <td>
-                <span class="chip">{{ scopeName(r.data_scope) }}</span>
-                <span v-if="r.data_scope === 2" class="chip">{{ r.dept_count || 0 }} 个部门</span>
-              </td>
-              <td>
-                <span v-if="r.status === 0" class="chip ok">正常</span>
-                <span v-else class="chip danger">已停用</span>
+                <span class="rl-scope">{{ scopeName(r.data_scope) }}</span>
+                <span v-if="r.data_scope === 2" class="rl-sub">{{ r.dept_count || 0 }} 个部门</span>
               </td>
               <td class="num">{{ r.user_count }}</td>
-              <td class="num">{{ r.menu_count }} 项</td>
-              <td class="dim">{{ r.remark || '—' }}</td>
+              <td>
+                <span class="rl-bar-wrap">
+                  <span class="rl-bar"><i :style="{ width: barPct(r) + '%' }"></i></span>
+                  <span class="rl-bar-n">{{ r.menu_count }}<template v-if="barTotal"> / {{ barTotal }}</template></span>
+                </span>
+              </td>
+              <td>
+                <span class="rl-st" :class="{ off: r.status !== 0 }">
+                  <i></i>{{ r.status === 0 ? '正常' : '已停用' }}
+                </span>
+              </td>
               <td>
                 <div class="adm-row-actions">
                   <button
@@ -91,6 +98,9 @@
         </table>
       </div>
       <div v-if="!rows.length" class="empty">{{ loading ? '加载中…' : '暂无角色' }}</div>
+      <p class="adm-hint">
+        「权限开通」分母取所有角色里的最大值（通常是超级管理员的全部权限），数值越大表示这个角色能做的事越多。
+      </p>
     </section>
 
     <!-- ================= 新增 / 编辑角色 ================= -->
@@ -181,19 +191,21 @@
     <!-- ================= 权限配置（核心） ================= -->
     <div v-if="perm.show" class="adm-mask" @click.self="perm.show = false">
       <div class="adm-modal wide perm-modal">
-        <h3>权限配置 —— {{ perm.roleName }}</h3>
-        <p class="adm-modal-sub">按模块逐项勾选。勾上「查看」才能进这个模块，其余动作可以再单独放开。</p>
+        <div class="pm-head">
+          <div class="pm-head-l">
+            <h3>权限配置 · {{ perm.roleName }}</h3>
+            <p class="pm-sub">勾上「查看」才能进这个模块，其余动作可以再单独放开</p>
+          </div>
+          <div class="pm-head-r">
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(true)">全选</button>
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(false)">全不选</button>
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkViewOnly()">仅保留「查看」</button>
+            <span class="pm-count">已选 <b>{{ checkedCount }}</b> / {{ permIds.length }}</span>
+          </div>
+        </div>
 
         <div v-if="perm.superLock" class="adm-alert warn">
           超级管理员必须拥有全部权限，因此<b>不允许取消勾选</b>（防止管理员把自己锁死）。
-        </div>
-
-        <div class="perm-tools">
-          <input v-model.trim="perm.kw" class="glass-input" placeholder="搜索模块 / 权限名称，如：导出、班表" />
-          <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(true)">全选</button>
-          <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(false)">全不选</button>
-          <button class="btn ghost sm" :disabled="perm.superLock" @click="checkViewOnly()">仅保留「查看」</button>
-          <span class="chip">已选 {{ checkedCount }} / {{ permIds.length }}</span>
         </div>
 
         <!-- 权限类型含义（默认收起，需要时展开） -->
@@ -211,60 +223,70 @@
           </div>
         </div>
 
-        <div class="perm-groups">
-          <div v-for="g in filteredGroups" :key="g.id" class="perm-group">
-            <!-- 模块头：点标题展开/收起；勾选框整组开关 -->
-            <div class="pg-head">
-              <label class="pg-check" @click.stop>
-                <input
-                  class="adm-check"
-                  type="checkbox"
-                  :disabled="perm.superLock"
-                  :checked="groupAllChecked(g)"
-                  :indeterminate="groupPartial(g)"
-                  @change="toggleGroup(g, $event.target.checked)"
-                />
-              </label>
-              <button class="pg-title" @click="toggleOpen(g.id)">
-                <span class="tri">{{ openGroups.has(g.id) ? '▾' : '▸' }}</span>
-                <span class="pg-name">{{ g.name }}</span>
+        <!-- 左：模块目录（带已配 / 总数） 右：该模块的页面与动作 -->
+        <div class="pm-body">
+          <aside class="pm-side">
+            <input v-model.trim="perm.kw" class="glass-input pm-search" placeholder="搜索模块 / 权限" />
+            <div class="pm-sum">
+              <span>全部模块</span>
+              <span class="pm-sum-n">{{ checkedCount }} / {{ permIds.length }}</span>
+            </div>
+            <div class="pm-modlist">
+              <button
+                v-for="g in visibleGroups"
+                :key="g.id"
+                class="pm-mod"
+                :class="{ on: activeGroup && activeGroup.id === g.id, zero: groupSelCount(g) === 0 }"
+                @click="perm.activeGroupId = g.id"
+              >
+                <span class="pm-mod-n">{{ g.name }}</span>
+                <span class="pm-mod-c">{{ groupSelCount(g) }}<template v-if="groupIds(g).length !== groupSelCount(g) || groupSelCount(g) === 0">/{{ groupIds(g).length }}</template></span>
               </button>
-              <span class="chip" :class="{ ok: groupSelCount(g) === groupIds(g).length }">
-                {{ groupSelCount(g) }} / {{ groupIds(g).length }}
-              </span>
+              <p v-if="!visibleGroups.length" class="pm-none">没有匹配「{{ perm.kw }}」的模块</p>
             </div>
+            <p class="pm-side-tip">灰显 = 该模块一项未配</p>
+          </aside>
 
-            <div v-if="openGroups.has(g.id)" class="pg-body">
-              <div v-for="p in g.pages" :key="p.id" class="pg-page">
-                <div v-if="g.pages.length > 1" class="pg-page-name">{{ p.name }}</div>
-                <div class="pg-actions">
-                  <label
-                    v-for="a in p.actions"
-                    :key="a.id"
-                    class="pa-item"
-                    :class="{ on: perm.checked.has(a.id), lock: perm.superLock }"
-                    :title="KIND_DESC[a.kind]"
-                  >
-                    <input
-                      class="adm-check"
-                      type="checkbox"
-                      :disabled="perm.superLock"
-                      :checked="perm.checked.has(a.id)"
-                      @change="toggleAction(p, a, $event.target.checked)"
-                    />
-                    <span class="pa-name">{{ a.name }}</span>
-                    <span class="kind-badge sm" :class="'k-' + a.kind">{{ KIND_LABEL[a.kind] }}</span>
-                  </label>
-                  <span v-if="!p.actions.length" class="dim">该页面无细分动作</span>
+          <div class="pm-main">
+            <template v-if="activeGroup">
+              <div class="pm-gh">
+                <div class="pm-gh-l">
+                  <button
+                    class="pm-gh-all"
+                    :disabled="perm.superLock"
+                    @click="toggleGroup(activeGroup, !groupAllChecked(activeGroup))"
+                  >{{ groupAllChecked(activeGroup) ? '取消全选' : '全选本模块' }}</button>
+                  <span class="pm-gh-name">{{ activeGroup.name }}</span>
                 </div>
-                <p v-if="p.perms && !perm.checked.has(p.id)" class="pg-warn">
-                  未勾选「{{ p.name }}」的查看权限，该页面的入口不会出现
-                </p>
+                <span class="pm-bar-wrap">
+                  <span class="rl-bar"><i :style="{ width: groupPct(activeGroup) + '%' }"></i></span>
+                  <span class="rl-bar-n">已选 {{ groupSelCount(activeGroup) }} / {{ groupIds(activeGroup).length }}</span>
+                </span>
               </div>
-              <div v-if="!g.pages.length" class="dim">该模块暂无可配置项</div>
-            </div>
+
+              <div class="pm-pages">
+                <div v-for="p in activeGroup.pages" :key="p.id" class="pm-page">
+                  <p class="pm-page-name">
+                    {{ p.name }}
+                    <span v-if="!perm.checked.has(p.id)" class="pm-page-off">未开通入口</span>
+                  </p>
+                  <div class="pm-acts">
+                    <button
+                      v-for="a in p.actions"
+                      :key="a.id"
+                      class="pm-act"
+                      :class="{ on: perm.checked.has(a.id), del: a.kind === 'remove', lock: perm.superLock }"
+                      :title="KIND_DESC[a.kind]"
+                      :disabled="perm.superLock"
+                      @click="toggleAction(p, a, !perm.checked.has(a.id))"
+                    >{{ a.isPage ? '查看' : a.name }}</button>
+                    <span v-if="!p.actions.length" class="dim">该页面无细分动作</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-else class="empty">左侧没有可配置的模块</div>
           </div>
-          <div v-if="!filteredGroups.length" class="empty">没有匹配「{{ perm.kw }}」的权限项</div>
         </div>
 
         <div class="adm-modal-foot">
@@ -299,6 +321,22 @@ const kindHelpOpen = ref(false)
 const SCOPE_NAMES = { 1: '全部数据', 2: '自定义部门', 3: '本部门', 4: '本部门及以下', 5: '仅本人' }
 const scopeName = (v) => SCOPE_NAMES[v] || ('档位 ' + v)
 const canMore = computed(() => auth.canAny(['system:role:edit', 'system:role:remove']))
+
+// ---------------------------------------------------------------- 权限开通度
+// 分母：优先用「打开过权限配置后得到的精确权限节点数」；
+// 否则退回「所有角色里已开通数的最大值」（超管通常是全量，实践中即等于总数）。
+const permTotal = ref(0)
+const barTotal = computed(() => permTotal.value || Math.max(0, ...rows.value.map((r) => r.menu_count || 0)))
+function barPct(r) {
+  const t = barTotal.value
+  if (!t) return 0
+  return Math.min(100, Math.round(((r.menu_count || 0) / t) * 100))
+}
+function groupPct(g) {
+  const ids = groupIds(g)
+  if (!ids.length) return 0
+  return Math.round((groupSelCount(g) / ids.length) * 100)
+}
 
 // ---------------------------------------------------------------- 权限类型
 // 中文名 + 含义：这是"清晰区分各项权限含义"的落点。
@@ -570,10 +608,10 @@ function buildMatrix(flat) {
 
 const perm = reactive({
   show: false, roleId: 0, roleName: '', superLock: false,
-  checked: new Set(), kw: '', dirty: false
+  checked: new Set(), kw: '', dirty: false,
+  activeGroupId: 0
 })
 const groups = ref([])
-const openGroups = ref(new Set())
 
 const permIds = computed(() => {
   const ids = []
@@ -583,21 +621,21 @@ const permIds = computed(() => {
 // 已选计数只统计"权限节点"（页面 + 动作），模块目录节点不计入，避免出现 N/N+3 的怪数字
 const checkedCount = computed(() => permIds.value.filter((id) => perm.checked.has(id)).length)
 
-const filteredGroups = computed(() => {
+/** 左侧模块目录：搜索时按「模块名 / 页面名 / 动作名 / 权限标识」命中过滤 */
+const visibleGroups = computed(() => {
   const kw = perm.kw.trim().toLowerCase()
   if (!kw) return groups.value
   const hit = (s) => String(s || '').toLowerCase().includes(kw)
-  const out = []
-  for (const g of groups.value) {
-    const groupHit = hit(g.name)
-    const pages = []
-    for (const p of g.pages) {
-      const acts = p.actions.filter((a) => groupHit || hit(a.name) || hit(a.perms) || hit(p.name))
-      if (acts.length || groupHit) pages.push({ ...p, actions: groupHit ? p.actions : acts })
-    }
-    if (pages.length) out.push({ ...g, pages })
-  }
-  return out
+  return groups.value.filter((g) =>
+    hit(g.name) ||
+    g.pages.some((p) => hit(p.name) || hit(p.perms) || p.actions.some((a) => hit(a.name) || hit(a.perms)))
+  )
+})
+
+/** 右侧当前模块：选中项若被搜索过滤掉，自动回退到第一个 */
+const activeGroup = computed(() => {
+  const list = visibleGroups.value
+  return list.find((g) => g.id === perm.activeGroupId) || list[0] || null
 })
 
 async function openPerm(r) {
@@ -607,28 +645,18 @@ async function openPerm(r) {
     treeFlat.value = flat
     ancMap.value = ancestorsMap(flat)
     groups.value = buildMatrix(flat)
-    idMap = new Map()
-    const open = new Set()
-    for (const g of groups.value) {
-      // 默认展开"已授权"的模块和「首页」，其余收起：一眼看到重点，又不至于一屏几十行
-      if (g.pages.some((p) => (d.checked_ids || []).includes(p.id))) open.add(g.id)
-      if (g.name === '首页' || g.name === '基础权限') open.add(g.id)
-    }
-    if (!open.size) for (const g of groups.value.slice(0, 2)) open.add(g.id)
-    openGroups.value = open
+    const checkedSet = new Set(d.checked_ids || [])
     Object.assign(perm, {
       show: true, roleId: r.id, roleName: r.role_name,
-      superLock: !!d.super_lock, checked: new Set(d.checked_ids || []),
+      superLock: !!d.super_lock, checked: checkedSet,
       kw: '', dirty: false
     })
+    // 默认停在"配得最多"的模块；一个都没配时停在第一个，避免打开就是空白
+    const idsAll = (g) => groupIds(g)
+    const firstAuthed = groups.value.find((g) => idsAll(g).some((id) => checkedSet.has(id)))
+    perm.activeGroupId = (firstAuthed || groups.value[0] || { id: 0 }).id
+    permTotal.value = permIds.value.length
   } catch (e) { alert(errMsg(e, '加载权限树失败')) }
-}
-
-function toggleOpen(id) {
-  const s = new Set(openGroups.value)
-  if (s.has(id)) s.delete(id)
-  else s.add(id)
-  openGroups.value = s
 }
 
 // 祖先链：勾了动作要把"所在页面 + 目录"一起补上，否则会出现
@@ -751,19 +779,43 @@ onMounted(async () => {
 /* ---- 部门快捷操作 ---- */
 .dept-pick-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 
+/* ---- 列表页：角色名主副行 / 数据范围 / 权限开通进度 ---- */
+.role-table th:first-child { min-width: 190px; }
+.role-table th:nth-child(4) { min-width: 168px; }
+.rl-name { display: flex; flex-direction: column; gap: 2px; }
+.rl-title { font-size: 13px; color: var(--text); }
+.rl-builtin { margin-left: 6px; }
+.rl-remark { font-size: 11.5px; color: var(--text-faint); }
+.rl-scope { font-size: 12.5px; color: var(--text-dim); }
+.rl-sub { margin-left: 7px; font-size: 11.5px; color: var(--text-faint); }
+.rl-bar-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.rl-bar {
+  display: inline-flex; width: 72px; height: 5px; flex: none;
+  border-radius: 3px; background: var(--overlay-2, var(--overlay)); overflow: hidden;
+}
+.rl-bar i { display: block; height: 100%; background: var(--accent, #6366f1); }
+.rl-bar-n { font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.rl-st { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.rl-st i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success, #16a34a); }
+.rl-st.off { color: var(--text-faint); }
+.rl-st.off i { background: var(--text-faint); }
+
 /* ---- 权限配置弹窗 ---- */
-.perm-modal { max-width: 960px; }
-.perm-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; }
-.perm-tools .glass-input { min-width: 220px; flex: 1; }
+.perm-modal { max-width: 980px; }
+.pm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.pm-head-l h3 { margin: 0 0 4px; font-size: 15px; color: var(--text); }
+.pm-sub { margin: 0; font-size: 12px; color: var(--text-faint); }
+.pm-head-r { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pm-count { margin-left: 4px; font-size: 12.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.pm-count b { color: var(--accent, #6366f1); font-weight: 600; }
+
 .kind-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 16px; }
 .kl-row { display: flex; align-items: baseline; gap: 8px; }
 .kl-desc { font-size: 12px; color: var(--text-dim); }
-
 .kind-badge {
   display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; line-height: 1.7;
   border: 1px solid currentColor; white-space: nowrap;
 }
-.kind-badge.sm { padding: 0 6px; font-size: 10px; }
 .k-view { color: #2563eb; }
 .k-add { color: #16a34a; }
 .k-edit { color: #d97706; }
@@ -774,21 +826,67 @@ onMounted(async () => {
 .k-config { color: #4b5563; }
 .k-other { color: #6b7280; }
 
-.perm-groups { max-height: 52vh; overflow: auto; margin-top: 8px; border: 1px solid var(--glass-border); border-radius: 10px; }
-.perm-group + .perm-group { border-top: 1px solid var(--glass-border); }
-.pg-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
-.pg-title { flex: 1; display: flex; align-items: center; gap: 4px; background: transparent; border: 0; cursor: pointer; text-align: left; font-size: 13.5px; color: inherit; padding: 2px 0; }
-.pg-name { font-weight: 600; }
-.pg-body { padding: 2px 12px 12px 34px; }
-.pg-page + .pg-page { margin-top: 10px; }
-.pg-page-name { font-size: 12px; color: var(--text-faint); margin: 8px 0 4px; }
-.pg-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; }
-.pa-item {
-  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 8px;
-  border: 1px solid var(--glass-border); cursor: pointer; font-size: 12.5px; user-select: none;
+/* 左：模块目录  右：动作面板 */
+.pm-body {
+  display: flex; height: 54vh; min-height: 320px; margin-top: 10px;
+  border: 1px solid var(--glass-border); border-radius: 10px; overflow: hidden;
 }
-.pa-item:hover { border-color: var(--accent, #6366f1); }
-.pa-item.on { background: color-mix(in srgb, var(--accent, #6366f1) 10%, transparent); border-color: var(--accent, #6366f1); }
-.pa-item.lock { opacity: 0.72; cursor: not-allowed; }
-.pg-warn { margin: 6px 0 0; font-size: 11.5px; color: #d97706; }
+.pm-side {
+  width: 172px; flex: none; display: flex; flex-direction: column;
+  border-right: 1px solid var(--glass-border); background: var(--overlay);
+}
+.pm-search { margin: 10px 10px 6px; font-size: 12.5px; }
+.pm-sum {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 4px 12px 8px; font-size: 12px; color: var(--text-faint);
+  border-bottom: 1px solid var(--glass-border);
+}
+.pm-sum-n { font-variant-numeric: tabular-nums; }
+.pm-modlist { flex: 1; overflow: auto; padding: 6px; }
+.pm-mod {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; margin-bottom: 1px; border: 0; border-radius: 7px; cursor: pointer;
+  background: transparent; color: var(--text-dim); font-size: 12.5px; text-align: left;
+}
+.pm-mod:hover { background: var(--overlay-2, rgba(127,127,127,0.08)); }
+.pm-mod.on { background: var(--accent-soft); color: var(--accent); }
+.pm-mod-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-mod-c { flex: none; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.pm-mod.on .pm-mod-c { color: var(--accent); }
+.pm-mod.zero { color: var(--text-faint); }
+.pm-mod.zero.on { color: var(--accent); }
+.pm-none { margin: 10px 6px; font-size: 12px; color: var(--text-faint); }
+.pm-side-tip { margin: 0; padding: 8px 12px; border-top: 1px solid var(--glass-border); font-size: 11px; color: var(--text-faint); }
+
+.pm-main { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px; }
+.pm-gh {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--glass-border);
+}
+.pm-gh-l { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pm-gh-all {
+  flex: none; padding: 3px 9px; border-radius: 7px; cursor: pointer; font-size: 12px;
+  border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim);
+}
+.pm-gh-all:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pm-gh-all:disabled { cursor: not-allowed; color: var(--text-faint); }
+.pm-gh-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.pm-pages { padding-top: 6px; }
+.pm-page + .pm-page { margin-top: 14px; }
+.pm-page-name { margin: 0 0 7px; font-size: 12.5px; color: var(--text-dim); }
+.pm-page-off {
+  margin-left: 7px; padding: 1px 6px; border-radius: 5px;
+  background: var(--overlay-2, var(--overlay)); font-size: 11px; color: var(--text-faint);
+}
+.pm-acts { display: flex; flex-wrap: wrap; gap: 7px; }
+.pm-act {
+  padding: 4px 11px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+  border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim);
+}
+.pm-act:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pm-act.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.pm-act.del { border-color: rgba(220, 38, 38, 0.4); color: #dc2626; }
+.pm-act.del:hover:not(:disabled) { border-color: #dc2626; color: #dc2626; }
+.pm-act.del.on { background: rgba(220, 38, 38, 0.12); border-color: #dc2626; color: #dc2626; }
+.pm-act.lock { opacity: 0.72; cursor: not-allowed; }
 </style>
