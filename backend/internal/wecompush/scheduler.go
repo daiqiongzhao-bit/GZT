@@ -13,10 +13,10 @@ import (
 // Scheduler 常驻调度器：每 30 秒扫描一次，命中「当前 HH:MM」的任务即执行。
 // 用 fired 记录「任务 + 日期 + 类型」防止同一天内重复触发（含漏跑补偿）。
 type Scheduler struct {
-	db *gorm.DB
-	h  *H
+	db  *gorm.DB
+	h   *H
 	loc *time.Location
-	mu sync.Mutex
+	mu  sync.Mutex
 	// fired key 形如 "09:00@2026-09-19/3"（正常触发）或 "catchup@2026-09-19/3"（漏跑补偿）
 	fired map[string]bool
 }

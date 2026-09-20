@@ -29,7 +29,7 @@ type WpTask struct {
 	ExtraValue string `gorm:"size:200" json:"extra_value"`
 
 	// 输出
-	Columns    string `gorm:"size:2000" json:"columns"`   // JSON 数组，空=取全部字段
+	Columns    string `gorm:"size:2000" json:"columns"`    // JSON 数组，空=取全部字段
 	FilePrefix string `gorm:"size:120" json:"file_prefix"` // 文件名前缀，如「满25天到期明细」
 	MsgTitle   string `gorm:"size:200" json:"msg_title"`   // 消息前缀
 	EmptyText  string `gorm:"size:500" json:"empty_text"`  // 0 条时的提示语
