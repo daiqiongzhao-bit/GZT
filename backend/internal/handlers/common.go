@@ -9,44 +9,46 @@ import (
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
+	"shiftworkbench/internal/system"
 
 	"github.com/gin-gonic/gin"
 )
 
-// deptScope 返回当前用户可见的部门 ID；0 表示超管可见全部
-// （保留兼容：仅超管或无 claim 时返回 0，其余返回本人部门 ID）
+// ============================================================================
+// 数据范围助手（v0.39.0 起改为委托 RBAC 数据范围，方案 §3.3/§9.1）
+//
+// 改造要点：这些函数原来只看 `users.role` 三值枚举 + 本人部门子树；
+// 现在统一走 rbac.ResolveScope —— 五档数据范围（全部/自定义/本部门/本部门及以下/仅本人）
+// 与多角色并集立刻对**全部既有 handler** 生效，业务代码无需逐个改动。
+//
+// 语义约定（保持不变，保证既有调用方零改动）：
+//   nil  -> 不受限（超级管理员 / data_scope=1 全部）
+//   非 nil -> 只允许这些部门 ID
+// ============================================================================
+
+// deptScope 返回当前用户的部门锚点；0 表示不受限（超管或"全部"档）。
 func deptScope(c *gin.Context) uint {
-	cl := middleware.GetClaims(c)
-	if cl == nil {
+	sc, err := system.ScopeOf(c)
+	if err != nil || sc.All {
 		return 0
 	}
-	if cl.Role == models.RoleSuperAdmin {
-		return 0
-	}
-	return cl.DeptID
+	return uint(sc.DeptID)
 }
 
-// deptScopeIDs 返回当前用户可见的部门 ID 集合（含子孙）；nil 表示超管可见全部。
-// 部门管理员/执行者 = 本部门 + 全部子孙部门。
+// deptScopeIDs 返回当前用户可见的部门 ID 集合（含子孙）；nil 表示不受限。
 func deptScopeIDs(c *gin.Context) []uint {
-	cl := middleware.GetClaims(c)
-	if cl == nil || cl.Role == models.RoleSuperAdmin {
-		return nil
-	}
-	return descendantDeptIDs(cl.DeptID)
+	return system.ScopeIDsOf(c)
 }
 
-// managedDeptIDs 返回当前用户可管理的部门 ID 集合；nil 表示超管可管理全部。
-// 非超管只能管理本部门及其子孙部门。
+// managedDeptIDs 返回当前用户可管理的部门 ID 集合；nil 表示不受限。
+//
+// 采用方案 §8.1「路径 A」：管理边界 == 数据范围（能看的数据就是能管的数据），
+// 因此与 deptScopeIDs 同源。需要"可见 ≠ 可管"时改用 system.CanManageDeptStrict。
 func managedDeptIDs(c *gin.Context) []uint {
-	cl := middleware.GetClaims(c)
-	if cl == nil || cl.Role == models.RoleSuperAdmin {
-		return nil
-	}
-	return descendantDeptIDs(cl.DeptID)
+	return system.ScopeIDsOf(c)
 }
 
-// canManageDept 判断当前用户能否管理目标部门（超管任意，其余须在本部门或子孙部门内）
+// canManageDept 判断当前用户能否管理目标部门（超管任意，其余须在自身数据范围内）。
 func canManageDept(c *gin.Context, deptID uint) bool {
 	ids := managedDeptIDs(c)
 	if ids == nil {
@@ -60,7 +62,8 @@ func canManageDept(c *gin.Context, deptID uint) bool {
 	return false
 }
 
-// descendantDeptIDs 返回 deptID 及其全部子孙部门 ID（含自身）。部门数量小，全量查询建树。
+// descendantDeptIDs 返回 deptID 及其全部子孙部门 ID（含自身）。
+// v0.39.0 起仅作为兜底工具保留（主路径已由 rbac 的 ancestors 子查询承担）。
 func descendantDeptIDs(deptID uint) []uint {
 	var all []models.Department
 	db.DB.Find(&all)

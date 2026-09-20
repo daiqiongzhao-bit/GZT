@@ -39,10 +39,18 @@ const (
 )
 
 type Department struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	Name      string    `json:"name" gorm:"size:64;not null;uniqueIndex"`
-	ParentID  uint      `json:"parent_id" gorm:"default:0;index"` // 上级部门：0=顶级部门
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	Name     string `json:"name" gorm:"size:64;not null"`
+	ParentID uint   `json:"parent_id" gorm:"default:0;index"` // 上级部门：0=顶级部门
+	// 以下 5 项为 v0.39.0 RBAC 数据权限新增（方案 §6.2）。
+	// Ancestors 存"从根到父节点"的路径（逗号分隔含前导 0），用于快速查「本部门及以下」；
+	// 原 name 单列唯一索引（idx_departments_name）已改为 (parent_id, name) 联合唯一，见 system.Migrate。
+	Ancestors string    `json:"ancestors" gorm:"size:255;default:'0'"`
+	Status    int       `json:"status" gorm:"default:0"` // 0 正常 / 1 停用（停用不缩小存量用户数据范围）
+	Leader    string    `json:"leader" gorm:"size:64"`   // 负责人
+	OrderNum  int       `json:"order_num" gorm:"default:0"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ShiftConfig 部门班次定义：班次名称 + 上下班时间（各部门可不同）
@@ -324,6 +332,9 @@ type Setting struct {
 	// 手册已种入知识库的 App 版本（v0.16.0）：等于当前 AppVersion 时不再重复种入，
 	// 于是管理员删除该知识条目后不会在同一版本内被自动重建，升级到新版本时才会重新补齐。
 	ManualSeededVersion string `json:"manual_seeded_version" gorm:"size:16"`
+	// RBAC 权限拦截模式（v0.39.0）：off 不校验且不记录 / log 只记录不拦截（观察期）/ on 正式拦截。
+	// 默认 log（观察模式），确认无误后由部署脚本切到 on。可用环境变量 RBAC_ENFORCE 临时覆盖。
+	RbacEnforce string `json:"rbac_enforce" gorm:"size:8;default:'log'"`
 }
 
 // Log 系统操作日志

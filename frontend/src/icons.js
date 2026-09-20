@@ -19,14 +19,35 @@ export const icons = {
   // v0.18.0 排班管理：日历 + 齿轮（规则配置 / 自动生成）
   planner: wrap('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8 13.5h4M8 17h6"/><path d="M16.5 12.6l.5-.3.6.3v1l-.5.3m-1.2 1.2l-.3.5.3.6h1l.3-.5m1.2-1.2l.5.3.6-.3v-1l-.5-.3"/>'),
   // 企微推送：纸飞机（发送）
-  wecom: wrap('<path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/>')
+  wecom: wrap('<path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/>'),
+  // —— v0.39.0 RBAC 系统管理 ——
+  // 角色：盾牌 + 钥匙孔（权限）
+  shield: wrap('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="11" r="2"/><path d="M12 13v3"/>'),
+  // 菜单：层级列表（目录 / 菜单 / 按钮）
+  menu: wrap('<path d="M4 6h16M4 12h16M4 18h10"/><circle cx="20" cy="18" r="1.4"/>'),
+  // 部门：组织架构（三层节点）
+  building: wrap('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-2h14v2"/>')
 }
 
+// ============================================================================
+// 侧栏 / 移动端导航项
+//
+// perm：进入该页面所需的权限标识（与后端 system/routeperm.go 的 perms 逐字符一致）。
+//   - 字符串：需要该权限
+//   - 数组：任一命中即可
+//   - 省略/空：登录即可见（保持改造前的行为，避免误伤既有用户）
+// 说明：前端只负责"显不显示"，真正的拦截在后端 GuardByPath（无权限直接 403）。
+// ============================================================================
 export const navItems = [
-  { to: '/', label: '概览', icon: icons.dashboard },
-  { to: '/schedule', label: '班表', icon: icons.schedule },
-  { to: '/tasks', label: '任务', icon: icons.tasks },
-  { to: '/workspace', label: '知识库', icon: icons.workspace },
-  { to: '/wecom-push', label: '企微推送', icon: icons.wecom },
+  { to: '/', label: '概览', icon: icons.dashboard, perm: 'dashboard:view' },
+  { to: '/schedule', label: '班表', icon: icons.schedule, perm: 'schedule:view' },
+  { to: '/tasks', label: '任务', icon: icons.tasks, perm: 'task:view' },
+  { to: '/workspace', label: '知识库', icon: icons.workspace, perm: 'knowledge:view' },
+  { to: '/wecom-push', label: '企微推送', icon: icons.wecom, perm: 'wecompush:view', wecom: true },
+  { to: '/system/users', label: '用户管理', icon: icons.users, perm: 'system:user:list' },
+  { to: '/system/roles', label: '角色管理', icon: icons.shield, perm: 'system:role:list' },
+  { to: '/system/menus', label: '菜单管理', icon: icons.menu, perm: 'system:menu:list' },
+  { to: '/system/depts', label: '部门管理', icon: icons.building, perm: 'system:dept:list' },
+  // 设置页保持"登录可见"：页面内部各区块由各自的 perms 控制（改造前即如此）
   { to: '/settings', label: '设置', icon: icons.settings }
 ]

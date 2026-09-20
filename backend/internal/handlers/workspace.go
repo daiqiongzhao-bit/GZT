@@ -45,6 +45,32 @@ func scopeVisibleQ(c *gin.Context, q *gorm.DB) *gorm.DB {
 	return q.Where("(owner_id = ?) OR (scope = ?) OR (scope = ? AND dept_id = ?) OR "+ec, args...)
 }
 
+// scopeVisibleNoEditorQ 与 scopeVisibleQ 语义一致，但**不含** knowledge 专属的协作者条件。
+//
+// 为什么必须分开（v0.39.0 修一个 v0.27.0 引入的潜伏 bug）：
+// editorVisibleClause 拼的是 `editor_ids = ? OR editor_ids LIKE ? ...`，而 editor_ids
+// 只存在于 knowledge_entries / knowledge_drafts。work_logs 表没有这一列，
+// 一旦把 scopeVisibleQ 用在 WorkLog 查询上，SQLite 在**解析阶段**就报
+//
+//	SQL logic error: no such column: editor_ids
+//
+// 于是"工作日志列表/统计/导出"对**所有非超管用户**恒 500（表为空也照样报，
+// 因为是 prepare 报错而非数据问题，所以线上一直没被当成 bug 暴露）。
+//
+// 因此凡是查 work_logs / work_handovers 这类没有协作者概念的模型，一律用本函数。
+func scopeVisibleNoEditorQ(c *gin.Context, q *gorm.DB) *gorm.DB {
+	cl := middleware.GetClaims(c)
+	if cl == nil {
+		return q.Where("1 = 0")
+	}
+	if cl.Role == models.RoleSuperAdmin {
+		return q // 超管可见全部
+	}
+	// 本人(含所有 scope) 或 全公司共享 或 同部门共享
+	return q.Where("(owner_id = ?) OR (scope = ?) OR (scope = ? AND dept_id = ?)",
+		cl.UserID, models.ScopePublic, models.ScopeDepartment, cl.DeptID)
+}
+
 // ---------- 协作者与编辑权（v0.27.0）----------
 
 // parseUintList 解析 JSON 数组串为 uint 列表；非法内容返回空列表而不报错（容错优先，日志/权限不该因脏数据崩）
@@ -1570,8 +1596,9 @@ func ExportWorkspaceBundle(c *gin.Context) {
 	}
 
 	// 日志（个人；共享同部门）——须按可见性过滤，避免导出他部门/他人私密日志
+	// 注意：WorkLog 没有 editor_ids 列，必须用不含协作者条件的版本，否则 prepare 阶段报错
 	var logs []models.WorkLog
-	logQ := scopeVisibleQ(c, db.DB.Model(&models.WorkLog{}))
+	logQ := scopeVisibleNoEditorQ(c, db.DB.Model(&models.WorkLog{}))
 	logQ.Order("log_date desc, id desc").Find(&logs)
 	// 交接（本人相关；超管全量）
 	var handovers []models.WorkHandover

@@ -82,6 +82,13 @@ func Init() error {
 		&wecompush.WpTask{},
 		&wecompush.WpLog{},
 		&wecompush.WpSetting{},
+		// v0.39.0 RBAC（权限管理模块）：角色 / 菜单 / 三张关联表。
+		// 只新增表，不改不删任何既有列；users.role 保留双读。
+		&models.SysRole{},
+		&models.SysMenu{},
+		&models.SysUserRole{},
+		&models.SysRoleMenu{},
+		&models.SysRoleDept{},
 	)
 }
 

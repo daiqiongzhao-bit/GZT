@@ -136,7 +136,9 @@ func buildWorkLogQuery(c *gin.Context) *gorm.DB {
 		q = q.Where("owner_id = ?", cl.UserID)
 	} else {
 		// 共享视图：本人 + 同部门共享（部门日志本）
-		q = scopeVisibleQ(c, q)
+		// ★ WorkLog 没有 editor_ids 列，必须用不含「协作者」条件的版本；
+		//   否则 SQLite 在 prepare 阶段报 no such column: editor_ids，非超管恒 500（v0.27.0 起的潜伏 bug）。
+		q = scopeVisibleNoEditorQ(c, q)
 	}
 	return q
 }
@@ -238,12 +240,12 @@ func WorkLogStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total":        total,
-		"people":       len(byOwner),
-		"with_pending": withPending,
-		"edited":       edited,
-		"today":        today,
-		"by_owner":     owners,
+		"total":         total,
+		"people":        len(byOwner),
+		"with_pending":  withPending,
+		"edited":        edited,
+		"today":         today,
+		"by_owner":      owners,
 		"missing_today": missing,
 	})
 }
@@ -525,7 +527,9 @@ func HandoverStats(c *gin.Context) {
 		"in_progress": count(func(q *gorm.DB) *gorm.DB { return q.Where("status = ?", models.HandoverInProgress) }),
 		"done":        count(func(q *gorm.DB) *gorm.DB { return q.Where("status = ?", models.HandoverDone) }),
 		"returned":    count(func(q *gorm.DB) *gorm.DB { return q.Where("status = ?", models.HandoverReturned) }),
-		"urgent":      count(func(q *gorm.DB) *gorm.DB { return q.Where("priority = ? AND status <> ?", models.HandoverUrgent, models.HandoverDone) }),
+		"urgent": count(func(q *gorm.DB) *gorm.DB {
+			return q.Where("priority = ? AND status <> ?", models.HandoverUrgent, models.HandoverDone)
+		}),
 		"overdue": count(func(q *gorm.DB) *gorm.DB {
 			return q.Where("due_at IS NOT NULL AND due_at < ? AND status <> ?", now, models.HandoverDone)
 		}),

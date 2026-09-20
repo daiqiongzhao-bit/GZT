@@ -5,6 +5,8 @@ import router from './router'
 import './styles/global.css'
 // 编辑器与详情展示共用排版（.kb-prose / .kb-view），必须在 global.css 之后引入
 import './styles/editor.css'
+// v0.39.0 RBAC 系统管理（用户/角色/菜单/部门）共用样式，全部 .adm- 前缀，不影响既有页面
+import './styles/admin.css'
 import { applyInitialTheme, bindApp, getInitialTheme } from './theme'
 import { darkTheme, lightTheme } from 'naive-ui'
 import { createDiscreteApi } from 'naive-ui'

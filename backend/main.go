@@ -20,6 +20,7 @@ import (
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
 	"shiftworkbench/internal/service"
+	"shiftworkbench/internal/system"
 	"shiftworkbench/internal/wecompush"
 
 	"github.com/gin-gonic/gin"
@@ -56,6 +57,32 @@ func main() {
 		_ = db.DB.Create(&models.SystemLog{Level: string(lvl), Source: source, Message: message, Detail: detail}).Error
 	})
 	service.Seed()
+	// v0.39.0 RBAC（权限管理模块）：
+	//   1) Migrate  —— 建索引、把 departments.name 的单列唯一改成 (parent_id,name) 联合唯一、
+	//                  补 users.dept_id 索引、回填 ancestors（全部幂等，不破坏既有数据）
+	//   2) Seed     —— 播种完整权限树（每个模块/按钮一个 perms）+ 3 个内置角色 + users.role 回填
+	//   3) SelfCheck—— 接口声明 ↔ 菜单 perms 双向差集自检（防"配了菜单忘了拦截"的越权）
+	if err := system.Migrate(); err != nil {
+		// 迁移失败**不阻塞启动**：这三件事（permissions 唯一索引 / departments 联合唯一 /
+		// ancestors 回填）都属于增强项，失败时表结构仍可用、应用仍能服务；
+		// 而 GuardByPath 默认 log 模式也不会因此误伤任何请求。
+		// 反过来，这里若 Fatal 就等于"一个索引建不出来 → 整站起不来"，代价不成比例。
+		logger.Info("server", "RBAC 迁移未完成（服务继续启动，权限按 fail-closed 处理）: %v", err)
+	}
+	if st, err := system.Seed(); err != nil {
+		logger.Info("server", "RBAC 播种异常（服务继续启动，权限按 fail-closed 生效）: %v", err)
+	} else {
+		logger.Info("server", "RBAC 就绪：接口声明 %d 条，菜单新增 %d，角色新增 %d，授权 %d，用户角色回填 %d，拦截模式=%s",
+			system.RoutePermCount(), st["menus_created"], st["roles_created"],
+			st["role_menus"], st["user_roles_backfilled"], system.EnforceMode())
+	}
+	if probs := system.SelfCheck(); len(probs) > 0 {
+		for _, p := range probs {
+			logger.Info("server", "RBAC 自检发现问题: %s", p)
+		}
+	} else {
+		logger.Info("server", "RBAC 自检通过：接口权限声明与菜单权限节点完全一致")
+	}
 	// 手册随版本种入知识库（v0.16.0）：每版本仅首次启动种入一次，
 	// 管理员删除后同版本内不再重建，升级到新版本时会重新补齐。
 	if pdf, err := fs.ReadFile(webFS, "web/dist/manual.pdf"); err == nil {
@@ -116,10 +143,16 @@ func main() {
 		// 需登录
 		auth := api.Group("")
 		auth.Use(middleware.AuthRequired())
+		// v0.39.0 RBAC：**全部已登录接口**统一过权限闸门（权限在 routeperm.go 集中声明）。
+		// 未在声明表里的接口按 fail-closed 处理 —— 于是"新增了接口却忘了声明"会立刻
+		// 表现为 403 + 自检报警，而不是悄悄放行。
+		// 默认模式 log（只记日志不拦截），因此初次上线不会误伤任何既有流程；
+		// 观察审计日志确认无异常后，再由超管切到 on。
+		auth.Use(system.GuardByPath())
 		{
 			auth.GET("/auth/me", handlers.Me)
 			auth.POST("/auth/change-password", handlers.ChangePassword)
-			auth.POST("/auth/unlock", middleware.RequireRole(models.RoleSuperAdmin), handlers.UnlockLogin)
+			auth.POST("/auth/unlock", handlers.UnlockLogin)
 			auth.GET("/dashboard", handlers.Dashboard)
 			auth.GET("/logs", handlers.ListLogs)
 			auth.GET("/notifications", handlers.ListNotifications)
@@ -129,121 +162,121 @@ func main() {
 			// 广播确认回执（接收人确认收到）v0.13.0
 			auth.POST("/notifications/:id/ack", handlers.MarkNotificationAck)
 			// 部门广播通知（部门管/超管）v0.2.0
-			auth.POST("/notifications/broadcast", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BroadcastNotification)
+			auth.POST("/notifications/broadcast", handlers.BroadcastNotification)
 			// 广播附件下载（接收人本人/超管）v0.11.0
 			auth.GET("/notifications/attachments/:key/download", handlers.DownloadNotifAttachment)
 			// 广播送达/已读/确认统计（超管看全部；部门管理员看自己发的）v0.12.0/v0.13.0
 			auth.GET("/notifications/broadcasts", handlers.ListBroadcastStats)
 			auth.GET("/notifications/broadcasts/:bid/unread", handlers.BroadcastUnreadList)
 			auth.GET("/notifications/broadcasts/:bid/unacked", handlers.BroadcastUnackedList)
-			auth.POST("/notifications/broadcasts/:bid/nudge", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.NudgeBroadcast)
+			auth.POST("/notifications/broadcasts/:bid/nudge", handlers.NudgeBroadcast)
 			// Web Push 订阅管理（登录用户本人）v0.13.0
 			auth.POST("/push/subscribe", handlers.PushSubscribe)
 			auth.POST("/push/unsubscribe", handlers.PushUnsubscribe)
 			// 定时广播（部门管/超管）v0.13.0
-			auth.GET("/scheduled-broadcasts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListScheduledBroadcasts)
-			auth.POST("/scheduled-broadcasts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateScheduledBroadcast)
-			auth.DELETE("/scheduled-broadcasts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteScheduledBroadcast)
+			auth.GET("/scheduled-broadcasts", handlers.ListScheduledBroadcasts)
+			auth.POST("/scheduled-broadcasts", handlers.CreateScheduledBroadcast)
+			auth.DELETE("/scheduled-broadcasts/:id", handlers.DeleteScheduledBroadcast)
 
 			// 部门（仅超管写）
 			auth.GET("/departments", handlers.ListDepartments)
-			auth.POST("/departments", middleware.RequireRole(models.RoleSuperAdmin), handlers.CreateDepartment)
-			auth.DELETE("/departments/:id", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteDepartment)
+			auth.POST("/departments", handlers.CreateDepartment)
+			auth.DELETE("/departments/:id", handlers.DeleteDepartment)
 
 			// 部门班次定义（部门管/超管可改本部门）
 			auth.GET("/shift-configs", handlers.ListShiftConfigs)
-			auth.POST("/shift-configs", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertShiftConfig)
-			auth.DELETE("/shift-configs/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteShiftConfig)
+			auth.POST("/shift-configs", handlers.UpsertShiftConfig)
+			auth.DELETE("/shift-configs/:id", handlers.DeleteShiftConfig)
 
 			// 鉴权相关：登出、超管强制下线、在线会话
 			auth.POST("/logout", middleware.AuthRequired(), middleware.Logout)
-			auth.POST("/users/:id/force-logout", middleware.RequireRole(models.RoleSuperAdmin), middleware.ForceLogout)
-			auth.GET("/sessions", middleware.RequireRole(models.RoleSuperAdmin), handlers.GetSessions)
+			auth.POST("/users/:id/force-logout", middleware.ForceLogout)
+			auth.GET("/sessions", handlers.GetSessions)
 
 			// 人员
 			auth.GET("/users", handlers.ListUsers)
-			auth.POST("/users", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateUser)
-			auth.PUT("/users/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateUser)
-			auth.POST("/users/:id/reset-password", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ResetPassword)
-			auth.DELETE("/users/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUser)
-			auth.POST("/users/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportUsers)
-			auth.POST("/users/batch", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchUsers)
-			auth.GET("/users/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportUsersXLSX) // v0.2.0 人员导出（v0.8.0 起 .xlsx）
+			auth.POST("/users", handlers.CreateUser)
+			auth.PUT("/users/:id", handlers.UpdateUser)
+			auth.POST("/users/:id/reset-password", handlers.ResetPassword)
+			auth.DELETE("/users/:id", handlers.DeleteUser)
+			auth.POST("/users/import", handlers.ImportUsers)
+			auth.POST("/users/batch", handlers.BatchUsers)
+			auth.GET("/users/export", handlers.ExportUsersXLSX) // v0.2.0 人员导出（v0.8.0 起 .xlsx）
 
 			// 班表
 			auth.GET("/schedules", handlers.ListSchedules)
-			auth.POST("/schedules", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateSchedule)
-			auth.PUT("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateSchedule)
-			auth.DELETE("/schedules/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSchedule)
+			auth.POST("/schedules", handlers.CreateSchedule)
+			auth.PUT("/schedules/:id", handlers.UpdateSchedule)
+			auth.DELETE("/schedules/:id", handlers.DeleteSchedule)
 
 			// 排班管理（v0.18.0）：规则 / 员工偏好 / 需求 / 特殊工作日 / 生成
 			auth.GET("/shift-rules", handlers.GetShiftRule)
-			auth.PUT("/shift-rules", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateShiftRule)
+			auth.PUT("/shift-rules", handlers.UpdateShiftRule)
 
 			auth.GET("/shift-prefs", handlers.ListUserShiftPrefs)
-			auth.PUT("/shift-prefs", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertUserShiftPref)
-			auth.DELETE("/shift-prefs/:userId", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteUserShiftPref)
+			auth.PUT("/shift-prefs", handlers.UpsertUserShiftPref)
+			auth.DELETE("/shift-prefs/:userId", handlers.DeleteUserShiftPref)
 
 			// 员工需求：提交/查看人人可用（限本人）；删除按状态区分；解锁仅管理员
 			auth.GET("/shift-requests", handlers.ListShiftRequests)
 			auth.POST("/shift-requests", handlers.CreateShiftRequest)
 			auth.PUT("/shift-requests/:id", handlers.UpdateShiftRequest)
 			auth.DELETE("/shift-requests/:id", handlers.DeleteShiftRequest)
-			auth.POST("/shift-requests/:id/unlock", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UnlockShiftRequest)
+			auth.POST("/shift-requests/:id/unlock", handlers.UnlockShiftRequest)
 
 			auth.GET("/special-workdays", handlers.ListSpecialWorkDays)
-			auth.POST("/special-workdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialWorkDay)
-			auth.DELETE("/special-workdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialWorkDay)
+			auth.POST("/special-workdays", handlers.UpsertSpecialWorkDay)
+			auth.DELETE("/special-workdays/:id", handlers.DeleteSpecialWorkDay)
 
 			auth.GET("/special-restdays", handlers.ListSpecialRestDays)
-			auth.POST("/special-restdays", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpsertSpecialRestDay)
-			auth.DELETE("/special-restdays/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteSpecialRestDay)
+			auth.POST("/special-restdays", handlers.UpsertSpecialRestDay)
+			auth.DELETE("/special-restdays/:id", handlers.DeleteSpecialRestDay)
 			auth.GET("/holidays", handlers.ListHolidays) // 法定节假日（内置只读，非强制）
 
-			auth.POST("/schedules/generate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GenerateSchedule)
-			auth.POST("/schedules/validate", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ValidatePlan)
-			auth.POST("/schedules/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlan)
+			auth.POST("/schedules/generate", handlers.GenerateSchedule)
+			auth.POST("/schedules/validate", handlers.ValidatePlan)
+			auth.POST("/schedules/apply", handlers.ApplyPlan)
 
 			// 排班版本管理（v0.37.0）：改动后自动留档 + 多版本暂存/对比/回滚，定稿后再推送到正式班表
-			auth.GET("/shift-drafts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListPlanDrafts)
-			auth.POST("/shift-drafts", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.SavePlanDraft)
-			auth.GET("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.GetPlanDraft)
-			auth.PUT("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdatePlanDraft)
-			auth.DELETE("/shift-drafts/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeletePlanDraft)
-			auth.POST("/shift-drafts/:id/apply", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ApplyPlanDraft)
+			auth.GET("/shift-drafts", handlers.ListPlanDrafts)
+			auth.POST("/shift-drafts", handlers.SavePlanDraft)
+			auth.GET("/shift-drafts/:id", handlers.GetPlanDraft)
+			auth.PUT("/shift-drafts/:id", handlers.UpdatePlanDraft)
+			auth.DELETE("/shift-drafts/:id", handlers.DeletePlanDraft)
+			auth.POST("/shift-drafts/:id/apply", handlers.ApplyPlanDraft)
 
 			// 任务
 			auth.GET("/tasks", handlers.ListTasks)
 			auth.GET("/tasks/counts", handlers.TaskCounts)
-			auth.POST("/tasks", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateTask)
-			auth.PUT("/tasks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateTask)
+			auth.POST("/tasks", handlers.CreateTask)
+			auth.PUT("/tasks/:id", handlers.UpdateTask)
 			auth.POST("/tasks/:id/toggle", handlers.ToggleTask)
-			auth.POST("/tasks/:id/freeze", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.FreezeTask)
+			auth.POST("/tasks/:id/freeze", handlers.FreezeTask)
 			auth.GET("/tasks/:id/completions", handlers.ListTaskCompletions)
-			auth.DELETE("/tasks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteTask)
-			auth.POST("/tasks/batch-delete", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchDeleteTasks)
+			auth.DELETE("/tasks/:id", handlers.DeleteTask)
+			auth.POST("/tasks/batch-delete", handlers.BatchDeleteTasks)
 
 			// 任务完成记录审计（部门管/超管可读本部门）
-			auth.GET("/completions", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListCompletions)
+			auth.GET("/completions", handlers.ListCompletions)
 
 			// 批量操作 / 导入导出（部门管/超管）
-			auth.POST("/tasks/batch", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.BatchTasks)
-			auth.POST("/tasks/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportTasksCSV)
-			auth.POST("/schedules/import", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ImportSchedulesCSV)
-			auth.GET("/schedules/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportSchedulesXLSX)
-			auth.GET("/tasks/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportTasksXLSX)
-			auth.GET("/logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportLogsXLSX)
+			auth.POST("/tasks/batch", handlers.BatchTasks)
+			auth.POST("/tasks/import", handlers.ImportTasksCSV)
+			auth.POST("/schedules/import", handlers.ImportSchedulesCSV)
+			auth.GET("/schedules/export", handlers.ExportSchedulesXLSX)
+			auth.GET("/tasks/export", handlers.ExportTasksXLSX)
+			auth.GET("/logs/export", handlers.ExportLogsXLSX)
 
 			// 系统运行日志（崩溃/异常排查）：列表仅管理员可读；导出限超管/部门管理员
 			auth.GET("/system-logs", handlers.ListSystemLogs)
-			auth.GET("/system-logs/export", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ExportSystemLogsXLSX)
+			auth.GET("/system-logs/export", handlers.ExportSystemLogsXLSX)
 
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
 			auth.GET("/workspace/knowledge/categories", handlers.ListKnowledgeCategories)
 			auth.GET("/workspace/knowledge/members", handlers.ListKnowledgeMembers)
-			auth.GET("/workspace/knowledge/export", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledge)
-			auth.GET("/workspace/export/bundle", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportWorkspaceBundle)
+			auth.GET("/workspace/knowledge/export", handlers.ExportKnowledge)
+			auth.GET("/workspace/export/bundle", handlers.ExportWorkspaceBundle)
 			auth.GET("/workspace/knowledge/:id/attachments", handlers.ListKnowledgeAttachments)
 			auth.GET("/workspace/knowledge/:id/history", handlers.ListKnowledgeHistory)
 			auth.POST("/workspace/knowledge/:id/attachments", handlers.UploadKnowledgeAttachment)
@@ -280,8 +313,8 @@ func main() {
 			auth.PUT("/workspace/knowledge/draft", handlers.SaveKnowledgeDraft)
 			auth.GET("/workspace/knowledge/draft", handlers.GetKnowledgeDraft)
 			auth.DELETE("/workspace/knowledge/draft", handlers.DeleteKnowledgeDraft)
-			auth.GET("/workspace/knowledge/export/markdown", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeMarkdown)
-			auth.GET("/workspace/knowledge/export/doc", middleware.RequireRole(models.RoleSuperAdmin), handlers.ExportKnowledgeDoc)
+			auth.GET("/workspace/knowledge/export/markdown", handlers.ExportKnowledgeMarkdown)
+			auth.GET("/workspace/knowledge/export/doc", handlers.ExportKnowledgeDoc)
 
 			auth.GET("/workspace/logs", handlers.ListWorkLogs)
 			auth.POST("/workspace/logs", handlers.CreateWorkLog)
@@ -309,52 +342,71 @@ func main() {
 			auth.DELETE("/workspace/attachments/:id", handlers.DeleteWSAttachment)
 
 			// 模板管理（管理员可查看下载，超管可修改）
-			auth.GET("/templates", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.ListTemplates)
-			auth.GET("/templates/schedule-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadScheduleTemplateXLSX)
-			auth.GET("/templates/task-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadTaskTemplateXLSX)
-			auth.GET("/templates/user-template", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadUserTemplateXLSX)
-			auth.GET("/templates/:id/download", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DownloadTemplate)
-			auth.POST("/templates", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpsertTemplate)
-			auth.DELETE("/templates/:id", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteTemplate)
+			auth.GET("/templates", handlers.ListTemplates)
+			auth.GET("/templates/schedule-template", handlers.DownloadScheduleTemplateXLSX)
+			auth.GET("/templates/task-template", handlers.DownloadTaskTemplateXLSX)
+			auth.GET("/templates/user-template", handlers.DownloadUserTemplateXLSX)
+			auth.GET("/templates/:id/download", handlers.DownloadTemplate)
+			auth.POST("/templates", handlers.UpsertTemplate)
+			auth.DELETE("/templates/:id", handlers.DeleteTemplate)
 
 			// Webhook
 			auth.GET("/webhooks", handlers.ListWebhooks)
-			auth.POST("/webhooks", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.CreateWebhook)
-			auth.PUT("/webhooks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.UpdateWebhook)
-			auth.POST("/webhooks/notify", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.NotifyTodayHandler)
-			auth.DELETE("/webhooks/:id", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.DeleteWebhook)
-			auth.POST("/webhooks/test", middleware.RequireRole(models.RoleSuperAdmin, models.RoleDeptAdmin), handlers.TestWebhook)
+			auth.POST("/webhooks", handlers.CreateWebhook)
+			auth.PUT("/webhooks/:id", handlers.UpdateWebhook)
+			auth.POST("/webhooks/notify", handlers.NotifyTodayHandler)
+			auth.DELETE("/webhooks/:id", handlers.DeleteWebhook)
+			auth.POST("/webhooks/test", handlers.TestWebhook)
 
 			// 邮件通知配置（仅超管）
-			auth.POST("/settings/smtp", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateSMTP)
-			auth.POST("/settings/test-email", middleware.RequireRole(models.RoleSuperAdmin), handlers.TestEmail)
+			auth.POST("/settings/smtp", handlers.UpdateSMTP)
+			auth.POST("/settings/test-email", handlers.TestEmail)
 
 			// 设置（仅超管写；完整配置读取也仅超管，避免 SMTP 等敏感项公开泄露）
-			auth.GET("/settings/full", middleware.RequireRole(models.RoleSuperAdmin), handlers.GetSettingFull)
-			auth.POST("/settings", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateSetting)
-			auth.POST("/settings/logo", middleware.RequireRole(models.RoleSuperAdmin), handlers.UploadLogo)
-			auth.DELETE("/settings/logo", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteLogo)
-			auth.POST("/settings/log-retention", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateLogRetention)
-			auth.POST("/settings/timezone", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateTimezone)
-			auth.POST("/settings/daily-summary", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateDailySummary)
-			auth.POST("/settings/overdue-grace", middleware.RequireRole(models.RoleSuperAdmin), handlers.UpdateOverdueGrace)
+			auth.GET("/settings/full", handlers.GetSettingFull)
+			auth.POST("/settings", handlers.UpdateSetting)
+			auth.POST("/settings/logo", handlers.UploadLogo)
+			auth.DELETE("/settings/logo", handlers.DeleteLogo)
+			auth.POST("/settings/log-retention", handlers.UpdateLogRetention)
+			auth.POST("/settings/timezone", handlers.UpdateTimezone)
+			auth.POST("/settings/daily-summary", handlers.UpdateDailySummary)
+			auth.POST("/settings/overdue-grace", handlers.UpdateOverdueGrace)
 
 			// 系统备份与还原（仅超管）
-			auth.GET("/backups", middleware.RequireRole(models.RoleSuperAdmin), handlers.ListBackupsHandler)
-			auth.POST("/backups", middleware.RequireRole(models.RoleSuperAdmin), handlers.CreateBackupHandler)
-			auth.GET("/backups/:id/download", middleware.RequireRole(models.RoleSuperAdmin), handlers.DownloadBackupHandler)
-			auth.POST("/backups/:id/restore", middleware.RequireRole(models.RoleSuperAdmin), handlers.RestoreBackupHandler)
-			auth.DELETE("/backups/:id", middleware.RequireRole(models.RoleSuperAdmin), handlers.DeleteBackupHandler)
-			auth.POST("/backups/import", middleware.RequireRole(models.RoleSuperAdmin), handlers.ImportBackupHandler)
-			auth.GET("/backup-config", middleware.RequireRole(models.RoleSuperAdmin), handlers.GetBackupConfigHandler)
-			auth.POST("/backup-config", middleware.RequireRole(models.RoleSuperAdmin), handlers.SaveBackupConfigHandler)
+			auth.GET("/backups", handlers.ListBackupsHandler)
+			auth.POST("/backups", handlers.CreateBackupHandler)
+			auth.GET("/backups/:id/download", handlers.DownloadBackupHandler)
+			auth.POST("/backups/:id/restore", handlers.RestoreBackupHandler)
+			auth.DELETE("/backups/:id", handlers.DeleteBackupHandler)
+			auth.POST("/backups/import", handlers.ImportBackupHandler)
+			auth.GET("/backup-config", handlers.GetBackupConfigHandler)
+			auth.POST("/backup-config", handlers.SaveBackupConfigHandler)
 		}
 	}
 
 	// 企微推送模块（增量并入 GZT，独立表 wp_tasks/wp_logs/wp_settings，不影响既有数据/结构）
 	wpHandler := wecompush.New(db.DB, wecompush.LoadConfig())
-	wecompush.RegisterRoutes(api.Group("/wecom-push", middleware.AuthRequired()), wpHandler)
+	wecompush.RegisterRoutes(api.Group("/wecom-push", middleware.AuthRequired(), system.GuardByPath()), wpHandler)
 	go wecompush.NewScheduler(db.DB, wpHandler, time.Local).Start()
+
+	// 系统管理（v0.39.0 RBAC）：用户 / 角色 / 菜单 / 部门 四个子模块。
+	// 同样挂 GuardByPath —— 其接口权限全部在 routePerms 中显式声明，
+	// 因此"新增了一个接口却忘了声明"会立刻表现为 403 并被 SelfCheck 报出来。
+	system.RegisterRoutes(
+		api.Group("/system", middleware.AuthRequired(), system.GuardByPath()),
+		system.New(db.DB),
+	)
+
+	// RBAC 启动期覆盖自检（「每个接口都必须有明确约束」的兜底证据）。
+	// 运行期 UndeclaredRoutes() 只能记录被调用过的接口，扫全量注册表才能证明没有漏网之鱼：
+	// 未在 routePerms 声明、也不在 publicRoutes 的 /api 接口会被列出（fail-closed 下运行时 403）。
+	if audit := system.AuditRegisteredRoutes(r.Routes()); audit.OK() {
+		logger.Info("server", "RBAC 覆盖自检通过：/api 接口 %d 个（公开 %d / 已声明 %d），无漏声明；拦截模式=%s",
+			audit.Total, audit.Public, audit.Declared, system.EnforceMode())
+	} else {
+		logger.Warn("server", "RBAC 覆盖自检发现 %d 个未声明接口（默认拒绝，运行时会 403）：%s",
+			len(audit.Undeclared), strings.Join(audit.Undeclared, " | "))
+	}
 
 	// 前端静态资源（embed）
 	sub, err := fs.Sub(webFS, "web/dist")

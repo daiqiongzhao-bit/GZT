@@ -288,12 +288,13 @@ const route = useRoute()
 const router = useRouter()
 const ready = ref(false)
 
-// 「企微推送」导航项按权限显示：默认仅管理员（超管 + 部门管理员）可见，
-// 白名单由超级管理员在「企微推送 → 设置 → 访问权限」里调整。
-// 前端只是体验层，真正的闸门在后端 AccessGuard（无权限者直接 403）。
-const WECOM_PATHS = ['/wecom-push']
+// 导航项按权限显示（v0.39.0 RBAC）：
+//   · navItems[].perm 为空 → 登录即可见（改造前行为）
+//   · 有 perm → 必须持有该权限才显示（权限未加载时 can() 放行，避免刷新瞬间菜单全空）
+//   · 企微推送额外要求后端白名单（auth.canWecom 内含 RBAC 权限 + wpAccess 白名单双重判定）
+// 前端只是体验层，真正的闸门在后端 GuardByPath（无权限直接 403）。
 const visibleNav = computed(() =>
-  navItems.filter((n) => !WECOM_PATHS.includes(n.to) || auth.canWecom)
+  navItems.filter((n) => auth.can(n.perm) && (!n.wecom || auth.canWecom))
 )
 
 // 左下角 / 顶部版本号（取 /api/version，一次即可）
@@ -452,7 +453,8 @@ async function doForceChangePwd() {
 onMounted(async () => {
   if (auth.token) {
     await auth.fetchMe()
-    await auth.fetchWpAccess() // 决定「企微推送」导航项是否显示
+    // 并行拉取：RBAC 功能权限快照（决定导航项与路由准入）+ 企微推送白名单
+    await Promise.all([auth.fetchPerms(), auth.fetchWpAccess()])
   }
   await loadBrand() // 公开接口，未登录也能拿到企业名
   // 浏览器标签 title 跟随企业名（默认：企业任务通知管理）

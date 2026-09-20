@@ -1,0 +1,152 @@
+/* ============================================================
+   v0.39.0 RBAC 系统管理模块（用户 / 角色 / 菜单 / 部门）共用样式
+   —— 全部使用 .adm- 前缀，不改动任何既有类，避免影响其它页面。
+   颜色一律走 global.css 的主题令牌，因此浅色/深色主题自动适配。
+   ============================================================ */
+
+.adm-page { display: flex; flex-direction: column; gap: 16px; }
+
+/* ---- 页头 ---- */
+.adm-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.adm-head .section-title { margin: 0; }
+.adm-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---- 工具条（筛选条件）---- */
+.adm-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 14px 0 2px; }
+.adm-toolbar .fld-wrap { display: flex; flex-direction: column; }
+.adm-toolbar .glass-input { min-width: 148px; }
+.adm-toolbar .glass-input.wide { min-width: 200px; }
+.adm-toolbar .glass-input.narrow { min-width: 104px; }
+
+/* ---- 表格 ---- */
+.adm-tablewrap { overflow-x: auto; margin-top: 10px; }
+table.adm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.adm-table th {
+  text-align: left; font-weight: 600; color: var(--text-dim); font-size: 12px;
+  padding: 10px; border-bottom: 1px solid var(--glass-border); white-space: nowrap;
+}
+table.adm-table td {
+  padding: 10px; border-bottom: 1px solid var(--glass-border);
+  color: var(--text); vertical-align: middle;
+}
+table.adm-table tbody tr:hover td { background: var(--overlay); }
+table.adm-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+table.adm-table .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+table.adm-table .dim { color: var(--text-dim); }
+table.adm-table .nowrap { white-space: nowrap; }
+
+.adm-indent { display: inline-block; flex: none; }
+.adm-tree-mark { color: var(--text-faint); margin-right: 5px; flex: none; }
+
+/* ---- 行内操作 ---- */
+.adm-row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.adm-link {
+  background: none; border: 1px solid transparent; color: var(--accent);
+  cursor: pointer; font-size: 12px; padding: 3px 7px; border-radius: 8px; line-height: 1.3;
+}
+.adm-link:hover { background: var(--accent-soft); }
+.adm-link.danger { color: var(--danger); }
+.adm-link.danger:hover { background: rgba(225, 29, 72, 0.10); }
+.adm-link:disabled { color: var(--text-faint); cursor: not-allowed; background: none; }
+
+/* ---- 分页 ---- */
+.adm-pager {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 12px; font-size: 12px; color: var(--text-dim);
+}
+
+/* ---- 弹窗 ---- */
+.adm-mask {
+  position: fixed; inset: 0; background: var(--mask);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 300; padding: 20px; overflow: auto;
+}
+.adm-modal {
+  background: var(--bg-1); border: 1px solid var(--glass-border);
+  border-radius: var(--radius); width: 100%; max-width: 620px;
+  max-height: 88vh; overflow: auto; padding: 20px; box-shadow: var(--shadow);
+}
+.adm-modal.wide { max-width: 780px; }
+.adm-modal h3 { margin: 0 0 4px; font-size: 15px; color: var(--text); }
+.adm-modal .adm-modal-sub { font-size: 12px; color: var(--text-faint); margin: 0 0 16px; }
+.adm-modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--glass-border);
+}
+.adm-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.adm-field { margin-bottom: 12px; }
+.adm-field .glass-input { width: 100%; }
+.adm-inline { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+
+/* ---- 复选框树 / 部门树 ---- */
+.adm-tree {
+  max-height: 360px; overflow: auto; border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 8px; background: var(--overlay);
+}
+.adm-tree-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 8px; font-size: 13px;
+}
+.adm-tree-row:hover { background: var(--glass); }
+.adm-tree-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; flex: 1; min-width: 0; }
+.adm-tree-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-check { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex: none; }
+.adm-tree-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+
+/* ---- 数据范围单选 ---- */
+.adm-radio-row { display: flex; flex-direction: column; gap: 8px; }
+.adm-radio {
+  display: flex; gap: 9px; align-items: flex-start; padding: 9px 11px;
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  cursor: pointer; background: var(--overlay); transition: 0.15s;
+}
+.adm-radio:hover { border-color: var(--glass-border-strong); }
+.adm-radio.on { border-color: var(--accent); background: var(--accent-soft); }
+.adm-radio input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+.adm-radio .t { font-size: 13px; font-weight: 600; color: var(--text); }
+.adm-radio .d { font-size: 12px; color: var(--text-faint); margin-top: 2px; line-height: 1.5; }
+
+/* ---- 提示 / 报告 ---- */
+.adm-hint { font-size: 12px; color: var(--text-faint); line-height: 1.65; margin: 8px 0 0; }
+.adm-report {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  white-space: pre-wrap; word-break: break-all;
+  background: var(--overlay); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 12px; max-height: 280px;
+  overflow: auto; color: var(--text-dim); margin-top: 10px;
+}
+.adm-alert {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12px;
+  line-height: 1.6; margin-bottom: 12px;
+}
+.adm-alert.warn { background: rgba(217, 119, 6, 0.12); border: 1px solid rgba(217, 119, 6, 0.30); color: var(--warn); }
+.adm-alert.info { background: var(--accent-soft); border: 1px solid rgba(79, 70, 229, 0.28); color: var(--accent); }
+.adm-alert.danger { background: rgba(225, 29, 72, 0.10); border: 1px solid rgba(225, 29, 72, 0.30); color: var(--danger); }
+
+/* ---- 静态展示用的键值行 ---- */
+.adm-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+.adm-kv .k { color: var(--text-faint); }
+.adm-kv .v { color: var(--text); word-break: break-all; }
+
+/* ---- 面板内小标题（与 .section-title 区分：不占整行、无下边距）---- */
+.adm-sub-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.adm-sub-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0; }
+
+/* ---- 拦截开关区块（仅超管可见）---- */
+.adm-enforce {
+  margin-top: 14px; padding: 12px;
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  background: var(--overlay);
+}
+.adm-enforce > .fld { display: block; margin-bottom: 8px; }
+.adm-enforce .adm-hint { margin-top: 8px; }
+
+@media (max-width: 720px) {
+  .adm-grid2 { grid-template-columns: 1fr; }
+  .adm-modal { padding: 16px; }
+  .adm-toolbar .glass-input { min-width: 120px; }
+}
