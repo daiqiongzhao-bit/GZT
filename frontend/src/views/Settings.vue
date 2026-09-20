@@ -10,13 +10,12 @@
       <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="setTab('backup')">备份</button>
 
       <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示。
-           v0.40.0：「系统管理」不再是"点不动的灰标签"—— 它本身是一个可打开的页，
-           进去是若干入口卡片，点卡片进入对应子模块（谁有权限谁出现）。
-           v0.40.1：曾考虑把 4 个子模块标签从顶栏撤掉（顶栏 12 个会折行、且与入口页
-           功能重复），经用户确认 **保留原地直达**，顶栏不做合并。 -->
+           v0.40.0：曾把「系统管理」做成一个可打开的入口页（进去是 4 张卡片）。
+           v0.40.2：入口页与顶栏这 4 个直达标签重复（用户指出）—— 既然 4 个模块已在
+           顶栏原地直达，入口页就是多余的中转，整块移除（含 ?tab=syshome）。
+           竖线保留：仍用来把"系统设置项"与"系统管理模块"分开。 -->
       <template v-if="sysTabs.length">
         <span class="tab-gap" aria-hidden="true"></span>
-        <button class="tab" :class="{ active: tab === 'syshome' }" @click="setTab('syshome')">系统管理</button>
         <button
           v-for="t in sysTabs"
           :key="t.key"
@@ -407,25 +406,6 @@
     <!-- ==================== v0.39.1 系统管理（原侧栏四项并入设置） ====================
          组件自带 .adm-page 版式（页面级卡片），这里不再套 .panel，避免出现"卡中卡"。
          每块都带权限判断：无权时整块不渲染，配合 onMounted 的兜底只会停在「个人信息」。 -->
-    <!-- 系统管理总入口：点得动、能自解释"这些模块是干什么的" -->
-    <section v-if="tab === 'syshome' && sysTabs.length" class="panel">
-      <h3 class="section-title">
-        系统管理
-        <span class="section-sub">当前账号可见 {{ sysTabs.length }} 项（按角色权限过滤）</span>
-      </h3>
-      <div class="sys-cards">
-        <button v-for="t in sysTabs" :key="t.key" class="sys-card" @click="setTab(t.key)">
-          <span class="sc-title">{{ t.label }}</span>
-          <span class="sc-desc">{{ t.desc }}</span>
-          <span class="sc-go">进入 →</span>
-        </button>
-      </div>
-      <p class="adm-hint" style="margin-top:12px;">
-        看不到某个模块 = 你的角色没有被授予该模块的「查看」权限。
-        权限由超级管理员在「角色管理 → 权限配置」里按模块逐项勾选。
-      </p>
-    </section>
-
     <!-- 系统管理四个子模块（懒加载）
          组件自带 .adm-page 版式（页面级卡片），这里不再套 .panel，避免出现"卡中卡"。
          每块都带权限判断：无权时整块不渲染，配合 onMounted 的兜底只会停在「个人信息」。 -->
@@ -473,17 +453,18 @@ const SystemDeptPage = defineAsyncComponent(() => import('@/views/SystemDept.vue
 
 // perm 与后端 system/routeperm.go 的 perms 逐字符一致；无权则该项不出现
 const SYS_TABS = [
-  { key: 'sysuser', label: '用户管理', perm: 'system:user:list', desc: '建账号、分配角色、启停用、重置密码、导入导出' },
-  { key: 'sysrole', label: '角色管理', perm: 'system:role:list', desc: '自定义角色能做什么、能看哪些部门；一个用户可挂多个角色' },
-  { key: 'sysmenu', label: '菜单管理', perm: 'system:menu:list', desc: '系统里有哪些模块与按钮，以及它们对应的权限标识' },
-  { key: 'sysdept', label: '部门管理', perm: 'system:dept:list', desc: '组织架构（部门树）与班次时间、整月配色的维护' }
+  { key: 'sysuser', label: '用户管理', perm: 'system:user:list' },
+  { key: 'sysrole', label: '角色管理', perm: 'system:role:list' },
+  { key: 'sysmenu', label: '菜单管理', perm: 'system:menu:list' },
+  { key: 'sysdept', label: '部门管理', perm: 'system:dept:list' }
 ]
 const sysTabs = computed(() => SYS_TABS.filter((t) => auth.can(t.perm)))
 
-// v0.39.1：'dept' / 'user' 两个老 tab 已合并进「系统管理 → 部门管理 / 用户管理」，
+// v0.39.1：'dept' / 'user' 两个老 tab 已合并进系统管理四个模块，
 // 因此从 TAB_KEYS 里摘掉 —— ?tab=dept / ?tab=user 也会落到「个人信息」，
 // 不会再把用户带回已被取代的旧界面。
-const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout', 'syshome']
+// v0.40.2：'syshome' 入口页已移除，旧链接 ?tab=syshome 同样落到「个人信息」。
+const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout']
   .concat(SYS_TABS.map((t) => t.key))
 const initTab = String(route.query.tab || '')
 const tab = ref(TAB_KEYS.includes(initTab) ? initTab : 'me')
@@ -942,18 +923,6 @@ onMounted(async () => {
 .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 /* v0.39.1 系统管理分组：与常规 tab 之间加一道竖线，把「系统管理」与常规设置项分开 */
 .tab-gap { width: 1px; align-self: stretch; margin: 2px 6px; background: var(--glass-border); }
-
-/* ---- 系统管理总入口卡片 ---- */
-.sys-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
-.sys-card {
-  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
-  padding: 14px 16px; border-radius: var(--radius); text-align: left; cursor: pointer;
-  background: var(--bg-1); border: 1px solid var(--glass-border); color: inherit;
-}
-.sys-card:hover { border-color: var(--accent, #6366f1); transform: translateY(-1px); }
-.sc-title { font-size: 14px; font-weight: 600; }
-.sc-desc { font-size: 12px; color: var(--text-dim); line-height: 1.65; }
-.sc-go { font-size: 12px; color: var(--accent, #6366f1); margin-top: 2px; }
 
 /* ---- 运行日志：detail 摘要 ---- */
 .log-action { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
