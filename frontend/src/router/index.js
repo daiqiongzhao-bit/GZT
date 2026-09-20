@@ -9,6 +9,7 @@ const routes = [
   { path: '/tasks', name: 'tasks', component: () => import('@/views/Tasks.vue'), meta: { title: '任务' } },
   { path: '/workspace', name: 'workspace', component: () => import('@/views/Workspace.vue'), meta: { title: '知识库' } },
   { path: '/backup', name: 'backup', component: () => import('@/views/Backup.vue'), meta: { title: '备份还原' } },
+  { path: '/wecom-push', name: 'wecom-push', component: () => import('@/views/WecomPush.vue'), meta: { title: '企微推送' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置' } },
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ]

@@ -20,8 +20,14 @@ services:
       JWT_SECRET: "${JWT_SECRET:-}"
       AES_KEY: "${AES_KEY:-}"
       TZ: "Asia/Shanghai"
+      HOME: "/root"
+      WECOM_CLI: "/usr/local/bin/wecom-cli"
+      WECOM_CONFIG_DIR: "/root/.config/wecom"
+      WECOM_OUT_DIR: "/data/wecom-out"
     volumes:
       - /opt/swb/data:/data
+      - /root/.config/wecom:/root/.config/wecom
+      - /opt/swb/wecom-out:/data/wecom-out
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
       interval: 30s

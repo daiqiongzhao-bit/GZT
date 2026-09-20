@@ -38,17 +38,29 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /
 FROM --platform=$BUILDPLATFORM alpine:3.20 AS sysdeps
 RUN apk add --no-cache ca-certificates tzdata
 
+# 阶段：获取 wecom-cli 静态二进制（企业微信智能表格/群消息所需；Rust 静态链接，alpine 可直接运行）
+FROM --platform=$BUILDPLATFORM node:22-alpine AS cli
+WORKDIR /cli
+RUN npm pack @wecom/cli-linux-x64@1.3.0 && tar xzf *.tgz
+
 # 阶段 4：运行镜像（按目标平台自动匹配 amd64 / arm64）
 # 本阶段不含任何 RUN，因此构建 arm64 镜像时无需 QEMU 模拟
 FROM alpine:3.20
 COPY --from=sysdeps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=sysdeps /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=cli /cli/package/bin/wecom-cli /usr/local/bin/wecom-cli
+RUN chmod +x /usr/local/bin/wecom-cli
+RUN apk add --no-cache util-linux
 WORKDIR /data
 COPY --from=backend /out/app /usr/local/bin/swb
 EXPOSE 8080
 VOLUME ["/data"]
 ENV APP_PORT=8080 \
-    DB_PATH=/data/swb.db
+    DB_PATH=/data/swb.db \
+    HOME=/root \
+    WECOM_CLI=/usr/local/bin/wecom-cli \
+    WECOM_CONFIG_DIR=/root/.config/wecom \
+    WECOM_OUT_DIR=/data/wecom-out
 # 不在镜像内硬编码 JWT_SECRET / AES_KEY 默认值。
 # 运行时可选注入（compose / docker run -e）；未注入时应用会在数据卷 /data/secrets.env
 # 首次启动自动生成强随机密钥并持久化，之后每次启动复用（见 config.resolveSecrets）。

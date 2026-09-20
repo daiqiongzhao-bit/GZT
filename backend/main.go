@@ -20,6 +20,7 @@ import (
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
 	"shiftworkbench/internal/service"
+	"shiftworkbench/internal/wecompush"
 
 	"github.com/gin-gonic/gin"
 )
@@ -349,6 +350,11 @@ func main() {
 			auth.POST("/backup-config", middleware.RequireRole(models.RoleSuperAdmin), handlers.SaveBackupConfigHandler)
 		}
 	}
+
+	// 企微推送模块（增量并入 GZT，独立表 wp_tasks/wp_logs/wp_settings，不影响既有数据/结构）
+	wpHandler := wecompush.New(db.DB, wecompush.LoadConfig())
+	wecompush.RegisterRoutes(api.Group("/wecom-push", middleware.AuthRequired()), wpHandler)
+	go wecompush.NewScheduler(db.DB, wpHandler, time.Local).Start()
 
 	// 前端静态资源（embed）
 	sub, err := fs.Sub(webFS, "web/dist")

@@ -6,6 +6,7 @@ import (
 
 	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/models"
+	"shiftworkbench/internal/wecompush"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -78,6 +79,9 @@ func Init() error {
 		&models.SpecialRestDay{},
 		// v0.19.3 排班草稿（多版本暂存）
 		&models.ShiftPlanDraft{},
+		&wecompush.WpTask{},
+		&wecompush.WpLog{},
+		&wecompush.WpSetting{},
 	)
 }
 
