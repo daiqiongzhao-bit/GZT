@@ -11,7 +11,9 @@
 
       <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示。
            v0.40.0：「系统管理」不再是"点不动的灰标签"—— 它本身是一个可打开的页，
-           进去是若干入口卡片，点卡片进入对应子模块（谁有权限谁出现）。 -->
+           进去是若干入口卡片，点卡片进入对应子模块（谁有权限谁出现）。
+           v0.40.1：曾考虑把 4 个子模块标签从顶栏撤掉（顶栏 12 个会折行、且与入口页
+           功能重复），经用户确认 **保留原地直达**，顶栏不做合并。 -->
       <template v-if="sysTabs.length">
         <span class="tab-gap" aria-hidden="true"></span>
         <button class="tab" :class="{ active: tab === 'syshome' }" @click="setTab('syshome')">系统管理</button>
@@ -91,203 +93,6 @@
       <div class="form-actions" style="justify-content:flex-start; gap:10px;">
         <button class="btn primary" :disabled="saving" @click="saveBrand">{{ saving ? '保存中…' : '保存设置' }}</button>
         <button class="btn ghost" :disabled="tzSaving" @click="saveTimezone">{{ tzSaving ? '应用中…' : '保存时区' }}</button>
-      </div>
-    </section>
-
-    <!-- ⚠️ v0.39.1 已下线（DEPRECATED / 不可达）：下面的「部门与班次」与「人员」两块
-         已合并进「系统管理 → 部门管理 / 用户管理」，且 'dept' / 'user' 已从 TAB_KEYS 移除，
-         因此 tab 永远不等于这两个值 —— 这两块保留只是为了让回退有据可查，界面上不可见。
-         确认新版稳定后可以整段删除（连同脚本里 loadUsers/addUser/runBatch/shifts 等函数）。 -->
-
-    <!-- 部门（超管管理，部门管/超管可配班次时间） -->
-    <section v-if="tab === 'dept' && auth.canManage" class="panel">
-      <h3 class="section-title">部门管理 <span class="section-sub">增删部门仅超管；班次上下班时间本部门管理员可配置</span></h3>
-      <div v-if="auth.isSuper" class="inline-add dept-add">
-        <select v-model.number="newDeptParent" class="glass-input" style="max-width:180px;">
-          <option :value="0">顶级部门</option>
-          <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
-        </select>
-        <input v-model="newDept" class="glass-input" placeholder="新部门名称" @keyup.enter="addDept" />
-        <button class="btn primary" :disabled="!newDept" @click="addDept">添加</button>
-      </div>
-      <div class="list">
-        <div v-for="d in deptOptions(departments)" :key="d.id" class="row dept-row" :style="d.depth ? 'padding-left:' + (12 + d.depth * 18) + 'px' : ''">
-          <div class="row-main dept-head">
-            <span class="rn">{{ d.name }}<span v-if="d.depth" class="section-sub" style="margin-left:6px">子部门</span></span>
-            <button v-if="auth.isSuper" class="del" @click="delDept(d)">删除部门</button>
-          </div>
-          <div class="shift-cfg">
-            <div class="shift-cfg-list">
-              <span v-for="sc in shiftsOf(d.id)" :key="sc.id" class="shift-chip">
-                <i class="sc-dot" :style="{ background: shiftColorCss(sc.color_key) }" title="点击更换颜色" @click.stop="openColorPicker(sc)"></i>
-                {{ sc.name }} {{ sc.start_time }}-{{ sc.end_time }}
-                <button class="mini" @click="delShift(sc)">×</button>
-              </span>
-              <span v-if="!shiftsOf(d.id).length" class="shift-none">尚未配置班次，添加一个</span>
-            </div>
-            <div v-if="colorPicker && colorPicker.sc && colorPicker.sc.dept_id === d.id" class="shift-picker" @click.stop>
-              <span class="shift-picker-title">选择颜色</span>
-              <div class="shift-picker-row">
-                <i class="sc-dot" :class="{ on: (colorPicker.sc.color_key || '') === '' }" style="background:#cbd5e1" title="系统默认（无自定义色）" @click="pickColor('')"></i>
-                <i v-for="pc in shiftPalette" :key="pc.key" class="sc-dot" :class="{ on: colorPicker.sc.color_key === pc.key }" :style="{ background: pc.css }" :title="pc.name" @click="pickColor(pc.key)"></i>
-              </div>
-              <div class="shift-picker-row">
-                <label class="fld" style="font-size:11px;">自定义</label>
-                <input type="color" :value="customHex(colorPicker.sc.color_key)" @input="onCustomColor($event.target.value)" class="sc-color" title="选自定义颜色" />
-                <input v-model="customHexText" type="text" maxlength="7" placeholder="#3b82f6" class="glass-input sm sc-hex" @keyup.enter="pickColor(customHexText)" />
-                <button class="btn ghost sm" @click="pickColor(customHexText)">应用</button>
-                <button class="btn ghost sm" @click="colorPicker = null">关闭</button>
-              </div>
-            </div>
-            <div class="shift-add">
-              <input v-model="scForm.name" class="glass-input sm" placeholder="班次名，如 中班" />
-              <input v-model="scForm.start_time" type="time" class="glass-input sm" />
-              <span class="shift-sep">至</span>
-              <input v-model="scForm.end_time" type="time" class="glass-input sm" />
-              <div class="shift-palette" title="整月矩阵里的格子颜色">
-                <i class="sc-dot" :class="{ on: !scForm.color_key }" style="background:#cbd5e1" title="系统默认色" @click="scForm.color_key = ''"></i>
-                <i v-for="pc in shiftPalette" :key="pc.key" class="sc-dot" :class="{ on: scForm.color_key === pc.key }" :style="{ background: pc.css }" :title="pc.name" @click="scForm.color_key = pc.key"></i>
-                <input type="color" :value="customHex(scForm.color_key)" @input="scForm.color_key = $event.target.value" class="sc-color" title="选自定义颜色" />
-                <span class="shift-palette-tip">格子色</span>
-              </div>
-              <button class="btn ghost sm" @click="addShift(d)">添加班次</button>
-            </div>
-          </div>
-        </div>
-        <div v-if="!departments.length" class="empty">暂无部门</div>
-      </div>
-    </section>
-
-    <!-- 人员 -->
-    <section v-if="tab === 'user'" class="panel">
-      <h3 class="section-title">人员管理 <span v-if="!auth.canManage" class="section-sub">仅管理员可操作</span></h3>
-      <div v-if="auth.canManage" class="user-toolbar">
-        <button class="btn ghost" @click="showAddUser = !showAddUser">
-          <svg v-if="!showAddUser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M12 5v14M5 12h14"/></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M5 12h14"/></svg>
-          {{ showAddUser ? '收起新增' : '新增人员' }}
-        </button>
-        <button class="btn ghost" @click="downloadAuth('templates/user-template')">⬇ 人员导入模板</button>
-        <label class="btn ghost imp-label">
-          {{ userImporting ? '导入中…' : '⬆ 批量导入人员' }}
-          <input type="file" accept=".xlsx,.csv" :disabled="userImporting" @change="importUsers" hidden />
-        </label>
-        <button class="btn ghost" @click="exportUsers">⬇ 导出人员</button>
-        <button class="btn ghost" :class="{ active: batchMode }" @click="batchMode = !batchMode">{{ batchMode ? '退出批量' : '批量操作' }}</button>
-        <input v-model="userKw" class="glass-input user-search" placeholder="🔍 搜索姓名 / 工号 / 账号" style="max-width:200px;" />
-        <span class="section-sub">按模板填好上传即可，登录账号已存在则更新资料</span>
-      </div>
-      <div v-if="batchMode && auth.canManage" class="batch-bar">
-        <label class="chk-all"><input type="checkbox" :checked="allSelected" @change="toggleAll" /> 全选</label>
-        <span class="sel-count">已选 {{ selectedIds.length }} 人</span>
-        <span class="batch-actions">
-          <select v-model.number="batchDept" class="glass-input sm">
-            <option :value="0">改部门…</option>
-            <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
-          </select>
-          <button class="btn ghost sm" :disabled="!batchDept" @click="runBatch('set_dept')">应用</button>
-          <button class="btn ghost sm" @click="runBatch('set_in_group', { in_group: true })">设群内</button>
-          <button class="btn ghost sm" @click="runBatch('set_in_group', { in_group: false })">取消群内</button>
-          <button class="btn ghost sm" @click="runBatch('freeze')">冻结</button>
-          <button class="btn ghost sm" @click="runBatch('unfreeze')">解冻</button>
-          <button class="btn ghost sm" @click="runBatch('force_logout')">强制下线</button>
-          <button class="btn ghost sm" @click="promptResetPwd">重置密码</button>
-          <button class="btn danger sm" @click="runBatch('delete')">删除</button>
-        </span>
-      </div>
-      <div v-if="auth.canManage">
-        <div v-show="showAddUser" class="add-form" style="margin-top:12px;">
-        <div class="fg2">
-          <div><label class="fld">姓名 *</label><input v-model="u.name" class="glass-input" /></div>
-          <div><label class="fld">工号 *（登录账号）</label><input v-model="u.emp_no" class="glass-input" placeholder="如 3275，自动作为登录账号" /></div>
-        </div>
-        <div v-if="u.role === 'super_admin'" class="fg2">
-          <div><label class="fld">登录账号 *（超管）</label><input v-model="u.username" class="glass-input" placeholder="超管无工号，单独填账号" /></div>
-        </div>
-        <div class="fg2">
-          <div><label class="fld">密码 *</label><input v-model="u.password" type="password" class="glass-input" /></div>
-          <div><label class="fld">角色</label>
-            <select v-model="u.role" class="glass-input" :disabled="!auth.isSuper">
-              <option value="dept_admin">部门管理员</option>
-              <option value="executor">执行者</option>
-              <option v-if="auth.isSuper" value="super_admin">超级管理员</option>
-            </select>
-          </div>
-        </div>
-        <div class="fg2">
-          <div><label class="fld">部门</label>
-            <select v-model="u.dept_id" class="glass-input" :disabled="!auth.isSuper">
-              <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
-            </select>
-          </div>
-          <div><label class="fld">手机号</label><input v-model="u.mobile" class="glass-input" placeholder="企业微信@提醒用（可选）" /></div>
-        </div>
-        <div class="form-actions"><button class="btn primary" :disabled="savingU" @click="addUser">{{ savingU ? '添加中…' : '添加人员' }}</button></div>
-        </div>
-      </div>
-      <div class="list">
-        <div v-for="p in filteredUsers" :key="p.id" class="row" :class="{ frozen: p.frozen, sel: batchMode && selectedIds.includes(p.id) }">
-          <input v-if="batchMode" type="checkbox" class="row-chk" :value="p.id" v-model="selectedIds" />
-          <div class="row-main">
-            <span class="avatar sm" :class="{ 'frozen-av': p.frozen }">{{ (p.name || '?')[0] }}</span>
-            <div>
-              <div class="rn">{{ p.name }} <span class="chip" style="margin-left:6px">{{ roleMap[p.role] || p.role }}</span><span v-if="p.frozen" class="chip warn" style="margin-left:4px">已冻结</span><span v-if="p.on_leave" class="chip warn" style="margin-left:4px;color:#d97706;border-color:#d9770666">休假</span><span v-if="p.in_group" class="chip" style="margin-left:4px;color:#16a34a;border-color:#16a34a66">群内</span><span v-if="onlineMap[p.id]" class="chip online" style="margin-left:4px">● {{ fmtOnline(onlineMap[p.id]) }}</span></div>
-              <div class="ru">@{{ p.username }}<span v-if="p.emp_no"> · 工号 {{ p.emp_no }}</span> · {{ p.dept?.name || '—' }}<span v-if="p.mobile" class="mob"> · 电话 {{ p.mobile }}</span></div>
-            </div>
-          </div>
-          <div class="row-actions" v-if="auth.isSuper || (auth.canManage && p.role !== 'super_admin')">
-            <div class="ops" @click.stop>
-              <button class="mini ops-btn" :class="{ on: opsOpen === p.id }" @click="toggleOps(p.id)">操作 ▾</button>
-              <div v-if="opsOpen === p.id" class="ops-drop">
-                <button class="op" @click="runOp(p, 'edit')">编辑资料</button>
-                <button class="op" @click="runOp(p, 'freeze')">{{ p.frozen ? '解冻账号' : '冻结账号' }}</button>
-                <button class="op" @click="runOp(p, 'leave')">{{ p.on_leave ? '结束休假（返岗）' : '设为休假' }}</button>
-                <button class="op" @click="runOp(p, 'pwd')">重置密码</button>
-                <button v-if="auth.isSuper" class="op" @click="runOp(p, 'unlock')">解锁登录</button>
-                <button v-if="auth.isSuper" class="op" :disabled="!onlineMap[p.id]" @click="runOp(p, 'logout')">强制下线<span v-if="!onlineMap[p.id]" class="op-hint">离线</span></button>
-                <button v-if="p.id !== auth.user?.id" class="op danger" @click="runOp(p, 'del')">删除人员</button>
-              </div>
-            </div>
-          </div>
-          <div v-else class="row-actions">
-            <span class="ru" style="font-size:12px">超管</span>
-          </div>
-        </div>
-        <div v-if="!filteredUsers.length" class="empty">{{ users.length ? '未找到匹配人员' : '暂无人员' }}</div>
-      </div>
-
-      <!-- 编辑人员弹窗 -->
-      <div v-if="editUser" class="modal-mask" @click.self="editUser = null">
-        <div class="modal">
-          <div class="modal-head"><span>编辑人员 · {{ editUser.name }}</span><button class="x" @click="editUser = null">×</button></div>
-          <div class="modal-body">
-            <div class="field"><label class="fld">姓名</label><input v-model="editForm.name" class="glass-input" /></div>
-            <div class="field"><label class="fld">工号（登录账号）</label><input v-model="editForm.emp_no" class="glass-input" placeholder="如 3275" /><span style="display:block;font-size:12px;color:var(--text-faint);margin-top:4px">改工号会同步修改登录账号，该员工需用新工号重新登录</span></div>
-            <div class="field"><label class="fld">手机号</label><input v-model="editForm.mobile" class="glass-input" placeholder="企业微信@提醒用（可选）" /></div>
-            <div class="field"><label class="fld">已入群</label>
-              <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" v-model="editForm.in_group" style="width:16px;height:16px" /> 已加入企业微信通知群（推送会@TA，名单中不重复列出）</label>
-            </div>
-            <div class="field"><label class="fld">休假/停职</label>
-              <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" v-model="editForm.on_leave" style="width:16px;height:16px" /> 处于休假/停职（不计入「全员」当班与推送名单）</label>
-            </div>
-            <div class="field"><label class="fld">角色</label>
-              <select v-model="editForm.role" class="glass-input" :disabled="!auth.isSuper">
-                <option value="dept_admin">部门管理员</option>
-                <option value="executor">执行者</option>
-                <option v-if="auth.isSuper" value="super_admin">超级管理员</option>
-              </select>
-            </div>
-            <div class="field"><label class="fld">部门</label>
-              <select v-model="editForm.dept_id" class="glass-input" :disabled="!auth.isSuper">
-                <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
-              </select>
-            </div>
-            <div class="form-actions" style="margin-top:14px;">
-              <button class="btn ghost" @click="editUser = null">取消</button>
-              <button class="btn primary" :disabled="editSaving" @click="saveEdit">{{ editSaving ? '保存中…' : '保存' }}</button>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -699,41 +504,13 @@ watch(() => route.query.tab, (v) => {
   if (TAB_KEYS.includes(k) && k !== tab.value) tab.value = k
 })
 
-const roleMap = { super_admin: '超级管理员', dept_admin: '部门管理员', executor: '执行者' }
 const typeLabel = (t) => ({ wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书' }[t] || '企业微信')
 
 const saving = ref(false)
 const departments = ref([])
-const users = ref([])
-// 人员列表快速筛选（姓名 / 工号 / 登录账号）
-const userKw = ref('')
-const filteredUsers = computed(() => {
-  const kw = userKw.value.trim().toLowerCase()
-  if (!kw) return users.value
-  return users.value.filter((p) =>
-    (p.name || '').toLowerCase().includes(kw) ||
-    (p.emp_no || '').toLowerCase().includes(kw) ||
-    (p.username || '').toLowerCase().includes(kw)
-  )
-})
-// 批量操作
-const batchMode = ref(false)
-const selectedIds = ref([])
-const batchDept = ref(0)
-const allSelected = computed(() => users.value.length > 0 && selectedIds.value.length === users.value.length)
-function toggleAll(e) {
-  selectedIds.value = e.target.checked ? users.value.map((x) => x.id) : []
-}
 const hooks = ref([])
 const logs = ref([])
 const templates = ref([])
-const shiftConfigs = ref([])
-
-const newDept = ref('')
-const newDeptParent = ref(0)
-const u = reactive({ name: '', emp_no: '', username: '', password: '', mobile: '', role: 'executor', dept_id: null, in_group: false })
-const savingU = ref(false)
-const showAddUser = ref(false) // 新增人员表单：默认收起，点「新增人员」展开
 const smtpOpen = ref(false)    // SMTP 配置：默认收起，点标题展开
 const h = reactive({ name: '', url: '', dept_id: null, type: 'wecom', secret: '' })
 const savingH = ref(false)
@@ -788,26 +565,6 @@ function clientName(c) {
 }
 
 async function loadDepts() { departments.value = await api.get('/departments') }
-async function loadUsers() { users.value = await api.get('/users') }
-
-// 批量用户操作
-async function runBatch(action, extra = {}) {
-  if (!selectedIds.value.length) { alert('请先勾选至少一名人员'); return }
-  if (action === 'delete' && !confirm(`确认删除选中的 ${selectedIds.value.length} 名人员？此操作不可撤销。`)) return
-  const body = { ids: selectedIds.value, action, ...extra }
-  try {
-    const r = await api.post('/users/batch', body)
-    alert(`已处理 ${r.processed || 0} 人${r.skipped ? '，跳过 ' + r.skipped + ' 人' : ''}`)
-    selectedIds.value = []
-    await loadUsers()
-  } catch (e) { alert(e.response?.data?.error || '操作失败') }
-}
-async function promptResetPwd() {
-  if (!selectedIds.value.length) { alert('请先勾选至少一名人员'); return }
-  const pwd = prompt('为选中的 ' + selectedIds.value.length + ' 人设置统一新密码（至少 8 位，需同时包含字母和数字）：')
-  if (!pwd) return
-  await runBatch('reset_password', { password: pwd })
-}
 async function loadHooks() { hooks.value = await api.get('/webhooks') }
 // 每日任务汇总推送开关（仅超管可改）
 const dailySummary = ref(true)
@@ -826,74 +583,6 @@ async function saveDailySummary() {
   finally { dsSaving.value = false }
 }
 async function loadTemplates() { templates.value = await api.get('/templates') }
-async function loadShiftConfigs() { shiftConfigs.value = await api.get('/shift-configs') }
-
-// 部门班次配置
-const scForm = reactive({ name: '', start_time: '09:00', end_time: '18:00', color_key: '' })
-function shiftsOf(deptId) { return shiftConfigs.value.filter((sc) => sc.dept_id === deptId) }
-// 整月矩阵班次配色色板（key 与 Schedule 矩阵色类对应；空=用系统默认色）
-// 自定义颜色：color_key 以 '#' 开头视为 hex 直渲；否则按预定义 key 走 CSS 类
-const SHIFT_COLOR_MAP = { blue: '#4f46e5', green: '#059669', orange: '#d97706', purple: '#8b5cf6' }
-const shiftPalette = [
-  { key: 'blue',   name: '蓝（默认早班色）', css: '#4f46e5' },
-  { key: 'green',  name: '绿', css: '#059669' },
-  { key: 'orange', name: '橙（晚班默认色）', css: '#d97706' },
-  { key: 'purple', name: '紫（夜班默认色）', css: '#8b5cf6' }
-]
-// 解析 color_key：hex 直渲 / 预定义 key 取 css / 空 → 默认灰
-function shiftColorCss(key) {
-  if (!key) return '#cbd5e1'
-  if (key.startsWith('#')) return key
-  return SHIFT_COLOR_MAP[key] || '#cbd5e1'
-}
-// 提取合法的 hex（用于 <input type="color"> 默认值）
-function customHex(key) {
-  if (key && /^#[0-9a-fA-F]{6}$/.test(key)) return key
-  return '#4f46e5'
-}
-// 已建班次色点：弹出颜色选择器（4 预设 + 默认色 + 自定义 hex）
-const colorPicker = ref(null) // { sc }
-const customHexText = ref('#4f46e5')
-function openColorPicker(sc) {
-  customHexText.value = /^#[0-9a-fA-F]{6}$/.test(sc.color_key || '') ? sc.color_key : '#4f46e5'
-  colorPicker.value = { sc }
-}
-function onCustomColor(hex) {
-  if (!colorPicker.value) return
-  customHexText.value = hex
-  pickColor(hex)
-}
-async function pickColor(key) {
-  if (!colorPicker.value) return
-  const sc = colorPicker.value.sc
-  try {
-    await api.post('/shift-configs', { id: sc.id, dept_id: sc.dept_id, name: sc.name, start_time: sc.start_time, end_time: sc.end_time, color_key: key || '' })
-    sc.color_key = key || ''
-    await loadShiftConfigs()
-    if (key) colorPicker.value.sc = shiftConfigs.value.find((x) => x.id === sc.id) || sc
-  } catch (e) { alert(e.response?.data?.error || '改色失败') }
-}
-// 点击空白关闭选择器
-function closeColorPicker(e) {
-  if (!colorPicker.value) return
-  // 命中 popover 内部不关
-  if (e.target.closest('.shift-picker') || e.target.closest('.shift-chip') || e.target.closest('.sc-dot')) return
-  colorPicker.value = null
-}
-async function addShift(d) {
-  const name = scForm.name.trim()
-  if (!name) { alert('请填写班次名称，如 中班'); return }
-  if (!scForm.start_time || !scForm.end_time) { alert('请选择上班/下班时间'); return }
-  try {
-    await api.post('/shift-configs', { dept_id: d.id, name, start_time: scForm.start_time, end_time: scForm.end_time, color_key: scForm.color_key })
-    scForm.name = ''; scForm.color_key = ''
-    await loadShiftConfigs()
-  } catch (e) { alert(e.response?.data?.error || '添加失败') }
-}
-async function delShift(sc) {
-  if (!confirm(`删除班次「${sc.name} ${sc.start_time}-${sc.end_time}」？`)) return
-  try { await api.del(`/shift-configs/${sc.id}`); await loadShiftConfigs() } catch (e) { alert(e.response?.data?.error || '删除失败') }
-}
 
 async function saveBrand() {
   saving.value = true
@@ -973,95 +662,6 @@ async function saveOverdueGrace() {
     alert(`逾期宽限期已设为 ${r.minutes} 分钟，即时生效`)
   } catch (e) { alert(e.response?.data?.error || '保存失败') }
   finally { graceSaving.value = false }
-}
-async function addDept() {
-  if (!newDept.value) return
-  try { await api.post('/departments', { name: newDept.value, parent_id: newDeptParent.value }); newDept.value = ''; newDeptParent.value = 0; await loadDepts() } catch (e) { alert(e.response?.data?.error || '添加失败') }
-}
-async function delDept(d) { if (!confirm(`删除部门「${d.name}」？`)) return; try { await api.del(`/departments/${d.id}`); await loadDepts() } catch (e) { alert(e.response?.data?.error || '删除失败') } }
-async function addUser() {
-  if (!u.name || !u.password) { alert('姓名、密码均必填'); return }
-  if (u.role === 'super_admin') { if (!u.username) { alert('超级管理员需填写登录账号'); return } }
-  else if (!u.emp_no) { alert('工号必填（登录账号 = 工号）'); return }
-  if (u.password.length < 8 || !/[0-9]/.test(u.password) || !/[A-Za-z]/.test(u.password)) { alert('密码至少 8 位，且需同时包含字母和数字'); return }
-  savingU.value = true
-  try { await api.post('/users', { ...u }); Object.assign(u, { name: '', emp_no: '', username: '', password: '', mobile: '', role: 'executor', in_group: false }); showAddUser.value = false; await loadUsers() } catch (e) { alert(e.response?.data?.error || '添加失败') }
-  finally { savingU.value = false }
-}
-async function delUser(p) { if (!confirm(`删除人员「${p.name}」？`)) return; try { await api.del(`/users/${p.id}`); await loadUsers() } catch (e) { alert(e.response?.data?.error || '删除失败') } }
-
-// 编辑 / 冻结 / 重置密码
-const editUser = ref(null)
-const editForm = reactive({ name: '', emp_no: '', mobile: '', role: 'executor', dept_id: 0, in_group: false, on_leave: false })
-const editSaving = ref(false)
-function openEdit(p) {
-  editUser.value = p
-  editForm.name = p.name
-  editForm.emp_no = p.emp_no || ''
-  editForm.mobile = p.mobile || ''
-  editForm.role = p.role
-  editForm.dept_id = p.dept_id
-  editForm.in_group = !!p.in_group
-  editForm.on_leave = !!p.on_leave
-}
-async function saveEdit() {
-  if (!editForm.name) { alert('姓名不能为空'); return }
-  editSaving.value = true
-  try {
-    await api.put(`/users/${editUser.value.id}`, { name: editForm.name, emp_no: editForm.emp_no, mobile: editForm.mobile, role: editForm.role, dept_id: editForm.dept_id, in_group: editForm.in_group, on_leave: editForm.on_leave })
-    editUser.value = null
-    await loadUsers()
-  } catch (e) { alert(e.response?.data?.error || '保存失败') } finally { editSaving.value = false }
-}
-async function toggleLeave(p) {
-  const action = p.on_leave ? '结束休假（返岗）' : '设为休假'
-  if (!confirm(`确认将「${p.name}」${action}？休假人员不会出现在「全员」当班与推送名单中。`)) return
-  try { await api.put(`/users/${p.id}`, { on_leave: !p.on_leave }); await loadUsers() } catch (e) { alert(e.response?.data?.error || '操作失败') }
-}
-async function toggleFreeze(p) {
-  const action = p.frozen ? '解冻' : '冻结'
-  if (!confirm(`确认${action}人员「${p.name}」？冻结后其所有登录令牌立即失效，无法登录。`)) return
-  try { await api.put(`/users/${p.id}`, { frozen: !p.frozen }); await loadUsers() } catch (e) { alert(e.response?.data?.error || '操作失败') }
-}
-async function resetPwd(p) {
-  const np = prompt(`为「${p.name}」设置新密码：`)
-  if (!np) return
-  if (!isStrongPwd(np)) { alert('密码至少 8 位，且需同时包含字母和数字'); return }
-  try { await api.post(`/users/${p.id}/reset-password`, { password: np }); alert('密码已重置（该员工下次登录将需先修改为本人密码）') } catch (e) { alert(e.response?.data?.error || '重置失败') }
-}
-async function unlockUser(p) {
-  if (!confirm(`解除「${p.name}」的登录锁定？该账号所有设备上的 15 分钟锁定将立即清除。`)) return
-  try {
-    const r = await api.post('/auth/unlock', { username: p.username })
-    alert(r.cleared > 0 ? `已解除 ${p.name} 的 ${r.cleared} 个锁定，现在可以登录了` : '该账号当前未被锁定')
-  } catch (e) { alert(e.response?.data?.error || '操作失败') }
-}
-
-// 在线用户监控（仅超管）
-const onlineMap = ref({})
-const clientLabel = (t) => ({ web: '网页', pwa: 'PWA', extension: '插件' }[t] || t || '网页')
-async function loadSessions() {
-  try {
-    const list = await api.get('/sessions')
-    const m = {}
-    for (const s of list) m[s.user_id] = s
-    onlineMap.value = m
-  } catch { onlineMap.value = {} }
-}
-function fmtOnline(s) {
-  const min = Math.floor((s.online_sec || 0) / 60)
-  const h = Math.floor(min / 60)
-  const dur = h > 0 ? `${h}时${min % 60}分` : `${min}分钟`
-  const ways = (s.clients || ['web']).map(clientLabel).join('+')
-  return `${ways} · 在线${dur}`
-}
-async function forceLogout(p) {
-  if (!confirm(`强制将「${p.name}」下线？其所有设备（${(p.id in onlineMap.value ? (onlineMap.value[p.id].count || 1) : '')}个会话）登录将立即失效。`)) return
-  try {
-    await api.post(`/users/${p.id}/force-logout`)
-    delete onlineMap.value[p.id]
-    alert('已强制下线')
-  } catch (e) { alert(e.response?.data?.error || '操作失败') }
 }
 async function addHook() {
   if (!h.url) { alert('Webhook 地址不能为空'); return }
@@ -1272,7 +872,6 @@ async function downloadAuth(path) {
   } catch (e) { alert('下载失败') }
 }
 function exportTasks() { downloadAuth('tasks/export') }
-function exportUsers() { downloadAuth('users/export') } // v0.2.0 人员导出
 function exportLogs() {
   const params = []
   if (logFilter.user_name) params.push('user_name=' + encodeURIComponent(logFilter.user_name))
@@ -1322,39 +921,6 @@ watch(tab, (v) => {
   if (v === 'brand' && auth.isSuper) loadOverdueGrace()
 })
 
-// ---- 人员「操作」下拉菜单 ----
-const opsOpen = ref(0)
-function toggleOps(id) { opsOpen.value = opsOpen.value === id ? 0 : id }
-async function runOp(p, act) {
-  opsOpen.value = 0
-  if (act === 'edit') return openEdit(p)
-  if (act === 'freeze') return toggleFreeze(p)
-  if (act === 'leave') return toggleLeave(p)
-  if (act === 'pwd') return resetPwd(p)
-  if (act === 'unlock') return unlockUser(p)
-  if (act === 'logout') return forceLogout(p)
-  if (act === 'del') return delUser(p)
-}
-
-// ---- 人员批量导入 ----
-const userImporting = ref(false)
-async function importUsers(e) {
-  const input = e.target
-  const file = input.files && input.files[0]
-  input.value = ''
-  if (!file) return
-  if (!confirm(`将按模板导入人员（${file.name}）。\n登录账号已存在则更新资料，不存在则新建，确认继续？`)) return
-  userImporting.value = true
-  try {
-    const r = await api.upload('/users/import', file)
-    let msg = `导入完成：新建 ${r.created || 0} 人，更新 ${r.updated || 0} 人，失败 ${r.failed || 0} 条`
-    if (r.errors && r.errors.length) msg += '\n' + r.errors.slice(0, 8).join('\n')
-    alert(msg)
-    await loadUsers()
-  } catch (err) { alert(err.response?.data?.error || '导入失败') }
-  finally { userImporting.value = false }
-}
-
 onMounted(async () => {
   // 系统管理 tab 的准入兜底：直接从旧地址 /system/xxx 进来但无对应权限时，
   // 该 tab 不在 sysTabs 里（区块也不渲染），这里退回「个人信息」而不是留空白。
@@ -1374,9 +940,8 @@ onMounted(async () => {
 
 <style scoped>
 .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-/* v0.39.1 系统管理分组：与常规 tab 之间加一道竖线 + 组标题，避免四个新 tab 看着像散装入口 */
+/* v0.39.1 系统管理分组：与常规 tab 之间加一道竖线，把「系统管理」与常规设置项分开 */
 .tab-gap { width: 1px; align-self: stretch; margin: 2px 6px; background: var(--glass-border); }
-.tab-group { font-size: 12px; color: var(--text-faint); letter-spacing: 0.5px; padding: 0 2px; white-space: nowrap; }
 
 /* ---- 系统管理总入口卡片 ---- */
 .sys-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
@@ -1405,29 +970,9 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .info-row { display: flex; align-items: center; gap: 14px; }
 .info-row .fld { width: 80px; flex: none; margin: 0; }
 .info-val { font-size: 14px; color: var(--text); }
-.user-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .user-toolbar .btn { padding: 8px 14px; font-size: 13px; }
-.imp-label { display: inline-flex; align-items: center; cursor: pointer; }
-.mob { color: var(--accent); }
-
-.ops { position: relative; }
-.ops-btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.ops-drop {
-  position: absolute; right: 0; top: 30px; z-index: 40; min-width: 148px;
-  background: var(--glass-strong); border: 1px solid var(--glass-border-strong);
-  border-radius: 12px; padding: 6px; box-shadow: 0 12px 32px rgba(0,0,0,0.28);
-  display: flex; flex-direction: column; gap: 2px;
-}
-.op {
-  text-align: left; padding: 9px 11px; border: none; background: transparent; color: var(--text);
-  border-radius: 9px; cursor: pointer; font-size: 13px; white-space: nowrap; display: flex;
-  align-items: center; justify-content: space-between; gap: 8px;
-}
-.op:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
-.op:disabled { opacity: 0.4; cursor: not-allowed; }
 .op.danger { color: var(--danger); }
 .op.danger:hover { background: rgba(225,29,72,0.12); color: var(--danger); }
-.op-hint { font-size: 11px; color: var(--text-faint); }
 
 .logo-edit { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .logo-preview {
@@ -1445,12 +990,9 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
   .logo-edit { gap: 12px; }
   .logo-btns .btn { min-height: 44px; }
   .user-toolbar .btn { min-height: 44px; }
-  .ops-drop { right: 0; left: auto; }
-  .op { min-height: 44px; }
 }
 .log-filter { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .log-filter .glass-input { max-width: 220px; padding: 8px 12px; font-size: 13px; }
-.inline-add { display: flex; gap: 10px; margin-bottom: 16px; max-width: 520px; }
 .inline-add .glass-input { flex: 1; }
 .dept-add .glass-input { flex: 0 1 auto; min-width: 0; }
 .fg2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
@@ -1510,11 +1052,6 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .row.frozen { opacity: 0.6; }
 .row.frozen .avatar.frozen-av { filter: grayscale(1); }
 .row-actions { display: flex; gap: 6px; align-items: center; }
-.batch-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 10px; border-radius: 12px; background: var(--accent-soft, rgba(79,70,229,0.1)); border: 1px solid rgba(79,70,229,0.3); }
-.chk-all, .sel-count { font-size: 13px; color: var(--text-dim); }
-.sel-count { font-weight: 600; color: var(--accent, #4f46e5); }
-.batch-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.row-chk { width: 17px; height: 17px; flex: none; accent-color: var(--accent, #4f46e5); margin: 0; }
 .row.sel { border-color: var(--accent, #4f46e5); background: var(--accent-soft, rgba(79,70,229,0.08)); }
 .btn.sm, .glass-input.sm { padding: 6px 12px; font-size: 12.5px; }
 .btn.ghost.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft, rgba(79,70,229,0.12)); }
@@ -1523,11 +1060,7 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .mini.danger-txt:hover { border-color: var(--danger, #e11d48); color: var(--danger, #e11d48); }
 .mini { font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim); cursor: pointer; }
 .mini:hover { color: var(--text); border-color: var(--accent); }
-.modal-mask { position: fixed; inset: 0; background: var(--mask); display: grid; place-items: center; z-index: 50; backdrop-filter: blur(3px); }
-.modal { width: min(380px, 92vw); background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: 16px; overflow: hidden; }
-.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--glass-border); font-weight: 600; font-size: 14px; }
 .modal-head .x { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--overlay-2); color: var(--text-dim); cursor: pointer; font-size: 16px; }
-.modal-body { padding: 14px 18px; }
 .backup-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 11px; background: var(--overlay); border: 1px solid var(--glass-border); }
 .b-name { font-size: 13.5px; font-weight: 600; }
 .b-meta { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
@@ -1546,36 +1079,8 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .btn.ghost.active { border-color: var(--accent); color: var(--accent); }
 .btn.ghost.sm { padding: 4px 10px; font-size: 12px; margin: 0; }
 .import-ta { width: 100%; resize: vertical; font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.7; }
-.dept-row { align-items: flex-start; flex-direction: column; gap: 10px; }
-.dept-head { width: 100%; justify-content: space-between; }
-.shift-cfg { width: 100%; display: flex; flex-direction: column; gap: 8px; }
-.shift-cfg-list { display: flex; gap: 6px; flex-wrap: wrap; }
-.shift-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--overlay-2); border: 1px solid var(--glass-border); color: var(--text-dim); }
 .shift-chip .mini { padding: 0 5px; font-size: 13px; line-height: 1; }
-.sc-dot { width: 14px; height: 14px; border-radius: 50%; cursor: pointer; display: inline-block; flex: none; border: 2px solid transparent; box-sizing: border-box; transition: transform 0.1s, border-color 0.1s; }
-.sc-dot:hover { transform: scale(1.15); }
-.sc-dot.on { border-color: #111827; }
-.shift-palette { display: inline-flex; align-items: center; gap: 5px; }
-.shift-palette-tip { font-size: 11px; color: var(--text-faint); margin-left: 2px; }
-/* 自定义颜色选择器（点击已建班次色点弹出） */
-.sc-color { width: 28px; height: 28px; padding: 0; border: 1px solid var(--glass-border); border-radius: 8px; background: transparent; cursor: pointer; flex: none; }
-.sc-color::-webkit-color-swatch-wrapper { padding: 2px; }
-.sc-color::-webkit-color-swatch { border: none; border-radius: 6px; }
-.shift-picker {
-  width: 100%;
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 12px;
-  margin: 4px 0 2px;
-  background: var(--overlay);
-  border: 1px solid var(--glass-border);
-  border-radius: 10px;
-}
-.shift-picker-title { font-size: 11.5px; color: var(--text-faint); }
-.shift-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shift-picker-row .fld { margin: 0; }
-.sc-hex { width: 96px; font-family: ui-monospace, SFMono-Regular, monospace; }
-.shift-none { font-size: 12px; color: var(--text-faint); }
-.shift-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shift-add .glass-input.sm { max-width: 120px; padding: 7px 10px; font-size: 13px; }
 .shift-sep { color: var(--text-faint); font-size: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
