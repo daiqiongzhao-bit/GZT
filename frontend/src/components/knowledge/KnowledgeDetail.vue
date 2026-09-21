@@ -16,7 +16,7 @@
         <p>从左侧选一条知识，或直接新建</p>
         <p class="dim">支持像 Word 一样编辑：字号 / 颜色 / 居中 / 行距 / 缩进 / 表格 / 图片缩放 / 上下标</p>
       </div>
-      <button class="btn primary sm" @click="$emit('create')">+ 新建条目</button>
+      <button v-if="canCreate" class="btn primary sm" @click="$emit('create')">+ 新建条目</button>
     </div>
 
     <template v-else>
@@ -411,6 +411,7 @@ const props = defineProps({
   parentCandidates: { type: Array, default: () => [] },
   collabCandidates: { type: Array, default: () => [] },
   canEdit: { type: Boolean, default: false },
+  canCreate: { type: Boolean, default: false },
   canSetEditors: { type: Boolean, default: false },
   isSuper: { type: Boolean, default: false },
   currentUserId: { type: [String, Number], default: 0 },

@@ -58,8 +58,8 @@
             <button class="kb-toggle" :class="{ on: kMine }" title="只看我写的" @click="kMine = !kMine; loadK()">✍</button>
           </div>
           <div class="kb-topacts">
-            <button class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
-            <button class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
+            <button v-if="canCreateK()" class="btn ghost sm" @click="openTemplates" title="从模板快速新建条目">📋 模板</button>
+            <button v-if="auth.can('knowledge:import')" class="btn ghost sm" @click="openImport" title="粘贴 Markdown 批量导入">⬇ 导入</button>
             <button
               v-if="auth.isSuper"
               class="btn ghost sm"
@@ -78,7 +78,7 @@
                 </div>
               </transition>
             </div>
-            <button class="btn primary sm" @click="openNewK">＋ 新建</button>
+            <button v-if="canCreateK()" class="btn primary sm" @click="openNewK">＋ 新建</button>
           </div>
         </div>
 
@@ -192,7 +192,7 @@
             <div v-else class="kb-empty">
               <div class="kb-empty-ico">📭</div>
               <div class="kb-empty-txt">{{ (kQuery || kCategory || kTag || kMine || kStarred || kParent) ? '没有匹配的知识条目，试试放宽筛选条件' : '还没有知识条目，点「＋ 新建」沉淀第一条吧' }}</div>
-              <button v-if="!(kQuery || kCategory || kTag || kMine || kStarred || kParent)" class="btn primary sm" @click="openNewK">＋ 新建第一条</button>
+              <button v-if="canCreateK() && !(kQuery || kCategory || kTag || kMine || kStarred || kParent)" class="btn primary sm" @click="openNewK">＋ 新建第一条</button>
             </div>
           </template>
         </div>
@@ -218,6 +218,7 @@
               :parent-candidates="parentCandidates"
               :collab-candidates="collabCandidates"
               :can-edit="!!viewK && canEditK(viewK)"
+              :can-create="canCreateK()"
               :can-set-editors="canSetEditors"
               :is-super="!!auth.isSuper"
               :current-user-id="auth.user?.id || 0"
@@ -1630,6 +1631,8 @@ function canEditK(k) {
 }
 // 管理权（删除 / 改协作者名单）：仍限创建者与超级管理员
 function canManageK(k) { return !!k && (auth.isSuper || auth.user?.id === k.owner_id) }
+// 新建权：持有 knowledge:add（后端 rbac_enforce=on 时同样会据此拦截，做到“看不到也访问不了”）
+function canCreateK() { return auth.can('knowledge:add') }
 // 协作者名单可编辑：新建时人人是创建者；编辑时看归属
 const canSetEditors = computed(() => {
   if (!auth.user) return false
