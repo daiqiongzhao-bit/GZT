@@ -194,13 +194,10 @@
         <div class="pm-head">
           <div class="pm-head-l">
             <h3>权限配置 · {{ perm.roleName }}</h3>
-            <p class="pm-sub">勾上「查看」才能进这个模块，其余动作可以再单独放开</p>
+            <p class="pm-sub">像文件目录一样逐级勾选：勾子项自动带上父级，取消父级会一并清掉子项</p>
           </div>
           <div class="pm-head-r">
-            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(true)">全选</button>
-            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(false)">全不选</button>
-            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkViewOnly()">仅保留「查看」</button>
-            <span class="pm-count">已选 <b>{{ checkedCount }}</b> / {{ permIds.length }}</span>
+            <span class="pm-count">已选 <b>{{ checkedCount }}</b> / {{ permIds.length }} 项</span>
           </div>
         </div>
 
@@ -223,70 +220,48 @@
           </div>
         </div>
 
-        <!-- 左：模块目录（带已配 / 总数） 右：该模块的页面与动作 -->
-        <div class="pm-body">
-          <aside class="pm-side">
-            <input v-model.trim="perm.kw" class="glass-input pm-search" placeholder="搜索模块 / 权限" />
-            <div class="pm-sum">
-              <span>全部模块</span>
-              <span class="pm-sum-n">{{ checkedCount }} / {{ permIds.length }}</span>
-            </div>
-            <div class="pm-modlist">
-              <button
-                v-for="g in visibleGroups"
-                :key="g.id"
-                class="pm-mod"
-                :class="{ on: activeGroup && activeGroup.id === g.id, zero: groupSelCount(g) === 0 }"
-                @click="perm.activeGroupId = g.id"
-              >
-                <span class="pm-mod-n">{{ g.name }}</span>
-                <span class="pm-mod-c">{{ groupSelCount(g) }}<template v-if="groupIds(g).length !== groupSelCount(g) || groupSelCount(g) === 0">/{{ groupIds(g).length }}</template></span>
-              </button>
-              <p v-if="!visibleGroups.length" class="pm-none">没有匹配「{{ perm.kw }}」的模块</p>
-            </div>
-            <p class="pm-side-tip">灰显 = 该模块一项未配</p>
-          </aside>
-
-          <div class="pm-main">
-            <template v-if="activeGroup">
-              <div class="pm-gh">
-                <div class="pm-gh-l">
-                  <button
-                    class="pm-gh-all"
-                    :disabled="perm.superLock"
-                    @click="toggleGroup(activeGroup, !groupAllChecked(activeGroup))"
-                  >{{ groupAllChecked(activeGroup) ? '取消全选' : '全选本模块' }}</button>
-                  <span class="pm-gh-name">{{ activeGroup.name }}</span>
-                </div>
-                <span class="pm-bar-wrap">
-                  <span class="rl-bar"><i :style="{ width: groupPct(activeGroup) + '%' }"></i></span>
-                  <span class="rl-bar-n">已选 {{ groupSelCount(activeGroup) }} / {{ groupIds(activeGroup).length }}</span>
-                </span>
-              </div>
-
-              <div class="pm-pages">
-                <div v-for="p in activeGroup.pages" :key="p.id" class="pm-page">
-                  <p class="pm-page-name">
-                    {{ p.name }}
-                    <span v-if="!perm.checked.has(p.id)" class="pm-page-off">未开通入口</span>
-                  </p>
-                  <div class="pm-acts">
-                    <button
-                      v-for="a in p.actions"
-                      :key="a.id"
-                      class="pm-act"
-                      :class="{ on: perm.checked.has(a.id), del: a.kind === 'remove', lock: perm.superLock }"
-                      :title="KIND_DESC[a.kind]"
-                      :disabled="perm.superLock"
-                      @click="toggleAction(p, a, !perm.checked.has(a.id))"
-                    >{{ a.isPage ? '查看' : a.name }}</button>
-                    <span v-if="!p.actions.length" class="dim">该页面无细分动作</span>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <div v-else class="empty">左侧没有可配置的模块</div>
+        <!-- 权限树：目录 / 菜单 / 按钮逐级勾选（对齐「桌面端菜单权限」的直接交互） -->
+        <div class="pm-tools">
+          <input v-model.trim="perm.kw" class="glass-input pm-search" placeholder="搜索菜单 / 权限标识" />
+          <div class="pm-tools-r">
+            <button class="btn ghost sm" @click="expandAll(true)">全部展开</button>
+            <button class="btn ghost sm" @click="expandAll(false)">全部折叠</button>
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(true)">全选</button>
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkAll(false)">全不选</button>
+            <button class="btn ghost sm" :disabled="perm.superLock" @click="checkViewOnly()">仅保留「查看」</button>
           </div>
+        </div>
+
+        <div class="ptree">
+          <div
+            v-for="n in visibleTree"
+            :key="n.id"
+            class="pt-row"
+            :class="{ 'pt-f': n.type === 'F', 'pt-m': n.type === 'M' }"
+            :style="{ paddingLeft: n.depth * 22 + 'px' }"
+          >
+            <button
+              v-if="n.children.length"
+              class="pt-tri"
+              :title="permExpanded.has(n.id) ? '折叠' : '展开'"
+              @click="toggleExpand(n.id)"
+            >{{ permExpanded.has(n.id) ? '▾' : '▸' }}</button>
+            <span v-else class="pt-tri-ph"></span>
+            <label class="pt-lab">
+              <input
+                type="checkbox"
+                class="adm-check"
+                :checked="perm.checked.has(n.id)"
+                :indeterminate.prop="isHalf(n)"
+                :disabled="perm.superLock"
+                @change="toggleNode(n, $event.target.checked)"
+              />
+              <span class="pt-name">{{ n.name }}</span>
+              <span v-if="n.type === 'F'" class="kind-badge" :class="'k-' + n.kind" :title="KIND_DESC[n.kind]">{{ KIND_LABEL[n.kind] }}</span>
+              <span v-if="n.type === 'F' && n.perms" class="pt-perms">{{ n.perms }}</span>
+            </label>
+          </div>
+          <p v-if="!visibleTree.length" class="pm-none">没有匹配「{{ perm.kw }}」的菜单或权限</p>
         </div>
 
         <div class="adm-modal-foot">
@@ -331,11 +306,6 @@ function barPct(r) {
   const t = barTotal.value
   if (!t) return 0
   return Math.min(100, Math.round(((r.menu_count || 0) / t) * 100))
-}
-function groupPct(g) {
-  const ids = groupIds(g)
-  if (!ids.length) return 0
-  return Math.round((groupSelCount(g) / ids.length) * 100)
 }
 
 // ---------------------------------------------------------------- 权限类型
@@ -527,116 +497,139 @@ async function doDelete(r) {
   } catch (e) { alert(errMsg(e, '删除失败')) }
 }
 
-// ---------------------------------------------------------------- 权限矩阵
-const KIND_RANK = (k) => {
-  const i = KIND_ORDER.indexOf(k)
-  return i < 0 ? KIND_ORDER.length : i
+// ---------------------------------------------------------------- 权限树
+const perm = reactive({
+  show: false, roleId: 0, roleName: '', superLock: false,
+  checked: new Set(), kw: '', dirty: false
+})
+const permNodes = ref([])           // 嵌套树：目录(M) / 菜单(C) / 按钮(F) 同构渲染
+const permExpanded = ref(new Set()) // 已展开的目录 / 菜单节点 id
+
+/** 把扁平菜单列表还原成嵌套树（flattenTree 已补 parent_id） */
+function buildNodes(flat) {
+  const byId = new Map()
+  const roots = []
+  for (const n of flat) {
+    byId.set(n.id, {
+      id: n.id, name: n.name, type: n.type, perms: n.perms,
+      kind: kindOf(n.perms), parentId: n.parent_id ?? 0, children: []
+    })
+  }
+  for (const n of byId.values()) {
+    const p = byId.get(n.parentId)
+    if (p) p.children.push(n)
+    else roots.push(n)
+  }
+  return roots
+}
+
+function subtreeHasChecked(n) {
+  if (perm.checked.has(n.id)) return true
+  return n.children.some(subtreeHasChecked)
+}
+/** 有已勾选子孙的节点默认展开：打开弹窗就能看到现有权限都配在哪 */
+function expandWithChecked(nodes, s) {
+  for (const n of nodes) {
+    if (n.children.length && subtreeHasChecked(n)) s.add(n.id)
+    expandWithChecked(n.children, s)
+  }
+}
+
+function subtreeHit(n, kw) {
+  if (String(n.name || '').toLowerCase().includes(kw)) return true
+  if (String(n.perms || '').toLowerCase().includes(kw)) return true
+  return n.children.some((c) => subtreeHit(c, kw))
+}
+
+/** 渲染列表：无搜索时按展开状态裁剪；有搜索时命中路径强制全展开 */
+const visibleTree = computed(() => {
+  const kw = perm.kw.trim().toLowerCase()
+  const rows = []
+  const walk = (nodes, depth, chainOpen) => {
+    for (const n of nodes) {
+      if (kw) {
+        if (!subtreeHit(n, kw)) continue
+        rows.push({ ...n, depth })
+        walk(n.children, depth + 1, true)
+      } else {
+        rows.push({ ...n, depth })
+        if (chainOpen && n.children.length) walk(n.children, depth + 1, permExpanded.value.has(n.id))
+      }
+    }
+  }
+  walk(permNodes.value, 0, true)
+  return rows
+})
+
+function toggleExpand(id) {
+  const s = new Set(permExpanded.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  permExpanded.value = s
+}
+function expandAll(on) {
+  const s = new Set()
+  if (on) {
+    const walk = (nodes) => {
+      for (const n of nodes) {
+        if (n.children.length) { s.add(n.id); walk(n.children) }
+      }
+    }
+    walk(permNodes.value)
+  }
+  permExpanded.value = s
+}
+
+function descIds(n) {
+  const out = []
+  const walk = (x) => {
+    for (const c of x.children) { out.push(c.id); walk(c) }
+  }
+  walk(n)
+  return out
+}
+function anyDescChecked(n) {
+  return perm.checked.has(n.id) || n.children.some(anyDescChecked)
+}
+/** 半选态：自身未勾，但有子孙被勾（复选框显示横线） */
+function isHalf(n) {
+  return !perm.checked.has(n.id) && anyDescChecked(n)
 }
 
 /**
- * 把后端的嵌套菜单树压成「模块 → 页面 → 动作」三级矩阵。
- *
- * - 模块：menu_type=M 的目录；顶级 C（如「首页」）自身也算一个模块
- * - 页面：menu_type=C 的菜单节点，其 perms 就是"能不能进这个页面"
- * - 动作：menu_type=F 的按钮节点，挂到最近的 C 祖先下
+ * 树上单个节点的勾选：
+ *  - 勾：自动补齐祖先目录 + 级联勾选全部子孙（勾目录 = 整块开通）
+ *  - 取消：连同全部子孙一起摘掉（父级都关了，子项没有意义）
  */
-function buildMatrix(flat) {
-  const byId = new Map(flat.map((x) => [x.id, x]))
-  const groupMap = new Map()
-
-  const rootGroupOf = (menuId) => {
-    let cur = byId.get(menuId)
-    let guard = 0
-    while (cur && guard++ < 32) {
-      if (cur.type === 'M') return cur.id
-      const p = byId.get(cur.parent_id ?? 0)
-      if (!p) return cur.id // 顶级页面：自己成为一个"模块"
-      cur = p
-    }
-    return menuId
+function toggleNode(n, on) {
+  if (perm.superLock) return
+  const s = new Set(perm.checked)
+  if (on) {
+    withAncestors(s, n.id)
+    s.add(n.id)
+    for (const d of descIds(n)) s.add(d)
+  } else {
+    s.delete(n.id)
+    for (const d of descIds(n)) s.delete(d)
   }
-  const ensureGroup = (id) => {
-    if (!groupMap.has(id)) {
-      const m = byId.get(id) || {}
-      groupMap.set(id, { id, name: m.name || '其他', order: m.order_num ?? 0, pages: [], pageMap: new Map() })
-    }
-    return groupMap.get(id)
-  }
-
-  for (const n of flat) {
-    if (n.type === 'M') { ensureGroup(n.id); continue }
-    if (n.type !== 'C') continue
-    const g = ensureGroup(rootGroupOf(n.id))
-    if (!g.pageMap.has(n.id)) {
-      const page = { id: n.id, name: n.name, perms: n.perms, actions: [] }
-      g.pageMap.set(n.id, page)
-      g.pages.push(page)
-    }
-  }
-
-  for (const n of flat) {
-    if (n.type !== 'F') continue
-    let cur = byId.get(n.parent_id ?? 0)
-    let guard = 0
-    let page = null
-    while (cur && guard++ < 32) {
-      if (cur.type === 'C') {
-        const g = groupMap.get(rootGroupOf(cur.id))
-        page = g ? g.pageMap.get(cur.id) : null
-        break
-      }
-      cur = byId.get(cur.parent_id ?? 0)
-    }
-    if (!page) continue
-    page.actions.push({ id: n.id, name: n.name, perms: n.perms, kind: kindOf(n.perms) })
-  }
-
-  const out = []
-  for (const g of groupMap.values()) {
-    for (const p of g.pages) {
-      if (p.perms) {
-        // 页面自身的 perms 就是"查看"，排到最前面
-        p.actions.unshift({ id: p.id, name: p.name, perms: p.perms, kind: kindOf(p.perms), isPage: true })
-      }
-      p.actions.sort((a, b) => KIND_RANK(a.kind) - KIND_RANK(b.kind))
-    }
-    out.push(g)
-  }
-  out.sort((a, b) => (a.order || 0) - (b.order || 0))
-  return out
+  perm.checked = s
+  perm.dirty = true
 }
-
-const perm = reactive({
-  show: false, roleId: 0, roleName: '', superLock: false,
-  checked: new Set(), kw: '', dirty: false,
-  activeGroupId: 0
-})
-const groups = ref([])
 
 const permIds = computed(() => {
   const ids = []
-  for (const g of groups.value) for (const p of g.pages) { ids.push(p.id); for (const a of p.actions) ids.push(a.id) }
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      // 只统计"权限节点"（菜单 C + 按钮 F），目录 M 不计入，避免 N/N+3 的怪数字
+      if (n.type !== 'M') ids.push(n.id)
+      walk(n.children)
+    }
+  }
+  walk(permNodes.value)
   return [...new Set(ids)]
 })
 // 已选计数只统计"权限节点"（页面 + 动作），模块目录节点不计入，避免出现 N/N+3 的怪数字
 const checkedCount = computed(() => permIds.value.filter((id) => perm.checked.has(id)).length)
-
-/** 左侧模块目录：搜索时按「模块名 / 页面名 / 动作名 / 权限标识」命中过滤 */
-const visibleGroups = computed(() => {
-  const kw = perm.kw.trim().toLowerCase()
-  if (!kw) return groups.value
-  const hit = (s) => String(s || '').toLowerCase().includes(kw)
-  return groups.value.filter((g) =>
-    hit(g.name) ||
-    g.pages.some((p) => hit(p.name) || hit(p.perms) || p.actions.some((a) => hit(a.name) || hit(a.perms)))
-  )
-})
-
-/** 右侧当前模块：选中项若被搜索过滤掉，自动回退到第一个 */
-const activeGroup = computed(() => {
-  const list = visibleGroups.value
-  return list.find((g) => g.id === perm.activeGroupId) || list[0] || null
-})
 
 async function openPerm(r) {
   try {
@@ -644,17 +637,17 @@ async function openPerm(r) {
     const flat = flattenTree(d.tree || [])
     treeFlat.value = flat
     ancMap.value = ancestorsMap(flat)
-    groups.value = buildMatrix(flat)
+    permNodes.value = buildNodes(flat)
     const checkedSet = new Set(d.checked_ids || [])
     Object.assign(perm, {
       show: true, roleId: r.id, roleName: r.role_name,
       superLock: !!d.super_lock, checked: checkedSet,
       kw: '', dirty: false
     })
-    // 默认停在"配得最多"的模块；一个都没配时停在第一个，避免打开就是空白
-    const idsAll = (g) => groupIds(g)
-    const firstAuthed = groups.value.find((g) => idsAll(g).some((id) => checkedSet.has(id)))
-    perm.activeGroupId = (firstAuthed || groups.value[0] || { id: 0 }).id
+    // 已授权的分支默认展开，打开就能看到这个角色的权限都配在哪
+    const es = new Set()
+    expandWithChecked(permNodes.value, es)
+    permExpanded.value = es
     permTotal.value = permIds.value.length
   } catch (e) { alert(errMsg(e, '加载权限树失败')) }
 }
@@ -669,59 +662,6 @@ function withAncestors(s, id) {
   return s
 }
 
-function groupIds(g) {
-  const ids = []
-  for (const p of g.pages) { ids.push(p.id); for (const a of p.actions) ids.push(a.id) }
-  return [...new Set(ids)]
-}
-function groupSelCount(g) { return groupIds(g).filter((id) => perm.checked.has(id)).length }
-function groupAllChecked(g) {
-  const ids = groupIds(g)
-  return ids.length > 0 && ids.every((id) => perm.checked.has(id))
-}
-function groupPartial(g) {
-  const n = groupSelCount(g)
-  return n > 0 && n < groupIds(g).length
-}
-
-function toggleGroup(g, on) {
-  if (perm.superLock) return
-  const s = new Set(perm.checked)
-  for (const p of g.pages) {
-    const ids = [p.id, ...p.actions.map((a) => a.id)]
-    for (const id of ids) {
-      if (on) withAncestors(s, id)
-      else s.delete(id)
-    }
-  }
-  // 整组取消时，把该模块的目录节点也摘掉（否则 role_menus 里会留下孤立的目录行）
-  if (!on) s.delete(g.id)
-  perm.checked = s
-  perm.dirty = true
-}
-
-/**
- * 单个动作的勾选。
- * 约束（产品层，避免出现自相矛盾的授权）：
- *  - 勾任意动作 → 自动补上该页面的「查看」与祖先目录
- *  - 取消页面的「查看」→ 清掉该页面所有动作（页面都进不去了，动作没有意义）
- */
-function toggleAction(p, a, on) {
-  if (perm.superLock) return
-  const s = new Set(perm.checked)
-  if (on) {
-    withAncestors(s, a.id)
-    withAncestors(s, p.id)
-  } else if (a.isPage) {
-    s.delete(p.id)
-    for (const x of p.actions) s.delete(x.id)
-  } else {
-    s.delete(a.id)
-  }
-  perm.checked = s
-  perm.dirty = true
-}
-
 function checkAll(on) {
   if (perm.superLock) return
   if (!on) { perm.checked = new Set(); perm.dirty = true; return }
@@ -734,10 +674,17 @@ function checkAll(on) {
 function checkViewOnly() {
   if (perm.superLock) return
   const s = new Set()
-  for (const g of groups.value) for (const p of g.pages) {
-    const view = p.actions.find((a) => a.isPage)
-    if (view) withAncestors(s, view.id)
+  const walk = (nodes) => {
+    for (const n of nodes) {
+      // 菜单入口(C)与查看类按钮(F)保留，其余动作全部摘掉
+      if (n.type === 'C' || (n.type === 'F' && kindOf(n.perms) === 'view')) {
+        withAncestors(s, n.id)
+        s.add(n.id)
+      }
+      walk(n.children)
+    }
   }
+  walk(permNodes.value)
   perm.checked = s
   perm.dirty = true
 }
@@ -826,67 +773,31 @@ onMounted(async () => {
 .k-config { color: #4b5563; }
 .k-other { color: #6b7280; }
 
-/* 左：模块目录  右：动作面板 */
-.pm-body {
-  display: flex; height: 54vh; min-height: 320px; margin-top: 10px;
-  border: 1px solid var(--glass-border); border-radius: 10px; overflow: hidden;
+/* ---- 权限树 ---- */
+.pm-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.pm-search { width: 210px; font-size: 12.5px; }
+.pm-tools-r { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ptree {
+  height: 54vh; min-height: 320px; overflow: auto; margin-top: 8px;
+  border: 1px solid var(--glass-border); border-radius: 10px;
+  padding: 8px 6px; background: var(--overlay);
 }
-.pm-side {
-  width: 172px; flex: none; display: flex; flex-direction: column;
-  border-right: 1px solid var(--glass-border); background: var(--overlay);
+.pt-row { display: flex; align-items: center; border-radius: 7px; padding: 1px 6px 1px 2px; }
+.pt-row:hover { background: var(--overlay-2, rgba(127,127,127,0.08)); }
+.pt-tri {
+  width: 20px; height: 20px; flex: none; border: 0; background: transparent; cursor: pointer;
+  color: var(--text-faint); font-size: 11px; line-height: 20px; padding: 0; text-align: center;
 }
-.pm-search { margin: 10px 10px 6px; font-size: 12.5px; }
-.pm-sum {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-  padding: 4px 12px 8px; font-size: 12px; color: var(--text-faint);
-  border-bottom: 1px solid var(--glass-border);
+.pt-tri:hover { color: var(--accent); }
+.pt-tri-ph { width: 20px; flex: none; }
+.pt-lab { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; padding: 2px 0; min-width: 0; }
+.pt-name { font-size: 12.8px; color: var(--text); white-space: nowrap; }
+.pt-m .pt-name { font-weight: 600; }
+.pt-f .pt-name { font-size: 12.3px; color: var(--text-dim); }
+.pt-perms {
+  font-size: 10.5px; color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
-.pm-sum-n { font-variant-numeric: tabular-nums; }
-.pm-modlist { flex: 1; overflow: auto; padding: 6px; }
-.pm-mod {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 8px; margin-bottom: 1px; border: 0; border-radius: 7px; cursor: pointer;
-  background: transparent; color: var(--text-dim); font-size: 12.5px; text-align: left;
-}
-.pm-mod:hover { background: var(--overlay-2, rgba(127,127,127,0.08)); }
-.pm-mod.on { background: var(--accent-soft); color: var(--accent); }
-.pm-mod-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-mod-c { flex: none; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
-.pm-mod.on .pm-mod-c { color: var(--accent); }
-.pm-mod.zero { color: var(--text-faint); }
-.pm-mod.zero.on { color: var(--accent); }
+.pt-row .kind-badge { flex: none; }
 .pm-none { margin: 10px 6px; font-size: 12px; color: var(--text-faint); }
-.pm-side-tip { margin: 0; padding: 8px 12px; border-top: 1px solid var(--glass-border); font-size: 11px; color: var(--text-faint); }
-
-.pm-main { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px; }
-.pm-gh {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--glass-border);
-}
-.pm-gh-l { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.pm-gh-all {
-  flex: none; padding: 3px 9px; border-radius: 7px; cursor: pointer; font-size: 12px;
-  border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim);
-}
-.pm-gh-all:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.pm-gh-all:disabled { cursor: not-allowed; color: var(--text-faint); }
-.pm-gh-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.pm-pages { padding-top: 6px; }
-.pm-page + .pm-page { margin-top: 14px; }
-.pm-page-name { margin: 0 0 7px; font-size: 12.5px; color: var(--text-dim); }
-.pm-page-off {
-  margin-left: 7px; padding: 1px 6px; border-radius: 5px;
-  background: var(--overlay-2, var(--overlay)); font-size: 11px; color: var(--text-faint);
-}
-.pm-acts { display: flex; flex-wrap: wrap; gap: 7px; }
-.pm-act {
-  padding: 4px 11px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
-  border: 1px solid var(--glass-border); background: transparent; color: var(--text-dim);
-}
-.pm-act:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.pm-act.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.pm-act.del { border-color: rgba(220, 38, 38, 0.4); color: #dc2626; }
-.pm-act.del:hover:not(:disabled) { border-color: #dc2626; color: #dc2626; }
-.pm-act.del.on { background: rgba(220, 38, 38, 0.12); border-color: #dc2626; color: #dc2626; }
-.pm-act.lock { opacity: 0.72; cursor: not-allowed; }
 </style>
