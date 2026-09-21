@@ -63,10 +63,10 @@
           <option :value="0">全部部门</option>
           <option v-for="d in deptOptions(departments)" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
         </select>
-        <button v-if="auth.canManage" class="btn primary" @click="toggleAdd" v-html="icons.plus + ' 新建任务'"></button>
-        <button v-if="auth.canManage" class="btn ghost" :disabled="importing" @click="showImport = !showImport">{{ importing ? '导入中…' : '导入任务' }}</button>
-        <button v-if="auth.canManage" class="btn ghost" :class="{ active: batchMode }" @click="toggleBatch">{{ batchMode ? '退出批量' : '批量操作' }}</button>
-        <button v-if="auth.canManage" class="btn ghost" :disabled="exporting" @click="exportTasks">{{ exporting ? '导出中…' : '⬇ 导出' }}</button>
+        <button v-if="auth.canManage && auth.can('task:add')" class="btn primary" @click="toggleAdd" v-html="icons.plus + ' 新建任务'"></button>
+        <button v-if="auth.canManage && auth.can('task:import')" class="btn ghost" :disabled="importing" @click="showImport = !showImport">{{ importing ? '导入中…' : '导入任务' }}</button>
+        <button v-if="auth.canManage && auth.can('task:edit')" class="btn ghost" :class="{ active: batchMode }" @click="toggleBatch">{{ batchMode ? '退出批量' : '批量操作' }}</button>
+        <button v-if="auth.canManage && auth.can('task:export')" class="btn ghost" :disabled="exporting" @click="exportTasks">{{ exporting ? '导出中…' : '⬇ 导出' }}</button>
         <button v-if="auth.canManage" class="btn ghost" :disabled="notifying" @click="sendNotify">{{ notifying ? '发送中…' : '📣 发送今日提醒' }}</button>
       </div>
     </div>

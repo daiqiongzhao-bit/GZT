@@ -102,7 +102,7 @@
         <button class="btn primary" @click="downloadAuth('templates/schedule-template')">⬇ 班表模板（Excel 矩阵）</button>
         <button class="btn primary" @click="downloadAuth('templates/task-template')">⬇ 任务模板（每日+月度）</button>
         <button class="btn primary" @click="downloadAuth('templates/user-template')">⬇ 人员导入模板</button>
-        <button class="btn ghost" @click="exportTasks">⬇ 导出当前任务</button>
+        <button v-if="auth.can('task:export')" class="btn ghost" @click="exportTasks">⬇ 导出当前任务</button>
       </div>
       <p class="hint" style="font-size:12.5px;color:var(--text-dim);margin-top:10px;line-height:1.7;">
         班表模板：人×日期矩阵，每人一行，第 1~31 列填 早/中/晚/夜/休；右上角「信息」表填部门与年月。<br>
@@ -242,7 +242,7 @@
 
     <!-- 操作审计日志 -->
     <section v-if="tab === 'log' && auth.canManage" class="panel">
-      <h3 class="section-title">操作审计日志 <button class="btn ghost sm" style="margin-left:auto" @click="exportLogs">⬇ 导出 CSV</button></h3>
+      <h3 class="section-title">操作审计日志 <button v-if="auth.can('system:log:export')" class="btn ghost sm" style="margin-left:auto" @click="exportLogs">⬇ 导出 CSV</button></h3>
       <div v-if="auth.isSuper" class="retention-bar">
         <label class="fld" style="margin:0;">日志保留</label>
         <input v-model.number="logRetention" type="number" min="0" max="3650" class="glass-input" style="max-width:110px;" />
@@ -287,7 +287,7 @@
     <!-- 系统运行日志（仅管理员） -->
     <section v-if="tab === 'syslog' && auth.canManage" class="panel">
       <h3 class="section-title">系统运行日志 <span class="section-sub">服务端运行期事件 / panic / 5xx / 调度失败，用于排查崩溃</span>
-        <button class="btn ghost sm" style="margin-left:auto" @click="exportSysLogs">⬇ 导出 Excel</button>
+        <button v-if="auth.can('system:log:export')" class="btn ghost sm" style="margin-left:auto" @click="exportSysLogs">⬇ 导出 Excel</button>
       </h3>
       <div class="log-filter">
         <select v-model="sysFilter.level" class="glass-input" @change="sysPage = 0; loadSysLogs()">

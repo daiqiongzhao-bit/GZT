@@ -2,6 +2,7 @@ package system
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"shiftworkbench/internal/models"
@@ -365,12 +366,18 @@ func (h *H) UpdateRoleMenu(c *gin.Context) {
 			return
 		}
 	}
+	// v0.40.7 最小权限不变量（服务端强制）：勾选任一按钮/子页面，必须同时带上其全部祖先节点。
+	// 动机：C 页面节点承载页面级 perms（如 knowledge:view），F 按钮承载动作 perms（如 knowledge:export）。
+	// 若只勾 F 不勾 C，会出现"有导出、没读取"的角色——用户既进不了页面也用不了该动作（权限缺失）。
+	// 此前该约束只靠前端勾选行为（withAncestors）保障，直连 API 可绕过；这里在保存侧统一补全，
+	// 保证「导出必须同时具备读取权限」在任何调用方式下都成立。补全只会"加"节点，不会放大权限。
+	menuIDs := h.completeMenuAncestors(req.MenuIDs)
 	before := h.roleMenuIDs(req.RoleID)
 	err := rbac.WithWrite(h.DB, func(tx *gorm.DB) error {
 		if err := tx.Where("role_id = ?", r.ID).Delete(&models.SysRoleMenu{}).Error; err != nil {
 			return err
 		}
-		for _, mid := range req.MenuIDs {
+		for _, mid := range menuIDs {
 			if err := tx.Create(&models.SysRoleMenu{RoleID: r.ID, MenuID: mid}).Error; err != nil {
 				return err
 			}
@@ -383,8 +390,47 @@ func (h *H) UpdateRoleMenu(c *gin.Context) {
 		return
 	}
 	writeAudit(c, "role", r.ID, r.RoleName, "update_menu",
-		gin.H{"menu_ids": before}, gin.H{"menu_ids": req.MenuIDs})
-	ok(c, gin.H{"count": len(req.MenuIDs)})
+		gin.H{"menu_ids": before}, gin.H{"menu_ids": menuIDs})
+	ok(c, gin.H{"count": len(menuIDs)})
+}
+
+// completeMenuAncestors 对请求里的菜单 id 做"祖先补全 + 去重 + 剔除未知 id"。
+// 只会向集合里添加已选节点的祖先（M 目录不承载 perms，C 页面承载页面 perms），
+// 因此结果集恒满足：选中节点 ⊆ 请求节点 ∪ 其祖先，不存在越权放大。
+func (h *H) completeMenuAncestors(ids []uint) []uint {
+	if len(ids) == 0 {
+		return ids
+	}
+	var all []models.SysMenu
+	if err := h.DB.Select("id, parent_id").Find(&all).Error; err != nil {
+		// 查询失败时按原样保存（保守：不加也不删，避免把可用保存变成硬失败）
+		return ids
+	}
+	parent := make(map[uint]uint, len(all))
+	valid := make(map[uint]bool, len(all))
+	for _, m := range all {
+		parent[m.ID] = m.ParentID
+		valid[m.ID] = true
+	}
+	set := make(map[uint]bool, len(ids))
+	for _, id := range ids {
+		if !valid[id] {
+			continue // 未知菜单 id 直接丢弃，防止写入悬空 role_menus 行
+		}
+		set[id] = true
+		for p := parent[id]; p > 0; p = parent[p] {
+			if set[p] {
+				break // 已收进集合（也顺带防脏数据成环）
+			}
+			set[p] = true
+		}
+	}
+	out := make([]uint, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func (h *H) roleMenuIDs(roleID uint) []uint {

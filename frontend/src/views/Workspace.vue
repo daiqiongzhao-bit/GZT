@@ -66,7 +66,7 @@
               title="把当前可见的知识/日志/交接及附件打包成一个 zip，便于备份或迁移（仅超级管理员）"
               @click="exportBundle"
             >📦 打包 zip</button>
-            <div class="kb-menu-wrap" @click.stop>
+            <div v-if="auth.can('knowledge:export')" class="kb-menu-wrap" @click.stop>
               <button class="btn ghost sm" :aria-expanded="exportMenu ? 'true' : 'false'" @click="exportMenu = !exportMenu">
                 ⬆ 导出 <i class="caret">▾</i>
               </button>
@@ -340,9 +340,9 @@
           </h3>
           <div class="head-actions">
             <button class="btn ghost sm" @click="logStatsOpen = !logStatsOpen">{{ logStatsOpen ? '收起统计' : '📊 统计' }}</button>
-            <button class="btn ghost sm" @click="exportLogs" title="按当前筛选条件导出 CSV（Excel 可直接打开）">⬆ 导出</button>
-            <button v-if="!editingLog" class="btn primary" @click="openNewLog">+ 写一篇</button>
-            <button v-else class="btn ghost" @click="cancelEditLog">收起</button>
+            <button v-if="auth.can('worklog:export')" class="btn ghost sm" @click="exportLogs" title="按当前筛选条件导出 CSV（Excel 可直接打开）">⬆ 导出</button>
+            <button v-if="!editingLog && auth.can('worklog:add')" class="btn primary" @click="openNewLog">+ 写一篇</button>
+            <button v-else-if="editingLog" class="btn ghost" @click="cancelEditLog">收起</button>
           </div>
         </div>
 
@@ -428,10 +428,10 @@
               <span v-if="l.handover_count" class="chip tiny ok">已转交接</span>
               <span class="ops">
                 <button class="del" @click="toggleLogAttach(l)">{{ logAttachOpen === l.id ? '收起附件' : '📎 附件' }}</button>
-                <button v-if="l.pending && l.owner_id === auth.user?.id" class="del" @click="openLogHandover(l)" title="把「还没做完的」一键转成交接单">转交接</button>
+                <button v-if="l.pending && l.owner_id === auth.user?.id && auth.can('worklog:handover')" class="del" @click="openLogHandover(l)" title="把「还没做完的」一键转成交接单">转交接</button>
                 <template v-if="l.owner_id === auth.user?.id">
-                  <button class="del" @click="openEditLog(l)">编辑</button>
-                  <button class="del danger" @click="removeLog(l)">删除</button>
+                  <button v-if="auth.can('worklog:edit')" class="del" @click="openEditLog(l)">编辑</button>
+                  <button v-if="auth.can('worklog:remove')" class="del danger" @click="removeLog(l)">删除</button>
                 </template>
               </span>
             </div>
@@ -661,8 +661,8 @@
                 <span class="ops">
                   <button class="del" @click="toggleHTimeline(h)">{{ hTimelineOpen === h.id ? '收起轨迹' : '处理轨迹' }}<template v-if="h.event_count"> ({{ h.event_count }})</template></button>
                   <button class="del" @click="toggleHAttach(h)">{{ hAttachOpen === h.id ? '收起附件' : '📎 附件' }}</button>
-                  <button v-if="isSenderOf(h) && h.status !== 'done'" class="del" @click="urgeH(h)" title="提醒接收人尽快处理">催办</button>
-                  <button v-if="h.sender_id === auth.user?.id" class="del danger" @click="removeH(h)">删除</button>
+                  <button v-if="isSenderOf(h) && h.status !== 'done' && auth.can('handover:urge')" class="del" @click="urgeH(h)" title="提醒接收人尽快处理">催办</button>
+                  <button v-if="h.sender_id === auth.user?.id && auth.can('handover:remove')" class="del danger" @click="removeH(h)">删除</button>
                 </span>
               </div>
               <div class="h-meta dim">

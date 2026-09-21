@@ -12,9 +12,9 @@
           <option v-if="auth.isSuper" :value="0">— 请选择部门 —</option>
           <option v-for="d in importDeptOptions" :key="d.id" :value="d.id">{{ indentOf(d.depth) + d.name }}</option>
         </select>
-        <button v-if="auth.canManage" class="btn ghost" :disabled="sImporting" @click="$refs.schedFile.click()">{{ sImporting ? '导入中…' : '⬆ 导入班表' }}</button>
-        <button v-if="auth.canManage" class="btn ghost" :disabled="sExporting" @click="exportSchedules">{{ sExporting ? '导出中…' : '⬇ 导出' }}</button>
-        <button v-if="auth.canManage" class="btn primary" @click="openAdd(null)" v-html="icons.plus + ' 新增排班'"></button>
+        <button v-if="auth.canManage && auth.can('schedule:import')" class="btn ghost" :disabled="sImporting" @click="$refs.schedFile.click()">{{ sImporting ? '导入中…' : '⬆ 导入班表' }}</button>
+        <button v-if="auth.canManage && auth.can('schedule:export')" class="btn ghost" :disabled="sExporting" @click="exportSchedules">{{ sExporting ? '导出中…' : '⬇ 导出' }}</button>
+        <button v-if="auth.canManage && auth.can('schedule:edit')" class="btn primary" @click="openAdd(null)" v-html="icons.plus + ' 新增排班'"></button>
         <input ref="schedFile" type="file" accept=".xlsx,.csv" style="display:none" @change="uploadScheduleCSV" />
       </div>
     </div>
