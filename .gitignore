@@ -22,3 +22,7 @@ __pycache__/
 *.pyc
 *.pyo
 vapid.json
+
+# npm lock 误产物（本项目管理器为 pnpm，锁文件是 pnpm-lock.yaml；
+# 混入会让 release.sh 的「工作区干净」前置检查失败）
+package-lock.json
