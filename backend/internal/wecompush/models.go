@@ -34,6 +34,12 @@ type WpTask struct {
 	MsgTitle   string `gorm:"size:200" json:"msg_title"`   // 消息前缀
 	EmptyText  string `gorm:"size:500" json:"empty_text"`  // 0 条时的提示语
 
+	// v0.40.8 模板化（空 = 兼容上面的前缀拼接逻辑）：
+	// FileTpl 文件名模板，可用变量 {date} {task} {prefix}，如「满25天明细_{date}」
+	// MsgTemplate 消息模板，可用变量 {title} {date} {count} {filename} {task}
+	FileTpl     string `gorm:"size:200" json:"file_name_template"`
+	MsgTemplate string `gorm:"size:1000" json:"msg_template"`
+
 	// 投递
 	GroupName string `gorm:"size:120" json:"group_name"`
 	SendTime  string `gorm:"size:8" json:"send_time"` // HH:MM

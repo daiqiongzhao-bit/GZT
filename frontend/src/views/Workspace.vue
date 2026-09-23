@@ -249,6 +249,7 @@
               :can-del-att="canDelAtt"
               @start-edit="startEditK"
               @cancel-edit="cancelEditK"
+              @close="onKbClose"
               @submit="saveK"
               @create="openNewK"
               @star="toggleStar"
@@ -1237,6 +1238,15 @@ const kbParentFlat = computed(() => {
   return out
 })
 function closeKDrawer() { editingK.value = false; viewK.value = null }
+// v0.40.8：详情「← 返回」统一出口。编辑态若有未保存改动，先二次确认再丢弃关闭；
+// 阅读态直接关抽屉回到列表。同时兜底把草稿脏标记清掉，避免残留误触发离开拦截。
+function onKbClose() {
+  if (editingK.value && kHasUnsaved.value) {
+    if (!confirm('有未保存的修改，确定返回并放弃吗？')) return
+  }
+  closeKDrawer()
+  kHasUnsaved.value = false
+}
 
 async function loadCats() {
   try { categories.value = await api.get('/workspace/knowledge/categories') } catch {}
@@ -2212,6 +2222,12 @@ watch(selectedKId, (id) => {
 
 // 草稿安全网（v0.31.0）：Ctrl/Cmd+S 保存、离开前拦截、切后台前落盘
 function onKbKeydown(e) {
+  // v0.40.8：详情/编辑态按 Esc 等同于「← 返回」（编辑态带未保存二次确认）
+  if (e.key === 'Escape' && (viewK.value || editingK.value)) {
+    e.preventDefault()
+    onKbClose()
+    return
+  }
   if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
     if (editingK.value) { e.preventDefault(); saveK() }
   }

@@ -41,4 +41,5 @@ func RegisterRoutes(rg *gin.RouterGroup, h *H) {
 	g.GET("/tasks/:id/sql", h.PreviewSQL)
 
 	g.GET("/logs", h.ListLogs)
+	g.GET("/files/:name", h.DownloadFile) // v0.40.8：运行日志附件下载
 }

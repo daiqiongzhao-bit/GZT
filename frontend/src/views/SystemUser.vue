@@ -152,7 +152,9 @@
                        分配角色 / 重置密码 / 解锁 / 强制下线 / 禁用 / 删除 都是"改这个用户"的一部分，
                        全部收进「编辑」弹窗 —— 一行 4 个按钮既难扫读，也容易误点高危动作。 -->
                   <button v-if="canEditUser" class="adm-link" @click="openEdit(u)">编辑</button>
-                  <span v-else class="dim">—</span>
+                  <!-- v0.40.9：登录 / 登出时间线入口（受 system:user:list 门控，与列表同源） -->
+                  <button v-if="auth.can('system:user:list')" class="adm-link" @click="openAuthLogs(u)">登录记录</button>
+                  <span v-if="!canEditUser && !auth.can('system:user:list')" class="dim">—</span>
                 </div>
               </td>
             </tr>
@@ -359,6 +361,43 @@
 
         <div class="adm-modal-foot">
           <button class="btn ghost" @click="pwdRes.show = false">我已复制，关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 登录记录（v0.40.9）：每次登录/登出的时间线 ============
+         后端 GET /users/:id/auth-logs 取审计日志里 action ∈ {登录系统, 退出登录} 的最近 N 条，
+         按时间倒序展示，满足"记录每次登录登出时间"的诉求（不再只看最后一条最近登录）。 -->
+    <div v-if="authLogs.show" class="adm-mask" @click.self="authLogs.show = false">
+      <div class="adm-modal" role="dialog" aria-modal="true" aria-label="登录记录">
+        <div class="adm-modal-h">
+          <h3>登录记录 · {{ authLogs.name }}</h3>
+          <button class="adm-x" @click="authLogs.show = false" aria-label="关闭">✕</button>
+        </div>
+        <div class="adm-modal-body">
+          <p class="adm-hint" style="margin:0 0 12px">
+            最近 {{ authLogs.list.length }} 条登录 / 登出留痕（来自操作审计日志，最多取 50 条）。
+          </p>
+          <div v-if="authLogs.loading" class="empty">加载中…</div>
+          <ul v-else-if="authLogs.list.length" class="al-list">
+            <li v-for="(it, i) in authLogs.list" :key="i" class="al-item">
+              <span class="al-dot" :class="it.action === '退出登录' ? 'out' : 'in'"></span>
+              <div class="al-main">
+                <div class="al-action">
+                  {{ it.action === '退出登录' ? '登出' : '登录' }}
+                  <span class="al-time">{{ fmtTs(it.created_at) }}</span>
+                </div>
+                <div class="al-meta">
+                  <span v-if="it.client" class="al-tag">{{ clientText([it.client]) }}</span>
+                  <span v-if="it.ip" class="al-ip">{{ it.ip }}</span>
+                </div>
+              </div>
+            </li>
+          </ul>
+          <div v-else class="empty">暂无登录 / 登出记录</div>
+        </div>
+        <div class="adm-modal-foot">
+          <button class="btn ghost" @click="authLogs.show = false">关闭</button>
         </div>
       </div>
     </div>
@@ -656,6 +695,36 @@ const pwdCopied = ref('')
 // 两条复制通道都失败时的行内提示（不用 window.prompt —— 阻塞式，打断操作）
 const pwdCopyFail = ref(false)
 
+// ---------------------------------------------------------------- 登录记录（v0.40.9）
+// GET /users/:id/auth-logs 返回审计日志里 action ∈ {登录系统, 退出登录} 的最近 50 条（倒序）。
+const authLogs = reactive({
+  show: false, userId: 0, name: '', loading: false, list: []
+})
+async function openAuthLogs(u) {
+  if (!u) return
+  authLogs.show = true
+  authLogs.userId = u.id
+  authLogs.name = u.name || u.username || ('#' + u.id)
+  authLogs.loading = true
+  try {
+    const list = await api.get(`/users/${u.id}/auth-logs`)
+    authLogs.list = Array.isArray(list) ? list : []
+  } catch (e) {
+    authLogs.list = []
+    alert(errMsg(e, '加载登录记录失败'))
+  } finally {
+    authLogs.loading = false
+  }
+}
+// 时间格式化：审计日志的 created_at 是 UTC RFC3339，转本地可读串
+function fmtTs(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return String(ts)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 // 复制到剪贴板。
 //
 // ★★ 必须有 execCommand 降级：线上是 http://…:8090，属于**非安全上下文**，
@@ -915,4 +984,22 @@ button.pwd-cp.done, button.pwd-cp-sm.done, button.pwd-cp-all.done {
 .pwd-fail { margin: 0; padding: 7px 11px; font-size: 12px; color: var(--danger); background: var(--overlay); }
 .pwd-cpfail { margin: 7px 0 0; font-size: 12px; color: var(--warn, #d97706); line-height: 1.6; }
 .pwd-warn { margin: 14px 0 0; }
+
+/* ---- 登录记录时间线（v0.40.9） ---- */
+.adm-modal-h { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--glass-border); }
+.adm-modal-h h3 { margin: 0; font-size: 15px; }
+.adm-x { border: none; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 16px; line-height: 1; }
+.adm-x:hover { color: var(--text); }
+.al-list { list-style: none; margin: 0; padding: 0; max-height: 56vh; overflow: auto; }
+.al-item { display: flex; gap: 12px; padding: 9px 2px; border-bottom: 1px dashed var(--glass-border); }
+.al-item:last-child { border-bottom: 0; }
+.al-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; background: var(--text-faint); }
+.al-dot.in { background: #16a34a; }
+.al-dot.out { background: #d97706; }
+.al-main { min-width: 0; flex: 1; }
+.al-action { font-size: 13.5px; color: var(--text); }
+.al-time { margin-left: 8px; color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.al-meta { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.al-tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--overlay); color: var(--text-dim); border: 1px solid var(--glass-border); }
+.al-ip { font-size: 12px; color: var(--text-faint); }
 </style>

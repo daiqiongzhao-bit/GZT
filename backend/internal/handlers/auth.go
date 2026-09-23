@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"shiftworkbench/internal/db"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type loginReq struct {
@@ -75,6 +78,58 @@ func Login(c *gin.Context) {
 		"token": token,
 		"user":  user,
 	})
+}
+
+// Logout 退出登录：令当前令牌的会话下线，并记录「退出登录」审计。
+// v0.40.8：此前后端没有 /auth/logout，前端通知失效令牌的请求 404 被吞，
+// 既没踢会话也没登出留痕——员工管理的登录/登出时间线因此缺一半。
+func Logout(c *gin.Context) {
+	cl := middleware.GetClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+		return
+	}
+	// 从 Authorization 头取原始令牌（AuthRequired 已保证存在且有效）
+	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+	// 自增 token_version：AuthRequired 校验的是 token_version，只有它变了旧令牌才真正失效
+	// （仅删会话不够——AuthRequired 每次请求会重新 Track，不查会话表）。
+	if err := db.DB.Model(&models.User{}).Where("id = ?", cl.UserID).
+		Update("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "登出失败"})
+		return
+	}
+	session.RemoveByToken(token)
+	session.RemoveByUser(cl.UserID)
+	var user models.User
+	name := ""
+	if err := db.DB.First(&user, cl.UserID).Error; err == nil {
+		name = user.Name
+	}
+	addLog(c, cl.UserID, name, "退出登录")
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// UserAuthLogs 某用户的登录/登出时间线（取自操作审计 Log，action 为 登录系统/退出登录）。
+// v0.40.8：员工管理「最近登录时间」只有最后一次；这里给每次登录与登出的完整记录。
+func UserAuthLogs(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户 ID 不合法"})
+		return
+	}
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	var list []models.Log
+	if err := db.DB.Where("user_id = ? AND action IN ?", id, []string{"登录系统", "退出登录"}).
+		Order("created_at desc").Limit(limit).Find(&list).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
 }
 
 // Me 当前用户信息

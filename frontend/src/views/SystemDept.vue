@@ -3,7 +3,6 @@
     <div class="adm-head">
       <h2 class="section-title">
         部门管理
-        <span class="section-sub">树形结构；ancestors 存祖级路径，是「本部门及以下」数据范围的展开依据</span>
       </h2>
       <div class="adm-actions">
         <button class="btn" :disabled="loading" @click="load">刷新</button>
@@ -11,25 +10,31 @@
       </div>
     </div>
 
-    <!-- ==================== 部门管理员落地说明 ==================== -->
-    <section class="panel">
-      <h3 class="adm-sub-title">部门管理员是怎么落地的（零新增模型）</h3>
-      <div class="adm-kv">
-        <span class="k">管理边界</span>
-        <span class="v">由<b>用户自己的 dept_id</b> 锚定 —— 同一个「部门管理员」角色绑给不同部门的人，边界自动不同，因此不需要新建任何"管理员表"或"管理范围"字段。</span>
-        <span class="k">数据范围</span>
-        <span class="v">角色上的 <b>data_scope</b>（{{ '1 全部 / 2 自定义 / 3 本部门 / 4 本部门及以下 / 5 仅本人' }}）；部门管理员标准档 = <b>4 本部门及以下</b>。</span>
-        <span class="k">可见</span>
-        <span class="v">本部门及子部门用户（读取时服务端注入过滤条件，前端传参无法突破）。</span>
-        <span class="k">可管</span>
-        <span class="v">写操作走<b>归属断言</b>：在"持有该权限的角色"子集内取最宽，避免借读范围拿写权限。</span>
-        <span class="k">停用部门</span>
-        <span class="v">仅"不允许新分配用户、不出现在选择器"；<b>存量用户照常计算数据范围</b>，否则一停用整部门 403，属运维事故。</span>
-      </div>
-    </section>
-
     <!-- ==================== 部门树 ==================== -->
     <section class="panel">
+      <!-- v0.40.8：说明默认收起（全系统统一 .adm-fold 折叠样式），实现细节不再常驻占屏；
+           原标题旁的 ancestors 副标题也一并收进折叠体 -->
+      <div class="adm-fold">
+        <button class="adm-fold-head" @click="helpOpen = !helpOpen">
+          <span class="tri">{{ helpOpen ? '▾' : '▸' }}</span>部门管理员是怎么落地的？点这里展开说明
+        </button>
+        <div v-if="helpOpen" class="adm-fold-body">
+          <p>树形结构；ancestors 存祖级路径，是「本部门及以下」数据范围的展开依据。</p>
+          <div class="adm-kv">
+            <span class="k">管理边界</span>
+            <span class="v">由<b>用户自己的 dept_id</b> 锚定 —— 同一个「部门管理员」角色绑给不同部门的人，边界自动不同，因此不需要新建任何"管理员表"或"管理范围"字段。</span>
+            <span class="k">数据范围</span>
+            <span class="v">角色上的 <b>data_scope</b>（{{ '1 全部 / 2 自定义 / 3 本部门 / 4 本部门及以下 / 5 仅本人' }}）；部门管理员标准档 = <b>4 本部门及以下</b>。</span>
+            <span class="k">可见</span>
+            <span class="v">本部门及子部门用户（读取时服务端注入过滤条件，前端传参无法突破）。</span>
+            <span class="k">可管</span>
+            <span class="v">写操作走<b>归属断言</b>：在"持有该权限的角色"子集内取最宽，避免借读范围拿写权限。</span>
+            <span class="k">停用部门</span>
+            <span class="v">仅"不允许新分配用户、不出现在选择器"；<b>存量用户照常计算数据范围</b>，否则一停用整部门 403，属运维事故。</span>
+          </div>
+        </div>
+      </div>
+
       <div class="adm-tablewrap">
         <table class="adm-table">
           <thead>
@@ -234,6 +239,7 @@ const loading = ref(false)
 const saving = ref(false)
 const tree = ref([])
 const flat = ref([])
+const helpOpen = ref(false) // v0.40.8：说明折叠默认收起
 
 /** 只有"正常"部门能作为父节点（后端在 CreateDept 里也拒绝停用的上级） */
 const parentOptions = computed(() => {

@@ -197,7 +197,7 @@ export const useAuthStore = defineStore('auth', {
       // ② 再后台尽力通知后端令该令牌失效（不阻塞导航，失败也不影响本地登出）。
       //    显式带上旧令牌：localStorage 上面已清空，请求拦截器不会再自动附加，
       //    否则这次 /logout 退化成匿名请求、旧令牌实际并未失效（安全回归）。
-      return http.post('/logout', null, { headers: { Authorization: 'Bearer ' + stale } })
+      return http.post('/auth/logout', null, { headers: { Authorization: 'Bearer ' + stale } })
         .catch(() => { /* 后端不可达也照常本地登出 */ })
     }
   }

@@ -172,7 +172,6 @@ table.adm-table .nowrap { white-space: nowrap; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
 }
-.adm-sub-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0; }
 
 /* ---- 拦截开关区块（仅超管可见）---- */
 .adm-enforce {
@@ -246,3 +245,15 @@ table.adm-table .nowrap { white-space: nowrap; }
 }
 .adm-shift-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .adm-shift-sep { color: var(--text-faint); font-size: 12px; }
+
+/* ---- v0.40.8：说明/简介统一折叠（默认收起，点标题展开）—— 全系统通用 ---- */
+.adm-fold { border: 1px solid var(--glass-border); border-radius: 10px; margin: 10px 0; overflow: hidden; }
+.adm-fold.compact { margin: 8px 0; }
+.adm-fold-head {
+  width: 100%; text-align: left; background: transparent; border: 0; cursor: pointer;
+  padding: 9px 12px; font-size: 13px; color: var(--text-dim);
+}
+.adm-fold-head:hover { background: var(--bg-2, rgba(127, 127, 127, 0.06)); }
+.adm-fold-body { padding: 4px 14px 12px; font-size: 13px; color: var(--text-dim); line-height: 1.85; }
+.adm-fold-body p { margin: 6px 0; }
+.adm-fold .tri { display: inline-block; width: 14px; color: var(--text-faint); }

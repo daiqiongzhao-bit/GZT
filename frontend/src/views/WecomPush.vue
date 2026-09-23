@@ -114,7 +114,11 @@
               <td>{{ trigText(l.trigger) }}</td>
               <td>{{ l.count }}</td>
               <td><span class="wp-tag" :class="statusCls(l.status)">{{ l.status }}</span></td>
-              <td class="wp-muted sm">{{ l.file_name || '—' }}</td>
+              <td class="wp-muted sm">
+                <a v-if="l.file_name" class="wp-file-link" href="javascript:void(0)"
+                   :title="'点击下载 ' + l.file_name" @click="downloadLogFile(l)">{{ l.file_name }}</a>
+                <span v-else>—</span>
+              </td>
               <td class="wp-muted">{{ l.message || '—' }}</td>
               <td class="wp-muted">{{ l.duration_ms ? (l.duration_ms / 1000).toFixed(1) + 's' : '—' }}</td>
             </tr>
@@ -214,7 +218,9 @@
           <label class="wp-field"><span>任务名称 *</span><input v-model="form.name" placeholder="如：满25天到期明细推送" /></label>
           <label class="wp-field row"><span>启用</span><input type="checkbox" v-model="form.enabled" /></label>
           <div class="wp-2col">
-            <label class="wp-field"><span>文档 ID *</span><input v-model="form.doc_id" placeholder="智能表格 docid" /></label>
+            <label class="wp-field"><span>文档 ID *</span>
+              <input v-model="form.doc_id" placeholder="粘贴智能表格链接或直接填 docid，自动提取" @change="extractDocId" @paste="onDocPaste" />
+            </label>
             <label class="wp-field"><span>子表名 *</span><input v-model="form.sheet_title" placeholder="如：入库明细" /></label>
           </div>
           <div class="wp-2col">
@@ -271,10 +277,20 @@
           <div class="wp-hint" v-else>点选芯片即选中，勾选顺序 = 导出表头顺序；下方序号列出了当前顺序</div>
 
           <div class="wp-2col">
-            <label class="wp-field"><span>文件名前缀</span><input v-model="form.file_prefix" placeholder="如：满25天到期明细" /></label>
+            <label class="wp-field"><span>文件名模板</span>
+              <input v-model="form.file_name_template" placeholder="如：满25天明细_{date}；留空用 文件名前缀_日期" />
+            </label>
             <label class="wp-field"><span>发送时间 *</span><input v-model="form.send_time" placeholder="HH:MM" /></label>
           </div>
-          <label class="wp-field"><span>消息标题</span><input v-model="form.msg_title" placeholder="推送文案前缀" /></label>
+          <label class="wp-field"><span>消息模板</span>
+            <textarea v-model="form.msg_template" class="wp-tpl" rows="3"
+              placeholder="留空用默认文案。可用变量：{title} {date} {count} {filename} {task}&#10;如：{title} {date} 共 {count} 条，详见附件《{filename}》"></textarea>
+          </label>
+          <div class="wp-hint">变量：{title}=消息标题 {date}=目标日期 {count}=条数 {filename}=附件文件名 {task}=任务名；文件名模板另支持 {prefix}（即下方文件名前缀，留空时兜底）</div>
+          <div class="wp-2col">
+            <label class="wp-field"><span>文件名前缀</span><input v-model="form.file_prefix" placeholder="如：满25天到期明细" /></label>
+            <label class="wp-field"><span>消息标题</span><input v-model="form.msg_title" placeholder="推送文案前缀，模板里用 {title} 引用" /></label>
+          </div>
           <label class="wp-field"><span>目标群 *</span>
             <select v-model="form.group_name">
               <option value="">— 请选择机器人可发送的群 —</option>
@@ -304,7 +320,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import * as api from '@/api'
 import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
@@ -413,6 +429,22 @@ async function loadLogs() {
   try { logs.value = (await api.get('/wecom-push/logs', { limit: 200 })) || [] }
   catch (e) { toast(errMsg(e), 'error') }
 }
+// 运行日志「文件」列：点击下载附件。用 api.download（走 axios 配置位传 responseType），
+// 自动带 Authorization 头，拿到 blob 后用动态 <a download> 触发，避免 <a href> 不带 Bearer 被 401 拦截。
+async function downloadLogFile(l) {
+  if (!l || !l.file_name) return
+  try {
+    const blob = await api.download('/wecom-push/files/' + encodeURIComponent(l.file_name))
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = l.file_name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) { toast(errMsg(e), 'error') }
+}
 async function loadSettings() {
   try {
     settings.value = (await api.get('/wecom-push/settings/full')) || {}
@@ -440,8 +472,29 @@ function defaultForm() {
   return {
     name: '', enabled: true, doc_id: '', sheet_title: '', date_field: '', offset_days: 0,
     date_cols: [], conditions: [{ field: '', op: 'is_null', value: '' }], columns: [],
-    file_prefix: '', msg_title: '', empty_text: '', group_name: '', send_time: '09:00'
+    file_prefix: '', msg_title: '', empty_text: '', group_name: '', send_time: '09:00',
+    file_name_template: '', msg_template: ''
   }
+}
+// v0.40.8：文档 ID 允许粘贴完整链接，自动提取 docid（query 的 docid= 或路径最后一段）
+function extractDocId() {
+  const s = String(form.doc_id || '').trim()
+  if (!s || !/https?:\/\//i.test(s)) return
+  let out = s
+  try {
+    const u = new URL(s)
+    const q = u.searchParams.get('docid')
+    if (q) out = q
+    else {
+      const segs = u.pathname.split('/').filter(Boolean)
+      if (segs.length) out = segs[segs.length - 1]
+    }
+  } catch { /* 非法 URL 保持原值，交后端兜底 */ }
+  if (out !== s) form.doc_id = out
+}
+function onDocPaste(e) {
+  // paste 后 v-model 还没更新，nextTick 再提取
+  nextTick(extractDocId)
 }
 function parseArr(s) { try { const a = JSON.parse(s); return Array.isArray(a) ? a : [] } catch { return [] } }
 function parseConds(s) {
@@ -462,6 +515,7 @@ function openEdit(t) {
   form.date_field = t.date_field; form.offset_days = t.offset_days; form.date_cols = parseArr(t.date_cols)
   form.conditions = parseConds(t.conditions); form.columns = parseArr(t.columns)
   form.file_prefix = t.file_prefix || ''; form.msg_title = t.msg_title || ''; form.empty_text = t.empty_text || ''
+  form.file_name_template = t.file_name_template || ''; form.msg_template = t.msg_template || ''
   form.group_name = t.group_name || ''; form.send_time = t.send_time || '09:00'
   showForm.value = true
   if (form.doc_id && form.sheet_title) loadFields()
@@ -481,7 +535,8 @@ async function saveForm() {
     date_field: form.date_field, offset_days: Number(form.offset_days) || 0,
     date_cols: form.date_cols, conditions: form.conditions.filter((c) => c.field && c.op),
     columns: form.columns, file_prefix: form.file_prefix, msg_title: form.msg_title,
-    empty_text: form.empty_text, group_name: form.group_name, send_time: form.send_time
+    empty_text: form.empty_text, group_name: form.group_name, send_time: form.send_time,
+    file_name_template: form.file_name_template, msg_template: form.msg_template
   }
   try {
     if (editingId.value) await api.put('/wecom-push/tasks/' + editingId.value, payload)
@@ -658,6 +713,8 @@ onMounted(refreshAll)
 .wp-chipbar { display: flex; justify-content: flex-end; gap: 14px; margin: 2px 0 6px; }
 .wp-link { color: var(--accent, #6366f1); cursor: pointer; font-size: 12.5px; user-select: none; }
 .wp-link:hover { text-decoration: underline; }
+.wp-file-link { color: var(--accent, #6366f1); cursor: pointer; text-decoration: underline; font-size: 12.5px; }
+.wp-file-link:hover { filter: brightness(1.1); }
 .wp-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .wp-chip { padding: 4px 13px; border-radius: 999px; border: 1px solid var(--glass-border); background: var(--overlay-1, transparent); color: var(--text); font-size: 13px; cursor: pointer; user-select: none; transition: all .12s; }
 .wp-chip:hover { border-color: var(--accent, #6366f1); }

@@ -23,6 +23,9 @@
       <!-- 头部：标题 + 元信息 + 操作 -->
       <header class="kb-detail-head">
         <div class="dh-top" :class="{ 'dh-top-edit': editing }">
+          <!-- v0.40.8：进入详情后必须有「返回」入口（抽屉铺满内容区、遮罩不可点，
+               原先只能靠点列表/浏览器后退，窄屏直接卡死，故补明确按钮） -->
+          <button class="kb-back-btn" type="button" :title="editing ? '取消编辑并返回列表' : '返回知识库列表'" @click="back">← 返回</button>
           <div class="dh-title-wrap">
             <div class="dh-title-row">
               <input
@@ -444,7 +447,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'start-edit', 'cancel-edit', 'submit', 'create',
+  'start-edit', 'cancel-edit', 'submit', 'create', 'close',
   'star', 'pin', 'open-ref', 'reply', 'cancel-reply', 'del-comment', 'send-comment',
   'restore', 'upload', 'preview-att', 'download-att', 'remove-att', 'remove-pending-att',
   'update:commentText', 'content-error', 'dirty-change',
@@ -563,6 +566,12 @@ function cancelEdit() {
   emit('cancel-edit')
 }
 
+/** v0.40.8：详情头部「← 返回」按钮。
+ *  始终向上抛 close，由父级统一处理（阅读态直接关抽屉、编辑态带未保存二次确认后关）。 */
+function back() {
+  emit('close')
+}
+
 function submit() {
   dirty.value = false
   emit('submit')
@@ -667,6 +676,24 @@ function printEntry() {
 .dh-title-input:focus { border-color: var(--accent); }
 .dh-req { flex: 0 0 auto; color: #dc2626; font-weight: 700; font-size: 16px; line-height: 34px; padding-left: 2px; }
 .dh-ops { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
+
+/* v0.40.8：详情「← 返回」按钮 —— 进入详情后的唯一明确退出口 */
+.kb-back-btn {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  border: 1px solid var(--glass-border);
+  background: var(--overlay);
+  color: var(--text-dim);
+  border-radius: 9px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.kb-back-btn:hover { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+/* 编辑态头部压成一行时，按钮与标题/表单同行居中对齐 */
+.dh-top-edit .kb-back-btn { align-self: center; }
 
 /* v0.36.2：标题列（标题行 + 作者/时间常驻行 + 折叠提示行） */
 .dh-title-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }

@@ -181,6 +181,8 @@ var routePerms = map[string]string{
 	"GET /api/dashboard":   PDashboardView,
 	"GET /api/logs":        PSysLogList,
 	"GET /api/logs/export": PSysLogExport,
+	"POST /api/auth/logout": PermAuth, // v0.40.8：登出本人即可（令牌即将失效前调用）
+	"GET /api/users/:id/auth-logs": PSysUserList, // v0.40.8：员工登录/登出时间线
 
 	// ---------------- 通知 ----------------
 	"GET /api/notifications":                           PNotifyView,
@@ -400,6 +402,7 @@ var routePerms = map[string]string{
 	"POST /api/wecom-push/tasks/:id/toggle": PWpTaskToggle,
 	"POST /api/wecom-push/tasks/:id/run":    PWpTaskRun,
 	"GET /api/wecom-push/tasks/:id/sql":     PWpView,
+	"GET /api/wecom-push/files/:name":       PWpView, // v0.40.8：运行日志附件下载
 
 	// ---------------- 系统管理（RBAC 自身） ----------------
 	"GET /api/system/user/list":          PSysUserList,

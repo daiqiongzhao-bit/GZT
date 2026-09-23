@@ -63,6 +63,17 @@ func RemoveByUser(userID uint) {
 	}
 }
 
+// RemoveByToken 只清除单个令牌的会话（本人主动登出：不动其它设备的在线记录）。
+// v0.40.8：此前 /logout 缺失，前端通知后端失效令牌的请求一直是 404 被吞。
+func RemoveByToken(token string) {
+	if token == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	delete(m, tokenKey(token))
+}
+
 func prune(maxAge time.Duration) {
 	now := time.Now()
 	for k, s := range m {

@@ -151,6 +151,7 @@ func main() {
 		auth.Use(system.GuardByPath())
 		{
 			auth.GET("/auth/me", handlers.Me)
+			auth.POST("/auth/logout", handlers.Logout) // v0.40.8：登出留痕 + 会话下线（此前 404）
 			auth.POST("/auth/change-password", handlers.ChangePassword)
 			auth.POST("/auth/unlock", handlers.UnlockLogin)
 			auth.GET("/dashboard", handlers.Dashboard)
@@ -191,6 +192,7 @@ func main() {
 			// 鉴权相关：登出、超管强制下线、在线会话
 			auth.POST("/logout", middleware.AuthRequired(), middleware.Logout)
 			auth.POST("/users/:id/force-logout", middleware.ForceLogout)
+			auth.GET("/users/:id/auth-logs", handlers.UserAuthLogs) // v0.40.8：员工登录/登出时间线
 			auth.GET("/sessions", handlers.GetSessions)
 
 			// 人员

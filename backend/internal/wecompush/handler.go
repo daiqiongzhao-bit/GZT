@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,6 +37,9 @@ type taskPayload struct {
 	EmptyText  string `json:"empty_text"`
 	GroupName  string `json:"group_name"`
 	SendTime   string `json:"send_time"`
+	// v0.40.8：文件名 / 消息模板（空 = 兼容原前缀拼接）
+	FileTpl     string `json:"file_name_template"`
+	MsgTemplate string `json:"msg_template"`
 }
 
 // normalizeConditions 把前端传来的条件统一成 JSON 数组字符串 + 结构化切片
@@ -144,7 +150,7 @@ func (p *taskPayload) apply(t *WpTask) {
 	if p.Enabled != nil {
 		t.Enabled = *p.Enabled
 	}
-	t.DocID = strings.TrimSpace(p.DocID)
+	t.DocID = ExtractDocID(p.DocID) // v0.40.8：允许粘贴完整链接，统一提取 docid
 	t.SheetTitle = strings.TrimSpace(p.SheetTitle)
 	t.DateField = strings.TrimSpace(p.DateField)
 	t.OffsetDays = p.OffsetDays
@@ -170,6 +176,11 @@ func (p *taskPayload) apply(t *WpTask) {
 	t.Columns = normalizeList(p.Columns)
 	t.FilePrefix = strings.TrimSpace(p.FilePrefix)
 	t.MsgTitle = strings.TrimSpace(p.MsgTitle)
+	// v0.40.8：模板字段（文件名做安全清洗；消息模板仅裁空白，正文允许任意字符）
+	if ft := strings.TrimSpace(p.FileTpl); ft != "" {
+		t.FileTpl = SanitizeFileName(ft)
+	}
+	t.MsgTemplate = strings.TrimSpace(p.MsgTemplate)
 	t.EmptyText = strings.TrimSpace(p.EmptyText)
 	t.GroupName = strings.TrimSpace(p.GroupName)
 	t.SendTime = strings.TrimSpace(p.SendTime)
@@ -317,6 +328,27 @@ func (h *H) ListLogs(c *gin.Context) {
 		return
 	}
 	ok(c, items)
+}
+
+// DownloadFile 下载某次运行生成的 Excel（运行日志「文件」列的可点击下载后端）。
+// v0.40.8：文件本来就落在 OutDir 里，但一直没有取回入口；这里按文件名从导出目录读取。
+// 安全：filepath.Base 剥掉任何路径成分 + 仅允许 .xlsx + 必须真实存在。
+func (h *H) DownloadFile(c *gin.Context) {
+	name := filepath.Base(c.Param("name"))
+	if name == "" || name == "." || name == "/" || !strings.HasSuffix(strings.ToLower(name), ".xlsx") {
+		fail(c, 400, "文件名不合法")
+		return
+	}
+	path := h.Cfg.OutPath(name)
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		fail(c, 404, "文件不存在或已清理")
+		return
+	}
+	// 中文文件名双写（RFC5987），与系统其它下载一致，避免乱码/下划线
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, name, url.QueryEscape(name)))
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.File(path)
 }
 
 // Summary 概览页统计

@@ -113,6 +113,12 @@ func (h *H) ExecuteTask(t *WpTask, trigger string, dryRun bool) *WpLog {
 		text := strings.TrimSpace(t.EmptyText)
 		if text == "" {
 			text = fmt.Sprintf("%s %s 今日暂无符合条件的记录。", title, targetDate)
+		} else {
+			// v0.40.8：0 条提示语同样支持变量
+			text = RenderTpl(text, map[string]string{
+				"title": title, "date": targetDate, "count": "0",
+				"filename": "", "task": t.Name,
+			})
 		}
 		if err := h.SendMarkdown(chatID, text); err != nil {
 			return finalize("failed", "发送提示失败："+err.Error(), "", 0)
@@ -146,7 +152,17 @@ func (h *H) ExecuteTask(t *WpTask, trigger string, dryRun bool) *WpLog {
 	if prefix == "" {
 		prefix = "明细"
 	}
-	fname := fmt.Sprintf("%s_%s.xlsx", prefix, targetDate)
+	// v0.40.8：文件名模板（{date} {task} {prefix}），空 = 兼容旧「前缀_日期.xlsx」
+	base := ""
+	if ft := strings.TrimSpace(t.FileTpl); ft != "" {
+		base = RenderTpl(ft, map[string]string{
+			"date": targetDate, "task": t.Name, "prefix": prefix,
+		})
+	} else {
+		base = fmt.Sprintf("%s_%s", prefix, targetDate)
+	}
+	base = SanitizeFileName(strings.TrimSuffix(base, ".xlsx"))
+	fname := base + ".xlsx"
 	fpath := h.Cfg.OutPath(fname)
 	if err := BuildXLSX(fpath, prefix, headers, body); err != nil {
 		return finalize("failed", "生成 Excel 失败："+err.Error(), "", n)
@@ -168,7 +184,16 @@ func (h *H) ExecuteTask(t *WpTask, trigger string, dryRun bool) *WpLog {
 	if err := h.SendFile(chatID, mediaID); err != nil {
 		return finalize("failed", "发送附件失败："+err.Error(), fname, n)
 	}
-	text := fmt.Sprintf("%s %s 共 **%d** 条\n明细见上方附件《%s》。", title, targetDate, n, fname)
+	// v0.40.8：消息模板（{title} {date} {count} {filename} {task}），空 = 兼容旧默认文案
+	text := strings.TrimSpace(t.MsgTemplate)
+	if text == "" {
+		text = fmt.Sprintf("%s %s 共 **%d** 条\n明细见上方附件《%s》。", title, targetDate, n, fname)
+	} else {
+		text = RenderTpl(text, map[string]string{
+			"title": title, "date": targetDate, "count": fmt.Sprintf("%d", n),
+			"filename": fname, "task": t.Name,
+		})
+	}
 	if err := h.SendMarkdown(chatID, text); err != nil {
 		return finalize("failed", "附件已发送，但说明消息发送失败："+err.Error(), fname, n)
 	}
