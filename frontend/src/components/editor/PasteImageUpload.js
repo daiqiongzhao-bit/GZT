@@ -20,6 +20,14 @@
 import { Extension } from '@tiptap/core'
 import { Plugin } from '@tiptap/pm/state'
 
+/**
+ * 粘贴图片的默认最大宽度（px）。
+ * 截图常是原尺寸 1000~2000px，若不加约束、直接以自然宽度整行铺开，
+ * 详情页就会「那么大」占满一屏。超出此宽度则在插入时即按该宽度落库，
+ * 用户仍可在编辑态用右下角手柄拖拽到任意尺寸。
+ */
+const MAX_PASTE_WIDTH = 760
+
 /** data:URL → File（用于把粘贴的 base64 图片转成可上传的文件） */
 function dataURLToFile(dataURL, filename) {
   const m = /^data:([^;]*);base64,(.*)$/.exec(dataURL)
@@ -30,13 +38,31 @@ function dataURLToFile(dataURL, filename) {
   return new File([arr], filename, { type: mime })
 }
 
-/** 构造图片节点属性（含附件机制红线属性） */
-function imgAttrs(u) {
+/** 构造图片节点属性（含附件机制红线属性）。
+ *  width 可选：粘贴图片超过 MAX_PASTE_WIDTH 时，预先落一个合理宽度，避免「那么大」。 */
+function imgAttrs(u, width) {
   const attrs = { src: u.dl, alt: u.name || 'image' }
+  if (width) attrs.width = width
   if (u.temp) attrs['data-temp-id'] = String(u.id)
   else attrs['data-att-id'] = String(u.id)
   attrs['data-att-name'] = u.name || ''
   return attrs
+}
+
+/** 读取图片文件的自然尺寸（用于给粘贴图片设一个合理的默认宽度） */
+function naturalSize(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const im = new Image()
+    im.onload = () => {
+      const w = im.naturalWidth || 0
+      const h = im.naturalHeight || 0
+      URL.revokeObjectURL(url)
+      resolve({ w, h })
+    }
+    im.onerror = () => { URL.revokeObjectURL(url); resolve({ w: 0, h: 0 }) }
+    im.src = url
+  })
 }
 
 export const PasteImageUpload = Extension.create({
@@ -62,7 +88,10 @@ export const PasteImageUpload = Extension.create({
       try {
         const u = await upload(file)
         if (!u || !u.dl) return
-        editor.chain().focus().insertContent({ type: 'image', attrs: imgAttrs(u) }).run()
+        // 超宽截图按 MAX_PASTE_WIDTH 预缩，避免复制粘贴进来就「那么大」
+        const { w } = await naturalSize(file)
+        const width = w && w > MAX_PASTE_WIDTH ? MAX_PASTE_WIDTH : null
+        editor.chain().focus().insertContent({ type: 'image', attrs: imgAttrs(u, width) }).run()
       } catch (err) {
         if (onError) onError(err)
       }

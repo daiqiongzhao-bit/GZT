@@ -127,14 +127,29 @@
 .kb-prose .kb-img-wrap[data-align='right'], .kb-view .kb-img-wrap[data-align='right'] { text-align: right; }
 .kb-prose .kb-img-wrap[data-align='left'], .kb-view .kb-img-wrap[data-align='left'] { text-align: left; }
 
-/* 缩放手柄（仅编辑态可见） */
-.kb-prose .kb-img-resize {
+/* 缩放手柄（仅编辑态可见）—— 常驻半透明、悬停高亮放大，避免用户「找不到缩放入口」 */
+.ProseMirror .kb-img-resize {
   position: absolute; right: -2px; bottom: 2px;
-  width: 12px; height: 12px; border-radius: 50%;
+  width: 14px; height: 14px; border-radius: 50%;
   background: var(--accent); border: 2px solid var(--bg-1);
-  cursor: nwse-resize; opacity: 0; transition: opacity 0.15s;
+  cursor: nwse-resize; opacity: 0.5; transition: opacity 0.15s, transform 0.15s;
+  z-index: 3;
 }
-.kb-prose .kb-img-wrap:hover .kb-img-resize { opacity: 1; }
+.ProseMirror .kb-img-wrap:hover .kb-img-resize { opacity: 1; transform: scale(1.15); }
+/* 编辑态图片悬停时给一圈虚线提示「这张图可以缩放 / 对齐」 */
+.ProseMirror .kb-img-wrap {
+  outline: 1px dashed transparent; border-radius: 8px; transition: outline-color 0.15s;
+}
+.ProseMirror .kb-img-wrap:hover { outline-color: var(--glass-border); }
+
+/* 阅读态图片可点击放大（lightbox 在 KnowledgeDetail 内处理） */
+.kb-read img, .comment-body img { cursor: zoom-in; }
+
+/* 阅读态对齐：data-align 已通过白名单保留，但阅读态无 .kb-img-wrap 包裹，
+   故补 img 级对齐（编辑态靠 .kb-img-wrap[data-align]） */
+.kb-prose img[data-align='center'], .kb-view img[data-align='center'] { display: block; margin-left: auto; margin-right: auto; }
+.kb-prose img[data-align='left'], .kb-view img[data-align='left'] { display: block; margin-right: auto; }
+.kb-prose img[data-align='right'], .kb-view img[data-align='right'] { display: block; margin-left: auto; }
 
 /* ---------- 缩进（data-indent 属性）---------- */
 .kb-prose [data-indent='1'], .kb-view [data-indent='1'] { margin-left: 2em; }
