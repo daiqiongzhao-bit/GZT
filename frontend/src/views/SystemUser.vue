@@ -20,6 +20,8 @@
           @click="toggleBatch"
         >{{ batchMode ? '退出批量' : '批量操作' }}</button>
         <button class="btn" :disabled="loading" @click="load">刷新</button>
+        <!-- v0.41.1：跨用户的登录审计入口（gated 同列表权限，避免越权查看他人登录轨迹） -->
+        <button v-if="auth.can('system:user:list')" class="btn ghost" @click="openAudit">登录审计</button>
         <button v-if="auth.can('system:user:add')" class="btn primary" @click="openCreate">新增用户</button>
       </div>
     </div>
@@ -401,6 +403,61 @@
         </div>
       </div>
     </div>
+
+    <!-- ============ 全局登录审计（v0.41.1）============
+         跨用户查看每次登录 / 登出 / 改密 / 登录失败，支持按用户、动作、关键词、时间范围筛选，
+         并可导出 xlsx（按动作分表）或 CSV（UTF-8 BOM，Excel 直接打开不乱码）。 -->
+    <div v-if="audit.show" class="adm-mask" @click.self="audit.show = false">
+      <div class="adm-modal" style="max-width:920px" role="dialog" aria-modal="true" aria-label="全局登录审计">
+        <div class="adm-modal-h">
+          <h3>全局登录审计</h3>
+          <button class="adm-x" @click="audit.show = false" aria-label="关闭">✕</button>
+        </div>
+        <div class="adm-modal-body">
+          <div class="adm-filters">
+            <input v-model.trim="audit.f.user_id" class="glass-input sm" placeholder="用户ID" @keyup.enter="loadAudit" />
+            <select v-model="audit.f.action" class="glass-input sm">
+              <option value="">全部动作</option>
+              <option v-for="a in AUDIT_ACTIONS" :key="a" :value="a">{{ a }}</option>
+            </select>
+            <input v-model.trim="audit.f.q" class="glass-input" placeholder="用户名 / IP / UA 关键词" @keyup.enter="loadAudit" />
+            <input v-model="audit.f.from" class="glass-input sm" type="date" title="起始日期" />
+            <input v-model="audit.f.to" class="glass-input sm" type="date" title="截止日期" />
+            <button class="btn sm" @click="loadAudit" :disabled="audit.loading">查询</button>
+            <button class="btn ghost sm" @click="resetAudit">重置</button>
+          </div>
+          <p class="adm-hint" style="margin:8px 0">
+            共 {{ audit.total }} 条{{ audit.list.length < audit.total ? `（显示最近 ${audit.list.length} 条）` : '' }}
+          </p>
+          <div v-if="audit.loading" class="empty">加载中…</div>
+          <div v-else-if="audit.list.length" class="adm-tablewrap" style="max-height:46vh">
+            <table class="adm-table">
+              <thead>
+                <tr><th>时间</th><th>用户</th><th>动作</th><th>来源IP</th><th>端</th><th>User-Agent</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(it, i) in audit.list" :key="i">
+                  <td class="nowrap">{{ fmtTs(it.created_at) }}</td>
+                  <td>{{ it.user_name || ('#' + it.user_id) }}</td>
+                  <td>
+                    <span class="chip" :class="it.action && it.action.indexOf('失败') >= 0 ? 'danger' : ''">{{ it.action }}</span>
+                  </td>
+                  <td class="nowrap">{{ it.ip || '—' }}</td>
+                  <td>{{ it.client || '—' }}</td>
+                  <td class="ua-cell" :title="it.ua">{{ it.ua || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="empty">当前筛选条件下没有记录</div>
+        </div>
+        <div class="adm-modal-foot">
+          <button class="btn ghost" :disabled="audit.exporting" @click="exportAudit('csv')">导出 CSV</button>
+          <button class="btn" :disabled="audit.exporting" @click="exportAudit('xlsx')">导出 xlsx（按动作分表）</button>
+          <button class="btn ghost" @click="audit.show = false">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -723,6 +780,63 @@ function fmtTs(ts) {
   if (isNaN(d.getTime())) return String(ts)
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+// ---------------------------------------------------------------- 全局登录审计（v0.41.1）
+// 与单用户「登录记录」的区别：这个面板是**跨用户**的，用来回答"某个 IP 是谁在试密码"
+// "今天有多少异常登出"这类必须横向比对的问题——单用户视角回答不了。
+// 后端 GET /auth-logs（user_id / action / ip / q / from / to / limit 均可筛选）。
+const audit = reactive({
+  show: false, loading: false, exporting: false,
+  total: 0, list: [],
+  f: { user_id: '', action: '', q: '', from: '', to: '' }
+})
+const AUDIT_ACTIONS = ['登录系统', '退出登录', '修改个人密码', '登录失败']
+
+function auditQuery(extra = {}) {
+  const p = new URLSearchParams()
+  const f = audit.f
+  if (f.user_id) p.set('user_id', f.user_id)
+  if (f.action) p.set('action', f.action)
+  if (f.q) p.set('q', f.q)
+  if (f.from) p.set('from', f.from)
+  if (f.to) p.set('to', f.to)
+  for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v)
+  const s = p.toString()
+  return s ? '?' + s : ''
+}
+async function loadAudit() {
+  audit.loading = true
+  try {
+    const r = await api.get('/auth-logs' + auditQuery({ limit: 200 }))
+    audit.list = Array.isArray(r && r.list) ? r.list : []
+    audit.total = Number(r && r.total) || 0
+  } catch (e) {
+    audit.list = []
+    audit.total = 0
+    alert(errMsg(e, '加载登录审计失败'))
+  } finally {
+    audit.loading = false
+  }
+}
+function openAudit() {
+  audit.show = true
+  loadAudit()
+}
+function resetAudit() {
+  audit.f = { user_id: '', action: '', q: '', from: '', to: '' }
+  loadAudit()
+}
+// 导出走浏览器直接下载（后端返回带 Content-Disposition 的文件流）
+async function exportAudit(fmt) {
+  audit.exporting = true
+  try {
+    const qs = auditQuery({ format: fmt, limit: 20000 })
+    const qsM = fmt === 'xlsx' ? auditQuery({ format: 'xlsx', split: 'action', limit: 20000 }) : qs
+    window.location.href = (api.baseURL || '/api') + '/auth-logs/export' + qsM
+  } finally {
+    audit.exporting = false
+  }
 }
 
 // 复制到剪贴板。

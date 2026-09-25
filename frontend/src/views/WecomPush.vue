@@ -145,6 +145,14 @@
           </label>
           <button class="wp-btn" @click="loadGroups">刷新可发会话</button>
           <button class="wp-btn ghost" @click="testNotify">发送测试消息</button>
+          <!-- v0.41.1：独立于企微群的告警通道。填了就发，不依赖「失败时通知管理员」开关，
+               也不要求已授权企微 —— 可对接自建告警系统 / 钉钉 / 飞书等任意 HTTP 端点。 -->
+          <label class="wp-field" style="margin-top:10px"><span>失败告警 Webhook（独立通道，可选）</span>
+            <input v-model.trim="setForm.wp_alert_webhook" placeholder="https://your-alert-system/hook" />
+          </label>
+          <div class="wp-muted sm" style="margin-top:4px">
+            留空则不启用。任务失败时会异步 POST JSON（含任务名 / 触发方式 / 时间 / 失败原因）到该地址。
+          </div>
           <button class="wp-btn primary" style="margin-top:10px" @click="saveSettings">保存设置</button>
           <div class="wp-cli" :class="cliState.cls" style="margin-top:10px">
             <span class="wp-dot" />
@@ -450,6 +458,7 @@ async function loadSettings() {
     settings.value = (await api.get('/wecom-push/settings/full')) || {}
     setForm.wp_notify_on_failure = settings.value.wp_notify_on_failure === 'true'
     setForm.wp_notify_group = settings.value.wp_notify_group || ''
+    setForm.wp_alert_webhook = settings.value.wp_alert_webhook || ''
   } catch (e) { toast(errMsg(e), 'error') }
 }
 async function loadGroups() {
@@ -571,11 +580,12 @@ async function previewSQL(t) {
 }
 
 // 设置
-const setForm = reactive({ wp_notify_on_failure: false, wp_notify_group: '' })
+const setForm = reactive({ wp_notify_on_failure: false, wp_notify_group: '', wp_alert_webhook: '' })
 async function saveSettings() {
   try {
     await api.put('/wecom-push/settings', {
-      wp_notify_on_failure: setForm.wp_notify_on_failure ? 'true' : 'false', wp_notify_group: setForm.wp_notify_group
+      wp_notify_on_failure: setForm.wp_notify_on_failure ? 'true' : 'false', wp_notify_group: setForm.wp_notify_group,
+      wp_alert_webhook: setForm.wp_alert_webhook
     })
     toast('设置已保存', 'success'); await loadSettings()
   } catch (e) { toast(errMsg(e), 'error') }

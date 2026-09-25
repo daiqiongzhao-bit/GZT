@@ -290,7 +290,7 @@ const myWorkDays = computed(() => {
 
 // ---- 可自定义布局 ----
 const STORE_KEY = 'swb_dash_layout'
-const statAll = ['on_duty', 'today_tasks', 'month_tasks', 'monthly_tasks', 'overdue', 'my_rate', 'my_work']
+const statAll = ['on_duty', 'today_tasks', 'month_tasks', 'monthly_tasks', 'overdue', 'my_rate', 'my_work', 'push_runs']
 const panelAll = ['on_duty_list', 'today_tasks_list', 'month_tasks_list', 'monthly_tasks_list']
 const PANELS = { on_duty_list: '今日当班', today_tasks_list: '今日任务', month_tasks_list: '本月任务', monthly_tasks_list: '当月任务' }
 // 首页默认只展示核心指标（避免一屏内容过多超出边界），其余可在「自定义」中勾选
@@ -299,7 +299,7 @@ const pref = ref(defaultPref())
 const editMode = ref(false)
 
 function statTitle(id) {
-  return { on_duty: '今日当班人数', today_tasks: '今日待办任务', month_tasks: '本月待办任务', monthly_tasks: '当月任务', overdue: '逾期事项', my_rate: '本月完成率', my_work: '我的出勤(天)' }[id] || id
+  return { on_duty: '今日当班人数', today_tasks: '今日待办任务', month_tasks: '本月待办任务', monthly_tasks: '当月任务', overdue: '逾期事项', my_rate: '本月完成率', my_work: '我的出勤(天)', push_runs: '推送运行看板' }[id] || id
 }
 function loadPref() {
   try {
@@ -345,7 +345,22 @@ const statCards = computed(() => {
     monthly_tasks: { id: 'monthly_tasks', num: monthlyList.value.length, label: '当月任务', icon: 'calendar', tone: 'month' },
     overdue: { id: 'overdue', num: d.overdue_count, label: '逾期事项', icon: 'alert', tone: 'warn', danger: d.overdue_count > 0 },
     my_rate: { id: 'my_rate', num: pct(monthDone.value, d.month_tasks), label: '本月完成率', icon: 'check', tone: 'on' },
-    my_work: { id: 'my_work', num: myWorkDays.value, label: '我的出勤(天)', icon: 'users', tone: 'task' }
+    my_work: { id: 'my_work', num: myWorkDays.value, label: '我的出勤(天)', icon: 'users', tone: 'task' },
+    // v0.41.1：企微推送运行看板。wp_logs 不可用时返回 null，
+    // statCards 末尾的 filter 会把它剔掉，用户不会看到一张永远为 0 的卡片。
+    push_runs: (() => {
+      const s = d.push_stats
+      if (!s || !s.available) return null
+      const failed = Number(s.today_failed || 0)
+      return {
+        id: 'push_runs',
+        num: s.today_runs,
+        label: failed > 0 ? `今日推送运行·失败 ${failed}` : '今日推送运行',
+        icon: 'alert',
+        tone: failed > 0 ? 'warn' : 'on',
+        danger: failed > 0
+      }
+    })()
   }
   return pref.value.stats.filter((id) => all[id]).map((id) => all[id])
 })

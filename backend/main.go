@@ -193,6 +193,10 @@ func main() {
 			auth.POST("/logout", middleware.AuthRequired(), middleware.Logout)
 			auth.POST("/users/:id/force-logout", middleware.ForceLogout)
 			auth.GET("/users/:id/auth-logs", handlers.UserAuthLogs) // v0.40.8：员工登录/登出时间线
+			// v0.41.1：全局登录审计（跨用户筛选）——补"只能看单个人"的缺口，
+			// 便于排查「某个 IP 是谁在试密码」这类必须横向比对的问题。
+			auth.GET("/auth-logs", handlers.ListAuthLogs)
+			auth.GET("/auth-logs/export", handlers.ExportAuthLogs)
 			auth.GET("/sessions", handlers.GetSessions)
 
 			// 人员

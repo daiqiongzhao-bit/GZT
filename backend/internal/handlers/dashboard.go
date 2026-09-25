@@ -246,6 +246,8 @@ func Dashboard(c *gin.Context) {
 		"today_task_list":   todayTasks,
 		"month_task_list":   monthTasks,
 		"monthly_task_list": monthlyTasks,
+		// v0.41.1：企微推送运行看板（wp_logs 聚合；表不可用时 available=false，前端隐藏卡片）
+		"push_stats": pushRunStats(),
 	})
 }
 

@@ -183,6 +183,8 @@ var routePerms = map[string]string{
 	"GET /api/logs/export": PSysLogExport,
 	"POST /api/auth/logout": PermAuth, // v0.40.8：登出本人即可（令牌即将失效前调用）
 	"GET /api/users/:id/auth-logs": PSysUserList, // v0.40.8：员工登录/登出时间线
+	"GET /api/auth-logs":        PSysUserList, // v0.41.1：全局登录审计（跨用户）
+	"GET /api/auth-logs/export": PSysUserList, // v0.41.1：登录审计导出（xlsx/csv）
 
 	// ---------------- 通知 ----------------
 	"GET /api/notifications":                           PNotifyView,
@@ -389,6 +391,7 @@ var routePerms = map[string]string{
 	"GET /api/wecom-push/fields":            PWpView,
 	"GET /api/wecom-push/settings/full":     PWpView,
 	"GET /api/wecom-push/logs":              PWpLogView,
+	"GET /api/wecom-push/logs/export":       PWpLogView, // v0.41.1：推送运行日志导出
 	"PUT /api/wecom-push/settings":          PWpSetting,
 	"POST /api/wecom-push/notify/test":      PWpNotifyTest,
 	"POST /api/wecom-push/auth/start":       PWpAuthManage,

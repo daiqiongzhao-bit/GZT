@@ -10,13 +10,13 @@ import (
 	"shiftworkbench/internal/models"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xuri/excelize/v2"
+	"gorm.io/gorm"
 )
 
-// ListSystemLogs GET /api/system-logs 系统运行日志列表（按级别/来源/关键词/时间筛选 + 分页）
-// 用于「系统崩溃/异常」排查；仅管理员可访问（路由层已要求登录）。
-func ListSystemLogs(c *gin.Context) {
-	q := db.DB.Order("created_at desc")
+// systemLogQuery 列表与导出共用同一套筛选条件（v0.41.1）
+// 此前两处各写一遍，新增筛选条件很容易只改一处，导致"页面上看到的"和"导出的"不一致。
+func systemLogQuery(c *gin.Context) *gorm.DB {
+	q := db.DB
 	if v := c.Query("level"); v != "" {
 		q = q.Where("level = ?", strings.ToUpper(v))
 	}
@@ -32,6 +32,13 @@ func ListSystemLogs(c *gin.Context) {
 	if v := c.Query("to"); v != "" {
 		q = q.Where("created_at <= ?", v)
 	}
+	return q
+}
+
+// ListSystemLogs GET /api/system-logs 系统运行日志列表（按级别/来源/关键词/时间筛选 + 分页）
+// 用于「系统崩溃/异常」排查；仅管理员可访问（路由层已要求登录）。
+func ListSystemLogs(c *gin.Context) {
+	q := systemLogQuery(c).Order("created_at desc")
 	limit := 100
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
@@ -52,50 +59,38 @@ func ListSystemLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
-// ExportSystemLogsXLSX GET /api/system-logs/export 导出系统运行日志为 Excel(.xlsx)
+// ExportSystemLogsXLSX GET /api/system-logs/export 导出系统运行日志
+//   format=xlsx|csv（默认 xlsx；CSV 带 UTF-8 BOM，Excel 直接打开不乱码）
+//   split=level 时按级别拆表，一个级别一个工作表
 func ExportSystemLogsXLSX(c *gin.Context) {
-	q := db.DB.Order("created_at desc")
-	if v := c.Query("level"); v != "" {
-		q = q.Where("level = ?", strings.ToUpper(v))
-	}
-	if v := c.Query("source"); v != "" {
-		q = q.Where("source LIKE ?", "%"+v+"%")
-	}
-	if v := c.Query("q"); v != "" {
-		q = q.Where("message LIKE ? OR detail LIKE ?", "%"+v+"%", "%"+v+"%")
-	}
-	if v := c.Query("from"); v != "" {
-		q = q.Where("created_at >= ?", v)
-	}
-	if v := c.Query("to"); v != "" {
-		q = q.Where("created_at <= ?", v)
-	}
+	q := systemLogQuery(c).Order("created_at desc")
 	var list []models.SystemLog
-	if err := q.Find(&list).Error; err != nil {
+	if err := q.Limit(20000).Find(&list).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	f := excelize.NewFile()
-	sheet := "系统运行日志"
-	f.SetSheetName("Sheet1", sheet)
 	heads := []string{"ID", "时间", "级别", "来源", "信息", "详情(堆栈)"}
-	for j, h := range heads {
-		col, _ := excelize.CoordinatesToCellName(1+j, 1)
-		f.SetCellValue(sheet, col, h)
-	}
-	for i, l := range list {
-		row := []interface{}{
+	rows := make([][]interface{}, 0, len(list))
+	for _, l := range list {
+		rows = append(rows, []interface{}{
 			l.ID,
 			l.CreatedAt.Format("2006-01-02 15:04:05"),
 			l.Level,
 			l.Source,
 			l.Message,
 			l.Detail,
-		}
-		for j, v := range row {
-			col, _ := excelize.CoordinatesToCellName(1+j, 2+i)
-			f.SetCellValue(sheet, col, v)
-		}
+		})
 	}
-	writeXLSX(c, f, "系统运行日志_"+time.Now().Format("20060102_1504")+".xlsx")
+	stamp := time.Now().Format("20060102_1504")
+
+	if strings.EqualFold(c.Query("format"), "csv") {
+		writeCSV(c, heads, rowsToStrings(rows), "系统运行日志_"+stamp+".csv")
+		return
+	}
+
+	sheets := []SheetData{{Name: "系统运行日志", Headers: heads, Rows: rows}}
+	if strings.EqualFold(c.Query("split"), "level") {
+		sheets = groupRows(heads, rows, "级别", "系统运行日志")
+	}
+	writeMultiSheetXLSX(c, sheets, "系统运行日志_"+stamp+".xlsx")
 }
