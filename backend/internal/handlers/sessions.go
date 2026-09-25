@@ -11,10 +11,18 @@ import (
 // onlineWindow 在线判定窗口：15 分钟内有活跃请求即视为在线
 const onlineWindow = 15 * time.Minute
 
-// GetSessions GET /api/sessions 在线用户列表（仅超管）
-// 按用户聚合多设备会话：登录方式 / 来源 IP / 在线时长 / 最后活跃
+// GetSessions GET /api/sessions 在线用户列表
+// v0.40.12：从「仅超管」下放为「超管看全公司；部门管理员看本部门（及以下）」——只读，
+// 强制下线（PSysUserForceOut）仍为超管独占。按用户聚合多设备会话：登录方式 / 来源 IP / 在线时长 / 最后活跃。
 func GetSessions(c *gin.Context) {
 	infos := session.List(onlineWindow)
+	// 数据范围：超管 scope 为空（不限制）；部门管理员只保留 scope 内的会话。
+	// session.Info 里带 DeptID，直接按其过滤即可。
+	scope := deptScopeIDs(c)
+	scopeSet := map[uint]bool{}
+	for _, id := range scope {
+		scopeSet[id] = true
+	}
 	type aggInfo struct {
 		UserID    uint     `json:"user_id"`
 		Username  string   `json:"username"`
@@ -31,6 +39,9 @@ func GetSessions(c *gin.Context) {
 	agg := map[uint]*aggInfo{}
 	var order []uint
 	for _, s := range infos {
+		if len(scopeSet) > 0 && !scopeSet[s.DeptID] {
+			continue
+		}
 		a, ok := agg[s.UserID]
 		if !ok {
 			a = &aggInfo{
@@ -49,11 +60,13 @@ func GetSessions(c *gin.Context) {
 		if s.LoginAt.Before(mustParse(a.LoginAt)) {
 			a.LoginAt = s.LoginAt.Format("2006-01-02 15:04:05")
 		}
-		a.OnlineSec = int64(now.Sub(s.LoginAt).Seconds())
 	}
 	list := make([]*aggInfo, 0, len(order))
 	for _, id := range order {
-		list = append(list, agg[id])
+		a := agg[id]
+		// 在线时长 = 现在 − 本次在线最早的登录时间（此前写成逐会话覆盖，取值随机，已修正）
+		a.OnlineSec = int64(now.Sub(mustParse(a.LoginAt)).Seconds())
+		list = append(list, a)
 	}
 	c.JSON(200, list)
 }

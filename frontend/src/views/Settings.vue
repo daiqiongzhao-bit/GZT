@@ -110,8 +110,11 @@
       </p>
 
       <div class="tmpl-head" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:20px;">
-        <h3 class="section-title" style="margin:0;">自定义模板 <span class="section-sub" v-if="!auth.isSuper">（仅查看 / 下载，新增与修改需超管）</span></h3>
-        <button v-if="auth.isSuper" class="btn primary sm" @click="toggleTmplForm">
+        <!-- v0.40.12：新增/修改从 isSuper 放宽为权限点 system:template:add ——
+             后端 RBAC 一直允许部门管理员（AllowPrefixes 含 system:template:），前端却用 isSuper 挡住入口，
+             属前后端不一致；模板归属按部门隔离（超管为全局模板）。 -->
+        <h3 class="section-title" style="margin:0;">自定义模板 <span class="section-sub" v-if="!auth.can('system:template:add')">（仅查看 / 下载，新增与修改需模板权限）</span></h3>
+        <button v-if="auth.can('system:template:add')" class="btn primary sm" @click="toggleTmplForm">
           {{ tmplOpen ? '收起新增' : '＋ 新增模板' }}
         </button>
       </div>
@@ -126,16 +129,16 @@
           </div>
           <div class="row-actions">
             <button class="mini" @click="downloadAuth('templates/' + t.id + '/download')">下载</button>
-            <button v-if="auth.isSuper" class="mini" @click="editTemplate(t)">修改</button>
-            <button v-if="auth.isSuper" class="del" @click="deleteTemplate(t)">×</button>
+            <button v-if="auth.can('system:template:add')" class="mini" @click="editTemplate(t)">修改</button>
+            <button v-if="auth.can('system:template:remove')" class="del" @click="deleteTemplate(t)">×</button>
           </div>
         </div>
         <div v-if="!templates.length" class="empty">
-          {{ auth.isSuper ? '暂无自定义模板，点击上方「＋ 新增模板」创建' : '暂无自定义模板（仅超管可新增，你可下载固定模板使用）' }}
+          {{ auth.can('system:template:add') ? '暂无自定义模板，点击上方「＋ 新增模板」创建' : '暂无自定义模板（需模板权限才可新增，你可下载固定模板使用）' }}
         </div>
       </div>
 
-      <div v-if="auth.isSuper && tmplOpen" class="add-form" style="margin-top:16px;">
+      <div v-if="auth.can('system:template:add') && tmplOpen" class="add-form" style="margin-top:16px;">
         <div class="fg2">
           <div><label class="fld">模板类型</label>
             <select v-model="tmplForm.type" class="glass-input">

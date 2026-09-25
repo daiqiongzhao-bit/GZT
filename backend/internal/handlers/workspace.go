@@ -1176,6 +1176,18 @@ func ListKnowledgeAttachments(c *gin.Context) {
 
 // UploadKnowledgeAttachment POST /workspace/knowledge/:id/attachments 上传附件
 // 表单字段名 file。仅条目创建者或超管可传。
+// safeAttachName 附件原始文件名兜底（v0.40.12）。
+// 拖拽目录项 / 某些粘贴场景下 multipart filename 可能为空，filepath.Base("")
+// 返回 "."，空名落库后附件列表会渲染出一条看不见的空白行（现场反馈的「附件最底下
+// 有一个看不到的」即此）。这里统一兜底为「未命名附件_时间戳」，扩展名取不到时按 bin。
+func safeAttachName(raw string) string {
+	name := filepath.Base(strings.TrimSpace(raw))
+	if name != "" && name != "." && name != "/" && name != string(os.PathSeparator) && name != `\` {
+		return name
+	}
+	return fmt.Sprintf("未命名附件_%s.bin", time.Now().Format("0102_150405"))
+}
+
 func UploadKnowledgeAttachment(c *gin.Context) {
 	e, ok := loadVisibleKnowledge(c)
 	if !ok {
@@ -1364,7 +1376,7 @@ func UploadTempAttachment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "单个附件不能超过 100MB"})
 		return
 	}
-	origName := filepath.Base(file.Filename)
+	origName := safeAttachName(file.Filename)
 	ext := strings.ToLower(filepath.Ext(origName))
 	mimeT := mime.TypeByExtension(ext)
 	if mimeT == "" {

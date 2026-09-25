@@ -207,14 +207,14 @@
               <button class="del danger" @click="$emit('remove-pending-att', a)">删除</button>
             </div>
             <template v-if="draft.id">
-              <div v-for="a in attachments" :key="'a' + a.id" class="att-item">
+              <div v-for="a in safeAtts" :key="'a' + a.id" class="att-item">
                 <span class="att-ico">{{ fileIcon(a.file_name) }}</span>
                 <span class="att-name">{{ a.file_name }}</span>
                 <span class="att-size dim">{{ fmtSize(a.size) }}</span>
                 <button class="del danger" @click="$emit('remove-att', a)">删除</button>
               </div>
             </template>
-            <div v-if="!pendingAtts.length && !(draft.id && attachments.length)" class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
+            <div v-if="!pendingAtts.length && !(draft.id && safeAtts.length)" class="empty att-empty">还没有附件，可上传截图 / 文档等补充资料</div>
           </div>
           <div class="att-upload-row">
             <label v-if="canUpload" class="btn sm">+ 上传文件
@@ -277,7 +277,7 @@
           <button class="k-tab" :class="{ on: sub === 'comments' }" @click="go('comments')">评论 ({{ comments.length }})</button>
           <button class="k-tab" :class="{ on: sub === 'versions' }" @click="go('versions')">版本 ({{ versions.length }})</button>
           <button class="k-tab" :class="{ on: sub === 'links' }" @click="go('links')">双向链接</button>
-          <button class="k-tab" :class="{ on: sub === 'files' }" @click="go('files')">附件 ({{ attachments.length }})</button>
+          <button class="k-tab" :class="{ on: sub === 'files' }" @click="go('files')">附件 ({{ safeAtts.length }})</button>
           <button class="k-tab" :class="{ on: sub === 'history' }" @click="go('history')">变更记录</button>
         </div>
 
@@ -347,7 +347,7 @@
           <!-- 附件 -->
           <div v-else-if="sub === 'files'" class="modal-attach">
             <div class="att-head">
-              <span class="att-title">附件（{{ attachments.length }}）</span>
+              <span class="att-title">附件（{{ safeAtts.length }}）</span>
               <div v-if="canEdit" class="att-upload">
                 <span v-if="uploading" class="dim up-txt">上传中…</span>
                 <label class="btn sm">+ 上传文件
@@ -356,8 +356,8 @@
               </div>
             </div>
             <p v-if="canEdit" class="att-hint dim">支持任意文件类型（图片可预览、PDF 可在线阅读），单文件 ≤ 100MB</p>
-            <div v-if="attachments.length" class="att-list">
-              <div v-for="a in attachments" :key="a.id" class="att-item">
+            <div v-if="safeAtts.length" class="att-list">
+              <div v-for="a in safeAtts" :key="a.id" class="att-item">
                 <img
                   v-if="a.mime && a.mime.startsWith('image/')"
                   :src="thumbOf(a)" class="att-thumb" :alt="a.file_name"
@@ -604,7 +604,10 @@ function toggleCollab(uid) {
   else props.draft.editor_ids.push(uid)
 }
 
-const attCount = computed(() => (props.pendingAtts || []).length + (props.draft.id ? (props.attachments || []).length : 0))
+const attCount = computed(() => (props.pendingAtts || []).length + (props.draft.id ? safeAtts.value.length : 0))
+// v0.40.12：过滤空名附件 —— 历史数据里可能存在 file_name 为空的记录（旧版上传未做兜底），
+// 渲染出来就是附件列表最底下一条看不见的空白行。后端已加空名兜底，这里再挡一层。
+const safeAtts = computed(() => (props.attachments || []).filter((a) => a && String(a.file_name || '').trim() !== ''))
 const collabNames = computed(() => (props.draft.editor_ids || []).map((id) => {
   const u = (props.collabCandidates || []).find((x) => x.id === id)
   return u ? u.name : ('#' + id)

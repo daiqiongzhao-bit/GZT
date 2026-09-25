@@ -90,20 +90,99 @@ func ExtractDocID(raw string) string {
 		return s // 已经是 docid
 	}
 	if u, err := url.Parse(s); err == nil {
+		// 1) 查询参数 docid= 优先
 		if v := strings.TrimSpace(u.Query().Get("docid")); v != "" {
 			return v
 		}
+		// 2) 路径取最后一段
 		p := strings.Trim(u.Path, "/")
 		if p != "" {
 			if i := strings.LastIndex(p, "/"); i >= 0 {
 				p = p[i+1:]
 			}
-			if p != "" {
+			// 路径段形似 docid（s3_*/d3_*/带下划线长串）才采用；
+			// 否则（smartsheet/sheet/overview 等路由词）继续看 hash。
+			if isDocIDLike(p) {
 				return p
 			}
 		}
+		// 3) hash（# 之后）里找：?docid= 参数 或 路径形如 detail/s3_xxx
+		if h := u.Fragment; h != "" {
+			if i := strings.IndexByte(h, '?'); i >= 0 {
+				if v := parseDocIDQuery(h[i+1:]); v != "" {
+					return v
+				}
+			}
+			if v := lastSegDocID(h); v != "" {
+				return v
+			}
+		}
 	}
-	return s
+	return s // 4) 认不出来原样返回，交给下游报错
+}
+
+// isDocIDLike 判断一段是否形似企微 docid。
+// 已知非 docid 的路由词一律视为否；s3_*/d3_*/带下划线长串视为是。
+func isDocIDLike(seg string) bool {
+	if seg == "" {
+		return false
+	}
+	switch strings.ToLower(seg) {
+	case "smartsheet", "sheet", "doc", "overview", "detail",
+		"app", "apps", "list", "home", "page":
+		return false
+	}
+	ls := strings.ToLower(seg)
+	if len(seg) >= 4 && (ls == "s3_"+ls[3:] || ls == "d3_"+ls[3:]) {
+		return true
+	}
+	// 形如 s3_xxxxxxxx / d3_xxxxxxxx（首两位 + 下划线）
+	if len(seg) >= 3 && (ls[0] == 's' || ls[0] == 'd') && ls[1] == '3' && len(seg) > 2 && seg[2] == '_' {
+		return true
+	}
+	// 其它带下划线的长串也当 docid 处理（避免误伤）
+	if strings.Contains(seg, "_") && len(seg) >= 8 {
+		return true
+	}
+	return false
+}
+
+// parseDocIDQuery 从 query string 取 docid 参数。
+func parseDocIDQuery(qs string) string {
+	for _, kv := range strings.Split(qs, "&") {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			if strings.EqualFold(kv[:i], "docid") {
+				return strings.TrimSpace(kv[i+1:])
+			}
+		}
+	}
+	return ""
+}
+
+// lastSegDocID 取 hash 末尾的「最后一段」（按 / 或 # 切分），且形似 docid 才返回。
+func lastSegDocID(h string) string {
+	cur := strings.TrimSpace(h)
+	for cur != "" {
+		// 反复切分：形如 "#/detail/s3_xxx" 一路剥到 "s3_xxx"
+		n := strings.TrimLeft(cur, "#/")
+		if n == "" {
+			break
+		}
+		if i := strings.LastIndexByte(n, '/'); i >= 0 {
+			cur = n[i+1:]
+		} else {
+			cur = n
+			break
+		}
+		if isDocIDLike(cur) {
+			return cur
+		}
+	}
+	// 若剥到最后一截仍形似 docid，返回它
+	if isDocIDLike(cur) {
+		return cur
+	}
+	return ""
 }
 
 // RenderTpl 渲染模板变量：{var} 形式；未知变量原样保留。

@@ -140,11 +140,19 @@ echo
 read -r -p "确认发布 $NEW？[y/N] " CONFIRM
 [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && { echo "已取消"; exit 0; }
 
-# ---------- 3.5 同步代码内 AppVersion（避免线上 /api/version 与 tag 不一致） ----------
+# ---------- 3.5 同步代码内 AppVersion + compose 镜像 pin（避免线上 /api/version 与 tag 不一致） ----------
+# v0.40.12：docker-compose.yml 的 image pin 一并同步到新版本号 —— 否则发完版 compose pull
+# 拉到的还是旧 tag，「GitHub 已发、Hub 已推、服务器还在跑旧版」的错位会反复出现。
 echo "==> 0/4 同步 AppVersion -> ${NEW}"
 sed -i "s/AppVersion: \"v[0-9.]*\"/AppVersion: \"${NEW}\"/" backend/internal/config/config.go
-git add backend/internal/config/config.go
-git commit -q -m "${NEW}: 同步 AppVersion"
+if grep -qE '^[[:space:]]*image:[[:space:]]*'"${IMAGE}":'v[0-9.]+' docker-compose.yml; then
+  sed -i "s|^\([[:space:]]*image:[[:space:]]*${IMAGE}:\)v[0-9.]*|\1${NEW}|" docker-compose.yml
+  echo "    compose 镜像 pin 已同步 -> ${IMAGE}:${NEW}"
+else
+  echo "    ⚠ docker-compose.yml 未发现 ${IMAGE}:vX.Y.Z 形式的 pin，跳过同步（请人工确认）"
+fi
+git add backend/internal/config/config.go docker-compose.yml
+git commit -q -m "${NEW}: 同步 AppVersion 与 compose 镜像 pin"
 git push origin "$BRANCH" -q
 
 # ---------- 3.6 重新打包插件（此时 AppVersion 已是 ${NEW}） ----------

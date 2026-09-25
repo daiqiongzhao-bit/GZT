@@ -354,8 +354,11 @@ func RoleSeeds() []seedRole {
 				"system:dept:",
 			},
 			DenyExact: []string{
-				// 提权/收权类动作不下放（方案 §8.3）：改角色绑定、强制下线、查看会话
-				PSysUserAuthRole, PSysUserForceOut, PSysUserSessions,
+				// 提权/收权类动作不下放（方案 §8.3）：改角色绑定、强制下线。
+				// v0.40.12：「查看会话」（PSysUserSessions）从拒绝清单移出——
+				// 部门管理员可查看**本部门**在线会话（登录端 / IP / 在线时长，只读），
+				// 后端 GetSessions 按数据范围过滤；强制下线仍为超管独占。
+				PSysUserAuthRole, PSysUserForceOut,
 				// 部门增删改不下放（与改造前一致：部门管理员只配班次，不建/不删部门）
 				PSysDeptAdd, PSysDeptEdit, PSysDeptRemove,
 				// 解锁登录：handler 按 username 全局清锁定记录（不区分部门），

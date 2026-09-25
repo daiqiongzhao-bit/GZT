@@ -1,14 +1,7 @@
 <template>
   <div v-if="canView" class="dash">
-    <!-- 首页品牌区：Logo + 公司名 + 当日日期 -->
-    <div class="dash-hero">
-      <img v-if="!logoFailed" :src="logoUrl" class="hero-logo" alt="Logo" @error="logoFailed = true" />
-      <div class="hero-title-wrap">
-        <div class="hero-title">{{ brand.company_name || '排班工作台' }}</div>
-        <div class="hero-sub">{{ brand.slogan || '班次 · 任务 · 知识 一体化' }}</div>
-      </div>
-      <div class="hero-date">{{ todayLabel }}</div>
-    </div>
+    <!-- v0.40.12：移除顶部品牌横幅 —— 公司名 / Slogan / Logo 侧栏已展示，横幅纯属重复；
+         当日日期顶栏右上角已有，不再二次显示。 -->
 
     <!-- 自定义工具栏 -->
     <div class="dash-toolbar">
@@ -242,7 +235,6 @@ import { useAutoRefresh } from '@/autoRefresh'
 import * as api from '@/api'
 import { icons } from '@/icons'
 import { useAuthStore } from '@/store/auth'
-import brand from '@/brand'
 import EmptyState from '@/components/EmptyState.vue'
 
 const auth = useAuthStore()
@@ -252,15 +244,6 @@ const auth = useAuthStore()
 // 现场容易被误读成"超级管理员权限不足"（实际是某个未授权角色在轮询首页）。
 const canView = computed(() => auth.can('dashboard:view'))
 const blockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
-
-// 首页 Logo：已上传企业 Logo 跟随设置，否则用内置图标
-const logoFailed = ref(false)
-const logoUrl = computed(() => (brand.logo ? '/api/settings/logo?v=' + encodeURIComponent(brand.logo) : '/favicon.svg'))
-const WEEK = ['日', '一', '二', '三', '四', '五', '六']
-const todayLabel = computed(() => {
-  const d = new Date()
-  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 星期${WEEK[d.getDay()]}`
-})
 const dash = ref({ on_duty_count: 0, today_tasks: 0, month_tasks: 0, monthly_tasks: 0, overdue_count: 0, on_duty: [], on_duty_rows: [], today: '', today_task_list: [], month_task_list: [], monthly_task_list: [] })
 const schedules = ref([])
 const departments = ref([])
@@ -412,12 +395,7 @@ onUnmounted(() => useAutoRefresh(refreshDash, false))
 </script>
 
 <style scoped>
-.dash-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; padding: 14px 18px; border-radius: var(--radius); background: var(--bg-1); border: 1px solid var(--glass-border); }
-.hero-logo { width: 46px; height: 46px; border-radius: 12px; object-fit: contain; background: var(--overlay); flex: none; }
-.hero-title-wrap { flex: 1; min-width: 0; }
-.hero-title { font-size: 19px; font-weight: 800; line-height: 1.2; }
-.hero-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
-.hero-date { font-size: 13px; color: var(--text-dim); white-space: nowrap; text-align: right; }
+/* v0.40.12：dash-hero 品牌横幅已移除（与侧栏信息重复），相关样式一并清理 */
 .dash-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .dash-toolbar .btn.on { background: var(--accent-soft); color: var(--accent); border-color: rgba(79,70,229,0.4); }
 

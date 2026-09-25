@@ -79,7 +79,13 @@ func UpsertTemplate(c *gin.Context) {
 			c.JSON(404, gin.H{"error": "模板不存在"})
 			return
 		}
-		// 仅超管可改
+		// v0.40.12：随前端入口放宽（dept_admin 可新增模板），修改必须校验归属——
+		// 非超管只能改「本部门模板」（超管模板 dept_id=0 为全局，不可被部门管理员改动），
+		// 否则部门管理员可凭 system:template:add 权限改到其它部门/全局模板（越权）。
+		if cl.Role != models.RoleSuperAdmin && t.DeptID != cl.DeptID {
+			c.JSON(403, gin.H{"error": "仅可修改本部门的模板"})
+			return
+		}
 		t.Name = req.Name
 		t.Content = req.Content
 		t.Type = req.Type
@@ -100,13 +106,19 @@ func UpsertTemplate(c *gin.Context) {
 	c.JSON(200, t)
 }
 
-// DeleteTemplate DELETE /api/templates/:id 超管可删除
+// DeleteTemplate DELETE /api/templates/:id 删除自定义模板
+// v0.40.12：与新增/修改同口径 —— 超管任意；其余（部门管理员）仅可删除本部门模板，
+// 全局模板（dept_id=0）与其它部门的模板不可删。
 func DeleteTemplate(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	cl := currentClaims(c)
 	var t models.Template
 	if err := db.DB.First(&t, id).Error; err != nil {
 		c.JSON(404, gin.H{"error": "模板不存在"})
+		return
+	}
+	if cl.Role != models.RoleSuperAdmin && t.DeptID != cl.DeptID {
+		c.JSON(403, gin.H{"error": "仅可删除本部门的模板"})
 		return
 	}
 	if err := db.DB.Delete(&t).Error; err != nil {
@@ -620,7 +632,10 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	}
 
 	// Build date → shift→people map
-	type cellInfo struct{ Shift string; People []string }
+	type cellInfo struct {
+		Shift  string
+		People []string
+	}
 	byDate := make(map[string][]cellInfo)
 	dates := []string{}
 	for _, sc := range list {
@@ -628,8 +643,15 @@ func ExportSchedulesXLSX(c *gin.Context) {
 		_ = json.Unmarshal([]byte(sc.People), &ppl)
 		byDate[sc.Date] = append(byDate[sc.Date], cellInfo{Shift: sc.Shift, People: ppl})
 		found := false
-		for _, d := range dates { if d == sc.Date { found = true; break } }
-		if !found { dates = append(dates, sc.Date) }
+		for _, d := range dates {
+			if d == sc.Date {
+				found = true
+				break
+			}
+		}
+		if !found {
+			dates = append(dates, sc.Date)
+		}
 	}
 	if len(dates) == 0 {
 		c.JSON(200, gin.H{"message": "无数据"})
@@ -641,7 +663,10 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	userOrder := []string{}
 	for _, di := range byDate[dates[0]] {
 		for _, p := range di.People {
-			if _, ok := userSet[p]; !ok { userSet[p] = struct{}{}; userOrder = append(userOrder, p) }
+			if _, ok := userSet[p]; !ok {
+				userSet[p] = struct{}{}
+				userOrder = append(userOrder, p)
+			}
 		}
 	}
 
@@ -650,7 +675,10 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	shiftList := []string{}
 	for _, cells := range byDate {
 		for _, ci := range cells {
-			if _, ok := shiftSet[ci.Shift]; !ok { shiftSet[ci.Shift] = struct{}{}; shiftList = append(shiftList, ci.Shift) }
+			if _, ok := shiftSet[ci.Shift]; !ok {
+				shiftSet[ci.Shift] = struct{}{}
+				shiftList = append(shiftList, ci.Shift)
+			}
 		}
 	}
 
@@ -658,7 +686,9 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	deptName := "全部"
 	if len(scope) == 1 {
 		var dept models.Department
-		if db.DB.First(&dept, scope[0]).Error == nil { deptName = dept.Name }
+		if db.DB.First(&dept, scope[0]).Error == nil {
+			deptName = dept.Name
+		}
 	}
 
 	// Parse year-month from first date
@@ -677,7 +707,9 @@ func ExportSchedulesXLSX(c *gin.Context) {
 		headers = append(headers, d[8:])
 	}
 	// Append shift summary columns
-	for _, sh := range shiftList { headers = append(headers, sh) }
+	for _, sh := range shiftList {
+		headers = append(headers, sh)
+	}
 	headers = append(headers, "休息")
 
 	styleHeader, _ := f.NewStyle(&excelize.Style{
@@ -694,7 +726,11 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	// Lookup: person → row index of their schedule on a given date
 	cellOf := func(date, person string) string {
 		for _, ci := range byDate[date] {
-			for _, p := range ci.People { if p == person { return ci.Shift } }
+			for _, p := range ci.People {
+				if p == person {
+					return ci.Shift
+				}
+			}
 		}
 		return ""
 	}
@@ -702,12 +738,18 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	// Short label for display
 	shiftLabel := func(sh string) string {
 		switch sh {
-		case "早班": return "早"
-		case "中班": return "中"
-		case "晚班": return "晚"
-		case "夜班": return "夜"
-		case "休息": return "休"
-		default: return sh
+		case "早班":
+			return "早"
+		case "中班":
+			return "中"
+		case "晚班":
+			return "晚"
+		case "夜班":
+			return "夜"
+		case "休息":
+			return "休"
+		default:
+			return sh
 		}
 	}
 
@@ -735,12 +777,18 @@ func ExportSchedulesXLSX(c *gin.Context) {
 
 	cellStyle := func(shift string) int {
 		switch shift {
-		case "早班": return styleMorning
-		case "中班": return styleMid
-		case "晚班": return styleEvening
-		case "夜班": return styleNight
-		case "休息": return styleRest
-		default: return 0
+		case "早班":
+			return styleMorning
+		case "中班":
+			return styleMid
+		case "晚班":
+			return styleEvening
+		case "夜班":
+			return styleNight
+		case "休息":
+			return styleRest
+		default:
+			return 0
 		}
 	}
 
@@ -758,12 +806,20 @@ func ExportSchedulesXLSX(c *gin.Context) {
 			colIdx := 3 + di
 			sh := cellOf(d, person)
 			label := ""
-			if sh != "" { label = shiftLabel(sh) }
+			if sh != "" {
+				label = shiftLabel(sh)
+			}
 			cell, _ := excelize.CoordinatesToCellName(colIdx+1, row)
 			f.SetCellValue(sheet, cell, label)
-			if st := cellStyle(sh); st != 0 { f.SetCellStyle(sheet, cell, cell, st) }
+			if st := cellStyle(sh); st != 0 {
+				f.SetCellStyle(sheet, cell, cell, st)
+			}
 
-			if sh == "休息" || sh == "" { restCount++ } else { shiftCounts[sh]++ }
+			if sh == "休息" || sh == "" {
+				restCount++
+			} else {
+				shiftCounts[sh]++
+			}
 		}
 		// Summary columns
 		sumCol := 3 + len(dates)
@@ -783,11 +839,16 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	for di, d := range dates {
 		colIdx := 3 + di
 		sc := map[string]int{}
-		for _, ci := range byDate[d] { sc[ci.Shift] += len(ci.People) }
+		for _, ci := range byDate[d] {
+			sc[ci.Shift] += len(ci.People)
+		}
 		// Show first non-rest shift count or empty
 		label := ""
 		for _, sh := range shiftList {
-			if cnt, ok := sc[sh]; ok && cnt > 0 { label = strconv.Itoa(cnt); break }
+			if cnt, ok := sc[sh]; ok && cnt > 0 {
+				label = strconv.Itoa(cnt)
+				break
+			}
 		}
 		cell, _ := excelize.CoordinatesToCellName(colIdx+1, sumRow)
 		f.SetCellValue(sheet, cell, label)
@@ -796,7 +857,13 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	sumCol := 3 + len(dates)
 	for _, sh := range shiftList {
 		total := 0
-		for _, cells := range byDate { for _, ci := range cells { if ci.Shift == sh { total += len(ci.People) } } }
+		for _, cells := range byDate {
+			for _, ci := range cells {
+				if ci.Shift == sh {
+					total += len(ci.People)
+				}
+			}
+		}
 		sc, _ := excelize.CoordinatesToCellName(sumCol, sumRow)
 		f.SetCellValue(sheet, sc, total)
 		sumCol++
@@ -814,11 +881,12 @@ func ExportSchedulesXLSX(c *gin.Context) {
 	writeXLSX(c, f, fname)
 }
 
-
 // safeDispName 去除会破坏 Content-Disposition 头的特殊字符（引号/分号/控制符），保留中文
 func safeDispName(name string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '"' || r == ';' || r == '\r' || r == '\n' { return -1 }
+		if r == '"' || r == ';' || r == '\r' || r == '\n' {
+			return -1
+		}
 		return r
 	}, name)
 }
