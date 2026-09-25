@@ -122,6 +122,20 @@ func checkpoint() {
 	_ = db.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error
 }
 
+// snapshotDB 通过 SQLite VACUUM INTO 在单一事务内导出一致性数据库副本，
+// 取代「wal_checkpoint + 复制在线文件」，避免复制出撕裂（半写）的 -wal/-shm 导致还原失败（P1-4 修复）。
+// dst 必须不存在；调用方传入的是带时间戳的全新路径。
+func snapshotDB(dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		_ = os.Remove(dst)
+	}
+	if err := db.DB.Exec(fmt.Sprintf("VACUUM INTO %q", dst)).Error; err != nil {
+		_ = os.Remove(dst)
+		return fmt.Errorf("数据库快照失败: %w", err)
+	}
+	return nil
+}
+
 // copyFile 整文件复制（直接文件复制，最可靠）
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -203,7 +217,7 @@ func CreateBackup(bType, scope string) (*BackupInfo, error) {
 	// 形如 swb-backup-<scope>-<auto-><ts>.db（旧版无 scope 段，列表解析时回退 all）
 	name := backupPrefix + scopeTag + "-" + typeTag + ts + backupExt
 	localPath := filepath.Join(dir, name)
-	if err := copyFile(src, localPath); err != nil {
+	if err := snapshotDB(localPath); err != nil {
 		return nil, err
 	}
 
@@ -362,6 +376,9 @@ func RestoreBackup(id string) error {
 		_ = copyFile(currentBackup, config.C.DBPath)
 		return fmt.Errorf("还原失败: %w", err)
 	}
+	// 清理可能残留的 WAL 兄弟文件，避免旧 -wal/-shm 与还原出的单文件快照不一致
+	_ = os.Remove(config.C.DBPath + "-wal")
+	_ = os.Remove(config.C.DBPath + "-shm")
 
 	// 还原知识库附件目录（与数据库同盘目录）
 	if attSrc := src + ".att"; dirExists(attSrc) {

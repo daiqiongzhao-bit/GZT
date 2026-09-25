@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"shiftworkbench/internal/config"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +44,8 @@ func (s *Scheduler) Start() {
 }
 
 func (s *Scheduler) tick() {
-	now := time.Now().In(s.loc)
+	// 跟随运行时生效时区（P1-3）：不再依赖启动期固定的 s.loc，避免与 time.Local 全局写产生 data race
+	now := time.Now().In(config.TZ())
 	hhmm := now.Format("15:04")
 
 	var tasks []WpTask
@@ -79,7 +81,7 @@ func (s *Scheduler) maybeCatchUp(t WpTask, now time.Time) {
 	if _, err := fmt.Sscanf(t.SendTime, "%d:%d", &hh, &mm); err != nil {
 		return
 	}
-	sendDT := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, s.loc)
+	sendDT := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, config.TZ())
 	// 今天的 send_time 还没到 → 不补偿
 	if !now.After(sendDT) {
 		return
@@ -117,7 +119,7 @@ func (s *Scheduler) cleanup() {
 	go func() {
 		for {
 			time.Sleep(6 * time.Hour)
-			today := time.Now().In(s.loc).Format("2006-01-02")
+			today := time.Now().In(config.TZ()).Format("2006-01-02")
 			s.mu.Lock()
 			for k := range s.fired {
 				// key 形如 "09:00@2026-09-19/3" 或 "catchup@2026-09-19/3"

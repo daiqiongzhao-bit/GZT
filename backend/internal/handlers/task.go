@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"shiftworkbench/internal/config"
 	"shiftworkbench/internal/db"
 	"shiftworkbench/internal/models"
 
@@ -25,7 +26,7 @@ func monthDayOf(deadline string) int {
 	if deadline == "" {
 		return 0
 	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04", deadline, time.Local); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02T15:04", deadline, config.TZ()); err == nil {
 		return t.Day()
 	}
 	return 0
@@ -33,7 +34,7 @@ func monthDayOf(deadline string) int {
 
 // timeOf 从 YYYY-MM-DDTHH:MM 提取 HH:MM，失败返回空串
 func timeOf(deadline string) string {
-	if t, err := time.ParseInLocation("2006-01-02T15:04", deadline, time.Local); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02T15:04", deadline, config.TZ()); err == nil {
 		return t.Format("15:04")
 	}
 	return ""
@@ -47,7 +48,7 @@ func taskStartTime(t models.Task) time.Time {
 		if t.Deadline == "" {
 			return time.Time{}
 		}
-		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local)
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, config.TZ())
 		if err != nil {
 			return time.Time{}
 		}
@@ -56,7 +57,7 @@ func taskStartTime(t models.Task) time.Time {
 		if t.Time == "" {
 			return time.Time{}
 		}
-		dt, err := time.ParseInLocation("2006-01-02T15:04", time.Now().Format("2006-01-02")+"T"+t.Time, time.Local)
+		dt, err := time.ParseInLocation("2006-01-02T15:04", config.Now().Format("2006-01-02")+"T"+t.Time, config.TZ())
 		if err != nil {
 			return time.Time{}
 		}
@@ -65,7 +66,7 @@ func taskStartTime(t models.Task) time.Time {
 		if len(t.Deadline) < 16 {
 			return time.Time{}
 		}
-		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline[:16], time.Local)
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline[:16], config.TZ())
 		if err != nil {
 			return time.Time{}
 		}
@@ -197,13 +198,13 @@ func isSoonOverdue(t models.Task) bool {
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
-	now := time.Now()
+	now := config.Now()
 	switch t.Type {
 	case models.TaskTypeOnce:
 		if t.Deadline == "" {
 			return false
 		}
-		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local)
+		dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, config.TZ())
 		if err != nil {
 			return false
 		}
@@ -241,13 +242,13 @@ func taskUrgencyKey(t models.Task, nowStr string) string {
 		k = t.Deadline
 	case models.TaskTypeDaily:
 		if t.Time != "" {
-			k = time.Now().Format("2006-01-02") + "T" + t.Time
+			k = config.Now().Format("2006-01-02") + "T" + t.Time
 		}
 	}
 	// 没有截止时间的任务（每日 / 每周等周期任务）按「今天的到点时点」参与排序，
 	// 否则它们会因为没有 deadline 被一律沉到列表最底（插件与首页的今日待办尤其明显）。
 	if k == "" && t.Time != "" {
-		k = time.Now().Format("2006-01-02") + "T" + t.Time
+		k = config.Now().Format("2006-01-02") + "T" + t.Time
 	}
 	if k == "" {
 		return "9999-12-31T23:59"
@@ -270,18 +271,18 @@ func isOverdue(t models.Task) bool {
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
-	now := time.Now()
+	now := config.Now()
 	grace := time.Duration(overdueGraceMinutes()) * time.Minute
 	switch t.Type {
 	case models.TaskTypeOnce:
 		if t.Deadline != "" {
-			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil && dl.Add(grace).Before(now) {
+			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, config.TZ()); err == nil && dl.Add(grace).Before(now) {
 				return true
 			}
 		}
 	case models.TaskTypeDaily:
 		if t.Time != "" {
-			if dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, time.Local); err == nil && dt.Add(grace).Before(now) {
+			if dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, config.TZ()); err == nil && dt.Add(grace).Before(now) {
 				return true
 			}
 		}
@@ -297,7 +298,7 @@ func isOverdue(t models.Task) bool {
 			return false
 		}
 		dueDay := t.Deadline[:10]
-		if _, err := time.ParseInLocation("2006-01-02", dueDay, time.Local); err != nil {
+		if _, err := time.ParseInLocation("2006-01-02", dueDay, config.TZ()); err != nil {
 			return false
 		}
 		return dueDay < now.Format("2006-01-02")
@@ -314,7 +315,7 @@ func isDueToday(t models.Task) bool {
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
-	now := time.Now()
+	now := config.Now()
 	switch t.Type {
 	case models.TaskTypeDaily:
 		// 每日任务可选「按周执行」：命中勾选的星期才处理；未勾选=每天都要处理
@@ -323,13 +324,21 @@ func isDueToday(t models.Task) bool {
 		if t.Deadline == "" {
 			return false
 		}
-		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
+		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, config.TZ()); err == nil {
 			return dl.Format("2006-01-02") == now.Format("2006-01-02")
 		}
 		return false
 	case models.TaskTypeMonthly:
-		md := monthDayOf(t.Deadline)
-		return md != 0 && md == now.Day()
+		// 与 isOverdue 一致：按月度任务的完整截止日期（YYYY-MM-DD）判断是否「今日应办」，
+		// 而非只比「日」。否则 deadline 落在其他月份日期时，每月该日都会被误报「今日应办」（P1-2 修复）。
+		if len(t.Deadline) < 10 {
+			return false
+		}
+		dueDay := t.Deadline[:10]
+		if _, err := time.ParseInLocation("2006-01-02", dueDay, config.TZ()); err != nil {
+			return false
+		}
+		return dueDay == now.Format("2006-01-02")
 	}
 	return false
 }
@@ -342,7 +351,7 @@ func isDueThisMonth(t models.Task) bool {
 	if t.Frozen {
 		return false
 	}
-	now := time.Now()
+	now := config.Now()
 	switch t.Type {
 	case models.TaskTypeDaily, models.TaskTypeMonthly:
 		return true
@@ -350,7 +359,7 @@ func isDueThisMonth(t models.Task) bool {
 		if t.Deadline == "" {
 			return false
 		}
-		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
+		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, config.TZ()); err == nil {
 			return dl.Format("2006-01") == now.Format("2006-01")
 		}
 		return false

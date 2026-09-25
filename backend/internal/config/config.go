@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,39 @@ type Config struct {
 }
 
 var C *Config
+
+// —— 时区（P1-3 修复）——
+// 启动时以单线程方式设置 time.Local（见 Init）；运行时切换时区不再写全局 time.Local，
+// 而是更新下方受锁的 appTZ，供关键时间路径通过 TZ()/Now() 读取，
+// 消除与 time.Now() 并发读写 time.Local 的 data race（原 setting.go 直接写 time.Local）。
+var (
+	appTZ *time.Location
+	tzMu  sync.RWMutex
+)
+
+// TZ 返回当前生效时区。未显式设置时回退到全局 time.Local，
+// 保证单测/未调用 Init 的场景下行为不变（兼容既有测试对 time.Local 的假设）。
+func TZ() *time.Location {
+	tzMu.RLock()
+	l := appTZ
+	tzMu.RUnlock()
+	if l == nil {
+		return time.Local
+	}
+	return l
+}
+
+// Now 等价于 time.Now().In(TZ())，按当前生效时区解释当前时刻。
+func Now() time.Time {
+	return time.Now().In(TZ())
+}
+
+// SetTZ 运行时切换时区。仅更新内部变量，绝不写全局 time.Local（P1-3 修复核心）。
+func SetTZ(l *time.Location) {
+	tzMu.Lock()
+	appTZ = l
+	tzMu.Unlock()
+}
 
 // 弱/默认密钥黑名单：一旦命中说明注入的是公开可猜值，生产下必须拒绝使用，
 // 否则攻击者可用公开默认值伪造任意身份 JWT / 解密历史密文。
@@ -35,11 +69,15 @@ var weakSecrets = []string{
 const secretsFileName = "secrets.env"
 
 func Init() error {
-	// 强制使用中国时区（北京时间），避免容器默认 UTC 导致任务逾期判断与到点推送错 8 小时
+	// 强制使用中国时区（北京时间），避免容器默认 UTC 导致任务逾期判断与到点推送错 8 小时。
+	// 启动时单线程设置 time.Local（安全）；运行时切换改走 config.SetTZ（P1-3 修复）。
 	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
 		time.Local = loc
+		SetTZ(loc)
 	} else {
-		time.Local = time.FixedZone("CST", 8*3600)
+		loc = time.FixedZone("CST", 8*3600)
+		time.Local = loc
+		SetTZ(loc)
 	}
 
 	dbPath := getEnv("DB_PATH", "shift_workbench.db")

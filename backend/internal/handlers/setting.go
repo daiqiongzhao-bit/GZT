@@ -273,9 +273,12 @@ func UpdateTimezone(c *gin.Context) {	var req struct {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	time.Local = loc // 立即生效：逾期/今日/本月判定与到点推送均按新时区计算
+	// 立即生效：逾期/今日/本月判定与到点推送均按新时区计算。
+	// 不再写全局 time.Local（P1-3 修复核心）：改为更新受锁的内部时区，
+	// 关键时间路径已改走 config.TZ()/Now()，消除与 time.Now() 的并发 data race。
+	config.SetTZ(loc)
 	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "设置时区: "+req.Timezone)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "timezone": req.Timezone, "now": time.Now().Format("2006-01-02 15:04:05")})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "timezone": req.Timezone, "now": config.Now().Format("2006-01-02 15:04:05")})
 }
 
 // overdueGraceMinutes 读取并缓存逾期宽限期。默认 30 分钟（≤0 表示即时）。

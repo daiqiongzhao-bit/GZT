@@ -947,11 +947,18 @@ func ApplyPlan(c *gin.Context) {
 	// 2) 校验：把违规一并返回，由管理员决定是否仍要应用
 	violations := pi.validatePlan(req.Plan)
 
-	// 3) 落库：先清空该部门该月班表，再按计划写入。
-	//    只处理本部门人员，避免误删其他部门数据。
+	// 3) 落库：仅「重排计划内人员」的班次行参与清退，再按计划写入。
+	//    锁定/休假/未纳入计划的人员行保留，避免被整月清空静默抹掉（P1-1 修复）。
 	validNames := map[string]bool{}
 	for _, p := range pi.People {
 		validNames[p.Name] = true
+	}
+	// 计划内人员：req.Plan 中出现的全部姓名（含被标为休息/占位者，其旧实班也应被清退）
+	planPeople := map[string]bool{}
+	for _, byName := range req.Plan {
+		for name := range byName {
+			planPeople[name] = true
+		}
 	}
 	first, last := monthRange(req.Year, req.Month)
 	from, to := dateKey(first), dateKey(last)
@@ -961,11 +968,33 @@ func ApplyPlan(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": tx.Error.Error()})
 		return
 	}
+	// 取出该部门该月现有班表，仅删除含「计划内人员」的行；其余（锁定/休假等）保留。
+	var existing []models.Schedule
 	if err := tx.Where("dept_id = ? AND date >= ? AND date <= ?", deptID, from, to).
-		Delete(&models.Schedule{}).Error; err != nil {
+		Find(&existing).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	var delIDs []uint
+	for _, s := range existing {
+		var names []string
+		if err := json.Unmarshal([]byte(s.People), &names); err != nil {
+			continue
+		}
+		for _, n := range names {
+			if planPeople[n] {
+				delIDs = append(delIDs, s.ID)
+				break
+			}
+		}
+	}
+	if len(delIDs) > 0 {
+		if err := tx.Where("id IN ?", delIDs).Delete(&models.Schedule{}).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// 按「日期 + 班次」聚合成多条 Schedule（People 为 JSON 数组）
