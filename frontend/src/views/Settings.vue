@@ -389,10 +389,12 @@
           <div>
             <div class="b-name">{{ b.name }}</div>
             <div class="b-meta"><span class="scope-chip" :class="'s-' + (b.scope || 'all')">{{ scopeName(b.scope) }}</span> {{ b.size_human }} · {{ b.created_at }}<span v-if="b.remote" class="b-remote"> · 已同步异地</span></div>
+            <div v-if="verifyMsgs[b.id]" class="b-meta" style="color:var(--accent); margin-top:4px;">{{ verifyMsgs[b.id] }}</div>
           </div>
           <div class="b-actions">
             <button class="btn ghost" @click="downloadBackup(b)">下载</button>
             <button class="btn ghost" @click="restoreBackup(b)">还原</button>
+            <button class="btn ghost" :disabled="verifying[b.id]" @click="verifyBackup(b)">校验</button>
             <button class="del" @click="deleteBackup(b)">×</button>
           </div>
         </div>
@@ -891,6 +893,25 @@ async function saveBackupCfg() { backupCfgSaving.value = true; try { await api.p
 function downloadBackup(b) { downloadAuth('backups/' + b.id + '/download') }
 async function restoreBackup(b) { if (!confirm(`确认还原备份「${b.name}」？当前数据将被覆盖，且操作不可撤销！`)) return; try { await api.post('/backups/' + b.id + '/restore'); alert('已还原，页面将自动刷新'); setTimeout(() => location.reload(), 800) } catch (e) { alert(e.response?.data?.error || '还原失败') } }
 async function deleteBackup(b) { if (!confirm(`删除备份「${b.name}」？`)) return; try { await api.del('/backups/' + b.id); await loadBackups() } catch (e) { alert(e.response?.data?.error || '删除失败') } }
+
+// 备份校验（演练还原）：调用后端只读校验 + 临时库演练还原，不改动线上数据
+const verifyMsgs = reactive({})
+const verifying = reactive({})
+async function verifyBackup(b) {
+  verifying[b.id] = true
+  verifyMsgs[b.id] = '校验中…'
+  try {
+    const r = await api.post('/backups/' + b.id + '/verify')
+    const parts = ['完整性:' + r.integrity, '演练还原:' + (r.drill_ok ? '成功' : '失败'), '表:' + (r.tables ? r.tables.length : 0) + '个']
+    if (r.missing_tables && r.missing_tables.length) parts.push('缺表:' + r.missing_tables.join(','))
+    const icon = r.verdict === 'ok' ? '✅' : (r.verdict === 'warning' ? '⚠️' : '❌')
+    verifyMsgs[b.id] = icon + (r.message || '') + ' 〔' + parts.join(' / ') + '〕'
+  } catch (e) {
+    verifyMsgs[b.id] = '❌ ' + (e.response?.data?.error || '校验失败')
+  } finally {
+    verifying[b.id] = false
+  }
+}
 
 // 退出登录。
 // ★ 顺序不能改（v0.40.4）：auth.logout() 内部**同步**清空 token/user/权限，

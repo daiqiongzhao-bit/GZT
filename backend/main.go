@@ -379,6 +379,7 @@ func main() {
 			auth.POST("/backups", handlers.CreateBackupHandler)
 			auth.GET("/backups/:id/download", handlers.DownloadBackupHandler)
 			auth.POST("/backups/:id/restore", handlers.RestoreBackupHandler)
+		auth.POST("/backups/:id/verify", handlers.VerifyBackupHandler)
 			auth.DELETE("/backups/:id", handlers.DeleteBackupHandler)
 			auth.POST("/backups/import", handlers.ImportBackupHandler)
 			auth.GET("/backup-config", handlers.GetBackupConfigHandler)

@@ -42,7 +42,19 @@ func Init() error {
 		sqlDB.SetMaxIdleConns(5)
 		sqlDB.SetConnMaxLifetime(10 * time.Minute)
 	}
-	return DB.AutoMigrate(
+	return MigrateAll(DB)
+}
+
+// DSN 返回给定路径的 SQLite 连接串（与 Init 一致：WAL + 忙等待）。
+// 供备份校验「演练还原」等场景按线上相同方式打开临时库。
+func DSN(path string) string {
+	return buildDSN(path)
+}
+
+// MigrateAll 对给定连接执行与线上完全一致的 AutoMigrate（仅新增表/列，不删不删列），
+// 供 Init、备份还原演练、一致性校验等复用，避免表清单在多处分叉。
+func MigrateAll(d *gorm.DB) error {
+	return d.AutoMigrate(
 		&models.Department{},
 		&models.ShiftConfig{},
 		&models.User{},

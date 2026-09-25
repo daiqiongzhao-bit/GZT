@@ -374,6 +374,7 @@ var routePerms = map[string]string{
 	"POST /api/backups":             PSysBakAdd,
 	"GET /api/backups/:id/download": PSysBakDownload,
 	"POST /api/backups/:id/restore": PSysBakRestore,
+	"POST /api/backups/:id/verify":  PSysBakList,
 	"DELETE /api/backups/:id":       PSysBakRemove,
 	"POST /api/backups/import":      PSysBakImport,
 	"GET /api/backup-config":        PSysBakConfig,

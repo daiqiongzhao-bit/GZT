@@ -17,7 +17,9 @@ import (
 	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/models"
 
+	"github.com/glebarez/sqlite"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // backupLock 保护备份创建过程，避免定时器与手动备份并发写同一目录
@@ -460,6 +462,162 @@ func DeleteBackupHandler(c *gin.Context) {
 	}
 	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "删除备份 "+c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// BackupTableStat 单表行数统计
+type BackupTableStat struct {
+	Name string `json:"name"`
+	Rows int64  `json:"rows"`
+}
+
+// BackupVerifyResult 备份校验（演练还原）结果
+type BackupVerifyResult struct {
+	ID           string            `json:"id"`             // 备份文件名
+	Verdict      string            `json:"verdict"`        // ok | warning | fail
+	Integrity    string            `json:"integrity"`      // ok | 错误描述
+	DrillOK      bool              `json:"drill_ok"`       // 演练还原是否成功
+	Tables       []BackupTableStat `json:"tables"`         // 备份内各表行数
+	MissingTables []string         `json:"missing_tables"` // 线上应有但备份缺失的表
+	Message      string            `json:"message"`        // 结论摘要
+}
+
+// tableRows 统计给定库各业务表的行数（排除 sqlite_ 内部表）
+func tableRows(d *gorm.DB) ([]BackupTableStat, error) {
+	var names []string
+	if err := d.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").Scan(&names).Error; err != nil {
+		return nil, err
+	}
+	var stats []BackupTableStat
+	for _, n := range names {
+		var c int64
+		// 表名取自库内 sqlite_master（白名单），加引号防止特殊字符
+		if err := d.Raw("SELECT COUNT(*) FROM \"" + n + "\"").Scan(&c).Error; err != nil {
+			c = -1
+		}
+		stats = append(stats, BackupTableStat{Name: n, Rows: c})
+	}
+	return stats, nil
+}
+
+// closeGorm 安全关闭一个 gorm 连接
+func closeGorm(d *gorm.DB) {
+	if d == nil {
+		return
+	}
+	if sqlDB, e := d.DB(); e == nil {
+		_ = sqlDB.Close()
+	}
+}
+
+// verifyBackupFile 在不触碰线上数据的前提下校验备份可恢复性：
+//  1. 将备份复制到临时文件（避免对线上备份文件产生任何副作用）；
+//  2. 以只读方式对副本做 PRAGMA integrity_check；
+//  3. 演练还原：用与线上相同的连接参数打开副本并 AutoMigrate，
+//     验证 schema 一致、可正常打开；再将副本表集合与线上表集合做差集比对。
+//
+// liveDB 用于获知「线上应有表集合」；src 为已存在的备份文件绝对路径。
+// 无论成功失败，都会清理临时文件（-wal/-shm）。
+func verifyBackupFile(src string, liveDB *gorm.DB) (*BackupVerifyResult, error) {
+	res := &BackupVerifyResult{ID: filepath.Base(src), Verdict: "ok"}
+
+	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("swb-verify-%d.db", time.Now().UnixNano()))
+	_ = os.Remove(tmp)
+	if err := copyFile(src, tmp); err != nil {
+		res.Verdict = "fail"
+		res.Integrity = "无法读取备份: " + err.Error()
+		res.Message = "备份文件无法读取"
+		return res, nil
+	}
+	defer func() {
+		_ = os.Remove(tmp)
+		_ = os.Remove(tmp + "-wal")
+		_ = os.Remove(tmp + "-shm")
+	}()
+
+	// 1) 只读完整性检查
+	ro, err := gorm.Open(sqlite.Open("file:"+tmp+"?mode=ro"), &gorm.Config{})
+	if err != nil {
+		res.Verdict = "fail"
+		res.Integrity = "无法打开备份: " + err.Error()
+		res.Message = "备份文件损坏或格式不兼容，无法打开"
+		return res, nil
+	}
+	var integrity string
+	if e := ro.Raw("PRAGMA integrity_check").Scan(&integrity).Error; e != nil {
+		res.Verdict = "fail"
+		res.Integrity = e.Error()
+	} else if integrity != "ok" {
+		res.Verdict = "fail"
+		res.Integrity = integrity
+		res.Message = "备份存在数据完整性问题"
+	} else {
+		res.Integrity = "ok"
+	}
+	if res.Verdict == "fail" {
+		closeGorm(ro)
+		return res, nil
+	}
+	bkTables, _ := tableRows(ro)
+	res.Tables = bkTables
+	closeGorm(ro)
+
+	// 2) 演练还原：用线上相同方式打开副本并迁移
+	drill, dErr := gorm.Open(sqlite.Open(db.DSN(tmp)), &gorm.Config{})
+	if dErr != nil {
+		res.Verdict = "fail"
+		res.Message = "演练还原失败（打开临时库）: " + dErr.Error()
+		return res, nil
+	}
+	if mErr := db.MigrateAll(drill); mErr != nil {
+		res.Verdict = "fail"
+		res.Message = "演练还原失败（schema 校验）: " + mErr.Error()
+		closeGorm(drill)
+		return res, nil
+	}
+	closeGorm(drill)
+
+	// 3) 表集合差集比对（备份表 vs 线上应有表）
+	liveTables, _ := tableRows(liveDB)
+	liveSet := make(map[string]bool, len(liveTables))
+	for _, t := range liveTables {
+		liveSet[t.Name] = true
+	}
+	var missing []string
+	for _, t := range bkTables {
+		if !liveSet[t.Name] {
+			missing = append(missing, t.Name)
+		}
+	}
+	res.MissingTables = missing
+	if len(missing) > 0 {
+		res.Verdict = "warning"
+		res.Message = "完整性校验通过、演练还原成功，但备份缺少部分表（可能来自旧版本）: " + strings.Join(missing, ", ")
+	} else {
+		res.DrillOK = true
+		res.Message = "完整性校验通过，演练还原成功"
+	}
+	return res, nil
+}
+
+// VerifyBackupHandler POST /backups/:id/verify 校验指定备份（演练还原，不改动线上数据）
+func VerifyBackupHandler(c *gin.Context) {
+	dir, err := backupDir()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份目录不可用"})
+		return
+	}
+	src := filepath.Join(dir, filepath.Base(c.Param("id")))
+	if _, err := os.Stat(src); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "备份不存在"})
+		return
+	}
+	res, err := verifyBackupFile(src, db.DB)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	addLog(c, currentClaims(c).UserID, currentClaims(c).Username, "校验备份 "+c.Param("id")+" -> "+res.Verdict)
+	c.JSON(http.StatusOK, res)
 }
 
 // ImportBackupHandler POST /backups/import 接收上传的 .db 备份文件，存入备份目录后还原。
