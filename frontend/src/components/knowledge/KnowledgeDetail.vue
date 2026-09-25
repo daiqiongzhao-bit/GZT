@@ -8,7 +8,7 @@
       · 「Word 习惯」：工具条 40 项常驻顶部（加粗/字号/行距/缩进/表格/图片缩放/上下标…）
       · 有未保存改动时离开会拦截，避免误丢
   -->
-  <section class="kb-detail-pane" @click="onReadImageClick">
+  <section class="kb-detail-pane">
     <!-- 空态：既没选中条目、也不在新建状态 -->
     <div v-if="!entry && !editing" class="kb-detail-empty">
       <div class="de-ico">📖</div>
@@ -393,24 +393,11 @@
         </div>
       </div>
     </template>
-
-    <!-- 图片点击放大（lightbox）：阅读态正文 / 评论里的图片点开看大图 -->
-    <div
-      v-if="lightbox.open"
-      class="kb-lightbox"
-      role="dialog"
-      aria-modal="true"
-      aria-label="图片预览"
-      @click="closeLightbox"
-    >
-      <button class="kbl-close" type="button" title="关闭（Esc）" @click.stop="closeLightbox">✕</button>
-      <img class="kbl-img" :src="lightbox.src" :alt="lightbox.alt" />
-    </div>
   </section>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import RichTextEditor from '@/components/RichTextEditor.vue'
 import MindMapEditor from '@/components/knowledge/MindMapEditor.vue'
 import FlowEditor from '@/components/knowledge/FlowEditor.vue'
@@ -470,24 +457,6 @@ const sub = ref('comments')
 const tagDraft = ref('')
 const showCollab = ref(false)
 const dirty = ref(false)
-
-// 图片点击放大（lightbox）：阅读态正文 / 评论里的图片点开看原图
-const lightbox = reactive({ open: false, src: '', alt: '' })
-function onReadImageClick(e) {
-  const t = e && e.target
-  if (!t || t.tagName !== 'IMG') return
-  // 仅阅读态正文 / 评论里的图片可点开；编辑态图片走缩放浮层，不在此处理
-  if (!t.closest || !t.closest('.kb-read, .comment-body')) return
-  const src = t.currentSrc || t.src
-  if (!src) return
-  lightbox.src = src
-  lightbox.alt = t.alt || ''
-  lightbox.open = true
-}
-function closeLightbox() { lightbox.open = false }
-function onLightboxKey(e) { if (e && e.key === 'Escape') closeLightbox() }
-onMounted(() => document.addEventListener('keydown', onLightboxKey))
-onBeforeUnmount(() => document.removeEventListener('keydown', onLightboxKey))
 
 // 内容类型 chip 菜单（v0.32.0：从顶部卡片改为标题旁 chip）
 const rootKind = ref(null)
@@ -963,25 +932,4 @@ function printEntry() {
 .dhf-attach .att-size { flex: 0 0 auto; font-size: 11px; }
 .dhf-attach .att-empty { font-size: 12.5px; }
 .dhf-attach .att-upload-row { display: flex; align-items: center; gap: 10px; }
-
-/* ---------- 图片点击放大（lightbox，v0.40.10）---------- */
-.kb-lightbox {
-  position: fixed; inset: 0; z-index: 200;
-  display: flex; align-items: center; justify-content: center;
-  padding: 5vh 5vw; background: rgba(15, 23, 42, 0.84);
-  cursor: zoom-out; backdrop-filter: blur(2px);
-}
-.kbl-img {
-  max-width: 100%; max-height: 100%; width: auto; height: auto;
-  border-radius: 10px; background: #fff;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
-}
-.kbl-close {
-  position: fixed; top: 18px; right: 22px; z-index: 1;
-  width: 38px; height: 38px; border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.12);
-  color: #fff; font-size: 16px; line-height: 1; cursor: pointer;
-  transition: background .12s ease;
-}
-.kbl-close:hover { background: rgba(255, 255, 255, 0.24); }
 </style>

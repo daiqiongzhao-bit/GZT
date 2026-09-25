@@ -270,11 +270,15 @@
     </div>
 
     <router-view v-else />
+
+    <!-- 全站图片点击放大（lightbox）：只读图文位内的图片点开看原图 -->
+    <ImageLightbox />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import ImageLightbox from '@/components/ImageLightbox.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { navItems, icons } from '@/icons'
