@@ -8,6 +8,8 @@
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'log' }" @click="setTab('log')">操作审计</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="setTab('syslog')">运行日志</button>
       <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="setTab('backup')">备份</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'trend' }" @click="setTab('trend')">数据趋势</button>
+      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'apidoc' }" @click="setTab('apidoc')">API 文档</button>
 
       <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示。
            v0.40.0：曾把「系统管理」做成一个可打开的入口页（进去是 4 张卡片）。
@@ -426,6 +428,16 @@
     <section v-if="tab === 'sysdept' && auth.can('system:dept:list')" class="sys-embed">
       <SystemDeptPage />
     </section>
+
+    <!-- v0.41.3：Dashboard 中的近 30 天趋势图移入设置页 -->
+    <section v-if="tab === 'trend' && auth.canManage" class="panel">
+      <TrendChart />
+    </section>
+
+    <!-- v0.41.3：API 文档从侧边栏主导航移入设置页 -->
+    <section v-if="tab === 'apidoc' && auth.canManage" class="panel apidoc-embed">
+      <ApiDocsPage />
+    </section>
   </div>
 </template>
 
@@ -455,6 +467,8 @@ const SystemUserPage = defineAsyncComponent(() => import('@/views/SystemUser.vue
 const SystemRolePage = defineAsyncComponent(() => import('@/views/SystemRole.vue'))
 const SystemMenuPage = defineAsyncComponent(() => import('@/views/SystemMenu.vue'))
 const SystemDeptPage = defineAsyncComponent(() => import('@/views/SystemDept.vue'))
+const TrendChart = defineAsyncComponent(() => import('@/components/TrendChart.vue'))
+const ApiDocsPage = defineAsyncComponent(() => import('@/views/ApiDocs.vue'))
 
 // perm 与后端 system/routeperm.go 的 perms 逐字符一致；无权则该项不出现
 const SYS_TABS = [
@@ -469,7 +483,7 @@ const sysTabs = computed(() => SYS_TABS.filter((t) => auth.can(t.perm)))
 // 因此从 TAB_KEYS 里摘掉 —— ?tab=dept / ?tab=user 也会落到「个人信息」，
 // 不会再把用户带回已被取代的旧界面。
 // v0.40.2：'syshome' 入口页已移除，旧链接 ?tab=syshome 同样落到「个人信息」。
-const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'logout']
+const TAB_KEYS = ['me', 'brand', 'tmpl', 'hook', 'log', 'syslog', 'backup', 'trend', 'apidoc']
   .concat(SYS_TABS.map((t) => t.key))
 const initTab = String(route.query.tab || '')
 const tab = ref(TAB_KEYS.includes(initTab) ? initTab : 'me')
@@ -1081,4 +1095,6 @@ select.req-miss { border-color: var(--danger, #e11d48); box-shadow: 0 0 0 2px rg
 .shift-sep { color: var(--text-faint); font-size: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 820px) { .fg2 { grid-template-columns: 1fr; } }
+/* v0.41.3：API 文档内嵌在设置页 panel 中，取消原本居中的最大宽度 */
+.apidoc-embed :deep(.apidocs) { max-width: none; margin: 0; }
 </style>

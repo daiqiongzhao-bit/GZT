@@ -51,6 +51,6 @@ export const navItems = [
   //         侧栏不再为它们单独占位 —— 否则和设置页里的「人员 / 部门」并列，
   //         同一张 users / departments 表会出现两个入口，口径不一致。
   // 设置页保持"登录可见"：页面内部各区块由各自的 perms 控制（改造前即如此）
-  { to: '/api-docs', label: 'API 文档', icon: icons.apiDoc },
+  // v0.41.3：API 文档从侧栏主导航移入设置页「API 文档」tab
   { to: '/settings', label: '设置', icon: icons.settings }
 ]

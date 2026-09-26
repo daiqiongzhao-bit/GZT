@@ -48,24 +48,6 @@
       </div>
     </div>
 
-    <!-- v0.41.2：近 N 天业务趋势（自绘 SVG 折线，不引图表库依赖） -->
-    <div v-if="trendSvg" class="panel trend-card">
-      <div class="section-head">
-        <h3 class="section-title">近 {{ trends.days }} 天业务趋势 <span class="section-sub">完成任务 · 新建任务 · 排班人数 · 知识库新增</span></h3>
-      </div>
-      <div class="trend-legend">
-        <span v-for="m in trendMetrics" :key="m.key" class="trend-legend-item">
-          <i class="trend-dot" :style="{ background: m.color }"></i>{{ m.label }}
-        </span>
-      </div>
-      <svg class="trend-svg" :viewBox="`0 0 ${trendW} ${trendH}`">
-        <line v-for="g in 4" :key="'g' + g" :x1="trendPad" :x2="trendW - trendPad"
-              :y1="trendPad + (trendH - 2 * trendPad) * (g - 1) / 4" :y2="trendPad + (trendH - 2 * trendPad) * (g - 1) / 4" class="trend-grid" />
-        <polyline v-for="l in trendSvg.lines" :key="l.key" :points="l.pts"
-                  :stroke="l.color" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
-      </svg>
-    </div>
-
     <!-- 详情面板 -->
     <div class="panels">
       <section v-for="p in panelCards" :key="p.id" class="panel">
@@ -264,29 +246,6 @@ const canView = computed(() => auth.can('dashboard:view'))
 const blockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2.5"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
 const dash = ref({ on_duty_count: 0, today_tasks: 0, month_tasks: 0, monthly_tasks: 0, overdue_count: 0, on_duty: [], on_duty_rows: [], today: '', today_task_list: [], month_task_list: [], monthly_task_list: [] })
 
-// v0.41.2：近 N 天业务趋势（自绘 SVG，不引图表库）。每条线按自身最大值归一化，
-// 因为四类指标量级差异大（排班人数可达几十、知识库新增常为个位数），共享 Y 轴会压扁小值。
-const trends = ref({ days: 30, series: [] })
-const trendMetrics = [
-  { key: 'tasks_done', label: '完成任务', color: '#22c55e' },
-  { key: 'tasks_created', label: '新建任务', color: '#3b82f6' },
-  { key: 'on_duty_people', label: '排班人数', color: '#f59e0b' },
-  { key: 'knowledge_added', label: '知识库新增', color: '#a855f7' },
-]
-const trendW = 720, trendH = 220, trendPad = 30
-const trendSvg = computed(() => {
-  const s = trends.value.series || []
-  if (!s.length) return null
-  const n = s.length
-  const x = (i) => trendPad + (trendW - 2 * trendPad) * (n === 1 ? 0.5 : i / (n - 1))
-  const lines = trendMetrics.map((m) => {
-    const vals = s.map((r) => r[m.key] || 0)
-    const max = Math.max(1, ...vals)
-    const pts = vals.map((v, i) => `${x(i).toFixed(1)},${(trendH - trendPad - (trendH - 2 * trendPad) * (v / max)).toFixed(1)}`).join(' ')
-    return { ...m, pts }
-  })
-  return { lines }
-})
 const schedules = ref([])
 const departments = ref([])
 
@@ -443,16 +402,14 @@ onMounted(async () => {
 async function refreshDash() {
   loadPref()
   if (!canView.value) return
-  const [d, sc, deps, tr] = await Promise.all([
+  const [d, sc, deps] = await Promise.all([
     api.get('/dashboard'),
     api.get('/schedules'),
     api.get('/departments'),
-    api.get('/dashboard/trends').catch(() => ({ days: 30, series: [] })),
   ])
   dash.value = d
   schedules.value = sc
   departments.value = deps
-  trends.value = tr
 }
 onUnmounted(() => useAutoRefresh(refreshDash, false))
 </script>
@@ -490,13 +447,6 @@ onUnmounted(() => useAutoRefresh(refreshDash, false))
 /* grid 子项默认 min-width:auto，宽表格会把整页撑出横向滚动条 */
 .panels > .panel { min-width: 0; }
 .table-wrap { max-width: 100%; }
-
-/* v0.41.2：趋势图卡片（自绘 SVG，无图表库依赖） */
-.trend-card { padding: 16px 18px; }
-.trend-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 10px; }
-.trend-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); }
-.trend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.trend-svg { width: 100%; height: auto; display: block; }
 .trend-grid { stroke: var(--hairline); stroke-width: 1; }
 
 .duty-table .col-dept { width: 96px; }
