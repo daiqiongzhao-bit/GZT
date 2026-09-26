@@ -180,7 +180,7 @@ var routePerms = map[string]string{
 	// ---------------- 概览 / 审计 ----------------
 	"GET /api/dashboard":              PDashboardView,
 	"GET /api/dashboard/trends":       PDashboardView, // v0.41.2：近 N 天业务量趋势（复用看板权限）
-	"GET /api/openapi.json":           PermAuth, // v0.41.2：OpenAPI 3.0 文档（登录即可）
+	"GET /api/openapi.json":           PermAuth, // v0.41.2：OpenAPI 3.0 文档；v0.41.6 main.go 叠加 RequireSuper 中间件仅超管可访问
 	"GET /api/logs":        PSysLogList,
 	"GET /api/logs/export": PSysLogExport,
 	"POST /api/auth/logout": PermAuth, // v0.40.8：登出本人即可（令牌即将失效前调用）

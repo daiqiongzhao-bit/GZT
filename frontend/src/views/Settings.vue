@@ -6,10 +6,10 @@
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'tmpl' }" @click="setTab('tmpl')">模板</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'hook' }" @click="setTab('hook')">通知</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'log' }" @click="setTab('log')">操作审计</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'syslog' }" @click="setTab('syslog')">运行日志</button>
+      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'syslog' }" @click="setTab('syslog')">运行日志</button>
       <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'backup' }" @click="setTab('backup')">备份</button>
       <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'trend' }" @click="setTab('trend')">数据趋势</button>
-      <button v-if="auth.canManage" class="tab" :class="{ active: tab === 'apidoc' }" @click="setTab('apidoc')">API 文档</button>
+      <button v-if="auth.isSuper" class="tab" :class="{ active: tab === 'apidoc' }" @click="setTab('apidoc')">API 文档</button>
 
       <!-- v0.39.1 系统管理：原先挂在侧栏的四项并入设置，按权限过滤显示。
            v0.40.0：曾把「系统管理」做成一个可打开的入口页（进去是 4 张卡片）。
@@ -289,8 +289,8 @@
       </div>
     </section>
 
-    <!-- 系统运行日志（仅管理员） -->
-    <section v-if="tab === 'syslog' && auth.canManage" class="panel">
+    <!-- 系统运行日志（仅超级管理员） -->
+    <section v-if="tab === 'syslog' && auth.isSuper" class="panel">
       <h3 class="section-title">系统运行日志 <span class="section-sub">服务端运行期事件 / panic / 5xx / 调度失败，用于排查崩溃</span>
         <button v-if="auth.can('system:log:export')" class="btn ghost sm" style="margin-left:auto" @click="exportSysLogs">⬇ 导出 Excel</button>
       </h3>
@@ -434,8 +434,8 @@
       <TrendChart />
     </section>
 
-    <!-- v0.41.3：API 文档从侧边栏主导航移入设置页 -->
-    <section v-if="tab === 'apidoc' && auth.canManage" class="panel apidoc-embed">
+    <!-- v0.41.3：API 文档从侧边栏主导航移入设置页（仅超级管理员） -->
+    <section v-if="tab === 'apidoc' && auth.isSuper" class="panel apidoc-embed">
       <ApiDocsPage />
     </section>
   </div>

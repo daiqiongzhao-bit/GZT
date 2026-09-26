@@ -23,7 +23,7 @@ const routes = [
   { path: '/backup', name: 'backup', component: () => import('@/views/Backup.vue'), meta: { title: '备份还原', perm: 'system:backup:list' } },
   { path: '/wecom-push', name: 'wecom-push', component: () => import('@/views/WecomPush.vue'), meta: { title: '企微推送', wecom: true, perm: 'wecompush:view' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置' } },
-  { path: '/api-docs', name: 'api-docs', component: () => import('@/views/ApiDocs.vue'), meta: { title: 'API 文档' } },
+  { path: '/api-docs', name: 'api-docs', component: () => import('@/views/ApiDocs.vue'), meta: { title: 'API 文档', super: true } },
 
   // ---- v0.39.1 系统管理：四个子模块已并入「设置」页的「系统管理」分组 ----
   // 侧栏不再单独出现；旧地址保留重定向，书签 / 外链 / 深链仍然可用。
@@ -74,6 +74,10 @@ router.beforeEach(async (to) => {
     if (!auth.permLoaded) await auth.fetchPerms()
     if (!auth.wpAccess) await auth.fetchWpAccess()
     if (!auth.canWecom) return { path: '/' }
+  }
+  // v0.41.6：标记 super 的路由仅超级管理员可进入（如 API 文档深链）
+  if (to.meta.super && !auth.isSuper) {
+    return { path: '/' }
   }
   // ★ 功能权限准入。注意 '/' 自身带 perm，若用户连 dashboard:view 都没有，
   //   再重定向到 '/' 会形成死循环 —— 因此首页永远放行，由页面内部呈现"无可访问模块"。

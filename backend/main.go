@@ -157,7 +157,7 @@ func main() {
 			auth.POST("/auth/unlock", handlers.UnlockLogin)
 			auth.GET("/dashboard", handlers.Dashboard)
 			auth.GET("/dashboard/trends", handlers.DashboardTrends) // v0.41.2：近 N 天业务量趋势序列
-			auth.GET("/openapi.json", func(c *gin.Context) {        // v0.41.2：OpenAPI 3.0 文档（登录即可查看）
+			auth.GET("/openapi.json", system.RequireSuper(), func(c *gin.Context) { // v0.41.6：仅超级管理员可查看
 				c.JSON(http.StatusOK, openapi.Spec())
 			})
 			auth.GET("/logs", handlers.ListLogs)
@@ -278,9 +278,9 @@ func main() {
 			auth.GET("/tasks/export", handlers.ExportTasksXLSX)
 			auth.GET("/logs/export", handlers.ExportLogsXLSX)
 
-			// 系统运行日志（崩溃/异常排查）：列表仅管理员可读；导出限超管/部门管理员
-			auth.GET("/system-logs", handlers.ListSystemLogs)
-			auth.GET("/system-logs/export", handlers.ExportSystemLogsXLSX)
+			// 系统运行日志（崩溃/异常排查）：仅超级管理员可访问（v0.41.6 收紧）
+			auth.GET("/system-logs", system.RequireSuper(), handlers.ListSystemLogs)
+			auth.GET("/system-logs/export", system.RequireSuper(), handlers.ExportSystemLogsXLSX)
 
 			// 工作台：迷你知识库 / 工作日志 / 交接接力（所有登录用户）
 			auth.GET("/workspace/knowledge", handlers.ListKnowledge)
