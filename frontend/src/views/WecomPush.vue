@@ -119,7 +119,7 @@
                    :title="'点击下载 ' + l.file_name" @click="downloadLogFile(l)">{{ l.file_name }}</a>
                 <span v-else>—</span>
               </td>
-              <td class="wp-muted">{{ l.message || '—' }}</td>
+              <td class="wp-muted wp-msg">{{ l.message || '—' }}</td>
               <td class="wp-muted">{{ l.duration_ms ? (l.duration_ms / 1000).toFixed(1) + 's' : '—' }}</td>
             </tr>
             <tr v-if="!logs.length"><td colspan="8" class="wp-muted" style="text-align:center;padding:24px">暂无日志</td></tr>
@@ -749,10 +749,21 @@ onMounted(refreshAll)
 .wp-cli.ok .wp-dot { background: #22c55e; }
 .wp-cli.warn .wp-dot { background: #d97706; }
 .wp-cli.bad .wp-dot { background: #dc2626; }
-.wp-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.wp-tbl th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--glass-border); white-space: nowrap; }
-.wp-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--overlay); vertical-align: top; }
+.wp-tbl { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.wp-tbl th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--glass-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--overlay); vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
 .wp-tbl tbody tr:hover { background: var(--overlay); }
+/* 运行日志列宽：时间 任务 触发 条数 状态 文件 说明 耗时 */
+.wp-tbl th:nth-child(1), .wp-tbl td:nth-child(1) { width: 138px; }
+.wp-tbl th:nth-child(2), .wp-tbl td:nth-child(2) { width: 140px; }
+.wp-tbl th:nth-child(3), .wp-tbl td:nth-child(3) { width: 64px; }
+.wp-tbl th:nth-child(4), .wp-tbl td:nth-child(4) { width: 58px; text-align: center; }
+.wp-tbl th:nth-child(5), .wp-tbl td:nth-child(5) { width: 78px; text-align: center; }
+.wp-tbl th:nth-child(6), .wp-tbl td:nth-child(6) { width: 190px; }
+.wp-tbl th:nth-child(7), .wp-tbl td:nth-child(7) { min-width: 220px; max-width: 460px; }
+.wp-tbl th:nth-child(8), .wp-tbl td:nth-child(8) { width: 68px; text-align: right; }
+.wp-file-link { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.wp-tbl .wp-msg { line-height: 1.55; }
 .wp-tag { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--glass-border); color: var(--text-dim); }
 .wp-tag.on { background: rgba(34, 197, 94, 0.16); color: #16a34a; border-color: rgba(34, 197, 94, 0.4); }
 .wp-tag.bad { background: rgba(220, 38, 38, 0.16); color: #dc2626; border-color: rgba(220, 38, 38, 0.4); }
