@@ -58,13 +58,11 @@ func setupScaleDB(t *testing.T, c scaleCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(
-		&models.User{}, &models.ShiftConfig{}, &models.ShiftRule{},
-		&models.UserShiftPref{}, &models.ShiftRequest{}, &models.SpecialWorkDay{},
-		&models.Department{}, &models.Schedule{}, &models.Log{}, &models.Notification{},
-	); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
+	// 复刻生产：给超管(user 1)种全量数据范围角色，使 Scope.All 成立，避免 RBAC 闸门后 403。
+	seedSuperAdmin(t, d)
 	db.DB = d
 	db.DB.Create(&models.Department{ID: 1, Name: "测试门店"})
 	for _, s := range c.Shifts {

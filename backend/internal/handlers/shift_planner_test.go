@@ -24,14 +24,13 @@ func setupPlanDB(t *testing.T, staff ...struct {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(
-		&models.User{}, &models.ShiftConfig{}, &models.ShiftRule{},
-		&models.UserShiftPref{}, &models.ShiftRequest{}, &models.SpecialWorkDay{},
-		&models.Department{}, &models.Schedule{}, &models.Log{},
-		&models.Notification{},
-	); err != nil {
+	// v0.41.4：改用 db.MigrateAll 迁移与线上完全一致的表集合，
+	// 否则 v0.39.0 RBAC 闸门后 handler 会查 user_roles / push_subscriptions 等表而报 no such table。
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
+	// 复刻生产：给超管(user 1)种全量数据范围角色，使 Scope.All 成立，避免 RBAC 闸门后 403。
+	seedSuperAdmin(t, d)
 	db.DB = d
 
 	db.DB.Create(&models.Department{ID: 1, Name: "测试门店"})
@@ -48,6 +47,26 @@ func setupPlanDB(t *testing.T, staff ...struct {
 			Name: s.Name, Username: s.EmpNo, EmpNo: s.EmpNo,
 			Role: models.RoleExecutor, DeptID: 1,
 		})
+	}
+}
+
+// seedSuperAdmin 在测试库为超管用户(1)绑定 data_scope=1 的全量角色，
+// 复刻生产环境初始化时给管理员种角色的行为，使数据范围解析 Scope.All 成立，
+// 避免 v0.39.0 RBAC 闸门后"超管无 user_roles 行 → 数据范围收敛到哨兵[0] → 403"。
+// 仅作用于当前测试各自独立的 in-memory 库，不影响其他测试。
+func seedSuperAdmin(t *testing.T, d *gorm.DB) {
+	t.Helper()
+	role := models.SysRole{
+		RoleName:  "超级管理员",
+		RoleKey:   models.RoleKeySuperAdmin,
+		DataScope: models.DataScopeAll,
+		Status:    0,
+	}
+	if err := d.Create(&role).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Create(&models.SysUserRole{UserID: 1, RoleID: role.ID}).Error; err != nil {
+		t.Fatal(err)
 	}
 }
 

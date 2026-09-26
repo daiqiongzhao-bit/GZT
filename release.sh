@@ -108,6 +108,30 @@ if [ "$BEHIND" -gt 0 ]; then
   exit 1
 fi
 
+# ---------- 1.5 测试门禁 ----------
+# v0.41.4：发版前强制跑后端单测，任一失败即阻断发版，避免"能编过就发"带病上线。
+# 只测 ./internal/...：所有 *_test.go 都在内部包，main 包无测试；且 main 用
+# //go:embed web/dist 嵌前端产物，干净 checkout 无该目录会连编译都过不了，故门禁避开 main 包。
+# 优先用本机 go；本机未装 go 则借 golang 官方镜像在容器内跑（生产服务器必有 Docker）。
+# 二者皆无（理论上不可能，因构建本身依赖 Docker）才放行并告警，绝不静默跳过。
+echo "==> 运行后端测试门禁"
+run_backend_tests() {
+  if command -v go >/dev/null 2>&1; then
+    ( cd backend && go test ./internal/... )
+  elif command -v docker >/dev/null 2>&1; then
+    docker run --rm -v "$ROOT/backend":/src -w /src \
+      -e GOPROXY=https://goproxy.cn,direct \
+      golang:1.21-alpine go test -mod=readonly ./internal/...
+  else
+    echo "⚠ 未找到 go 或 docker，跳过测试门禁（无法校验，请人工确认）"
+    return 0
+  fi
+}
+if ! run_backend_tests; then
+  echo "✗ 后端测试未通过，拒绝发版（请本地修红测试后再发版）"
+  exit 1
+fi
+
 # ---------- 2. 计算新版本号 ----------
 # 取最新的 vX.Y.Z 形式 tag
 CURRENT="$(git tag -l 'v*.*.*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
