@@ -203,6 +203,19 @@ if [ "$DEPLOY" = true ]; then
   else
     echo "    ✓ 密钥解析校验通过（env 注入 或 数据卷 secrets.env 就绪）"
   fi
+
+  # ---------- 6.1 同步升级演示站 gzt-demo（与生产站同版本） ----------
+  # 演示站是独立实例（端口 8091、数据卷 /opt/gzt-demo/data），仅随发版滚动镜像，
+  # 不动其数据。仅当 /opt/gzt-demo 存在时才升级，避免缺该目录时脚本报错退出。
+  DEMO_DIR="/opt/gzt-demo"
+  DEMO_COMPOSE="$DEMO_DIR/docker-compose.yml"
+  if [ -f "$DEMO_COMPOSE" ]; then
+    echo "==> 同步升级演示站 gzt-demo 到 ${NEW}"
+    sed -i -E "s|^([[:space:]]*)image:[[:space:]]*daiqiongzhao/gzt:.*|\1image: daiqiongzhao/gzt:${NEW}|" "$DEMO_COMPOSE"
+    ( cd "$DEMO_DIR" && docker compose pull && docker compose up -d ) || true
+    sleep 4
+    docker ps --filter "name=gzt-demo" --format '{{.Names}} | {{.Image}} | {{.Status}}'
+  fi
 else
   echo "提示：镜像已推送，但线上容器仍在运行旧版本。"
   echo "      需要生效时执行："
