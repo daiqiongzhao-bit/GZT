@@ -21,7 +21,7 @@ func TestFrozenExcludedFromOnDuty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.Schedule{}, &models.User{}); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d

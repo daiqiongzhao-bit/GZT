@@ -27,7 +27,7 @@ func setupV020(t *testing.T, handler gin.HandlerFunc, cl *models.Claims) (*gin.E
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.User{}, &models.Department{}, &models.Notification{}, &models.Log{}); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d

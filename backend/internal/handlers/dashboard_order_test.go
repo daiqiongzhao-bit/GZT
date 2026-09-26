@@ -25,10 +25,7 @@ func setupDashDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = d.AutoMigrate(
-		&models.Task{}, &models.Schedule{}, &models.Department{}, &models.User{},
-		&models.ShiftConfig{}, &models.Setting{}, &models.Log{}, &models.TaskCompletion{},
-	)
+	err = db.MigrateAll(d)
 	if err != nil {
 		t.Fatal(err)
 	}

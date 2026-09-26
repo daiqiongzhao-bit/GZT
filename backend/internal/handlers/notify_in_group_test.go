@@ -21,7 +21,7 @@ func TestInGroupFiltersMobiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.User{}); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d
@@ -48,7 +48,7 @@ func TestBuildReminderHidesGroupMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.User{}, &models.Schedule{}, &models.Task{}); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d

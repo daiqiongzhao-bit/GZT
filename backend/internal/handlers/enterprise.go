@@ -792,13 +792,25 @@ func ExportSchedulesXLSX(c *gin.Context) {
 		}
 	}
 
+	// 工号映射：人名 → emp_no（users 表）。排班里的 People 存的是姓名，批量查避免逐行 IO。
+	empNoBy := map[string]string{}
+	if len(userOrder) > 0 {
+		var empUsers []models.User
+		if err := db.DB.Select("name, emp_no").Where("name IN ?", userOrder).Find(&empUsers).Error; err == nil {
+			for _, u := range empUsers {
+				if u.EmpNo != "" {
+					empNoBy[u.Name] = u.EmpNo
+				}
+			}
+		}
+	}
+
 	// Data rows: one per user
 	for idx, person := range userOrder {
 		row := 2 + idx
 		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), idx+1)
 		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), person)
-		// TODO: 工号 if available; leave blank for now
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), "")
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), empNoBy[person])
 
 		shiftCounts := map[string]int{}
 		restCount := 0

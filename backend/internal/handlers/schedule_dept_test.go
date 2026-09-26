@@ -17,7 +17,7 @@ func openTestDB(t *testing.T, dst ...interface{}) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(dst...); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d

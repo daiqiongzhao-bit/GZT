@@ -27,9 +27,7 @@ func setupInactiveDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(
-		&models.User{}, &models.Notification{}, &models.Log{}, &models.PushSubscription{},
-	); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d

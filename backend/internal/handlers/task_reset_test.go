@@ -21,7 +21,7 @@ func setupResetDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AutoMigrate(&models.Task{}, &models.Log{}, &models.TaskCompletion{}); err != nil {
+	if err := db.MigrateAll(d); err != nil {
 		t.Fatal(err)
 	}
 	db.DB = d
