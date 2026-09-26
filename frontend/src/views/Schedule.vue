@@ -993,7 +993,7 @@ watch(viewYear, loadHolidays)
 /* 冻结最左三列（序号/姓名/工号），滚动时保持可见 */
 .matrix-tbl .sticky-col { position: sticky; left: 0; background: var(--overlay-2); z-index: 3; box-shadow: 1px 0 0 var(--hairline); }
 .matrix-tbl .sticky-col.seq { width: 46px; min-width: 46px; }
-.matrix-tbl .sticky-col.name { left: 46px; width: 92px; min-width: 92px; text-align: left; }
+.matrix-tbl .sticky-col.name { left: 46px; width: 92px; min-width: 92px; text-align: center; }
 .matrix-tbl .sticky-col.emp { left: 138px; width: 64px; min-width: 64px; }
 .matrix-tbl thead .sticky-col.name { text-align: center; }
 .matrix-tbl tbody tr { background: var(--bg-1); transition: background .15s ease; }
