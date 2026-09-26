@@ -1,5 +1,8 @@
 import http from './http'
 
+// 与 http.js 中 axios 实例的 baseURL 保持一致，供页面拼接待下载/跳转地址（如审计导出）。
+export const baseURL = '/api'
+
 export const get = (url, params) => http.get(url, { params }).then((r) => r.data)
 export const post = (url, data) => http.post(url, data).then((r) => r.data)
 export const put = (url, data) => http.put(url, data).then((r) => r.data)
