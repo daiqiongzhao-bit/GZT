@@ -26,7 +26,9 @@ export const icons = {
   // 菜单：层级列表（目录 / 菜单 / 按钮）
   menu: wrap('<path d="M4 6h16M4 12h16M4 18h10"/><circle cx="20" cy="18" r="1.4"/>'),
   // 部门：组织架构（三层节点）
-  building: wrap('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-2h14v2"/>')
+  building: wrap('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-2h14v2"/>'),
+  // v0.41.2：API 文档（文档 + 代码尖括号）
+  apiDoc: wrap('<path d="M4 5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M13 3v5h5"/><path d="M9 13l-2 2 2 2M15 13l2 2-2 2"/>')
 }
 
 // ============================================================================
@@ -49,5 +51,6 @@ export const navItems = [
   //         侧栏不再为它们单独占位 —— 否则和设置页里的「人员 / 部门」并列，
   //         同一张 users / departments 表会出现两个入口，口径不一致。
   // 设置页保持"登录可见"：页面内部各区块由各自的 perms 控制（改造前即如此）
+  { to: '/api-docs', label: 'API 文档', icon: icons.apiDoc },
   { to: '/settings', label: '设置', icon: icons.settings }
 ]

@@ -178,7 +178,9 @@ var routePerms = map[string]string{
 	"POST /api/auth/unlock":          PSysLogUnlock,
 
 	// ---------------- 概览 / 审计 ----------------
-	"GET /api/dashboard":   PDashboardView,
+	"GET /api/dashboard":              PDashboardView,
+	"GET /api/dashboard/trends":       PDashboardView, // v0.41.2：近 N 天业务量趋势（复用看板权限）
+	"GET /api/openapi.json":           PermAuth, // v0.41.2：OpenAPI 3.0 文档（登录即可）
 	"GET /api/logs":        PSysLogList,
 	"GET /api/logs/export": PSysLogExport,
 	"POST /api/auth/logout": PermAuth, // v0.40.8：登出本人即可（令牌即将失效前调用）
@@ -475,3 +477,7 @@ func DeclaredPerms() []string {
 
 // RoutePermCount 返回已声明接口数（启动日志用，便于确认覆盖范围）。
 func RoutePermCount() int { return len(routePerms) }
+
+// AllRoutePerms 返回完整接口权限声明表（键格式 "METHOD /path"，值为权限标识或 PermAuth）。
+// 供 OpenAPI 文档生成器等需要遍历全部接口的场景复用，避免重复维护声明。
+func AllRoutePerms() map[string]string { return routePerms }

@@ -23,6 +23,7 @@ const routes = [
   { path: '/backup', name: 'backup', component: () => import('@/views/Backup.vue'), meta: { title: '备份还原', perm: 'system:backup:list' } },
   { path: '/wecom-push', name: 'wecom-push', component: () => import('@/views/WecomPush.vue'), meta: { title: '企微推送', wecom: true, perm: 'wecompush:view' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置' } },
+  { path: '/api-docs', name: 'api-docs', component: () => import('@/views/ApiDocs.vue'), meta: { title: 'API 文档' } },
 
   // ---- v0.39.1 系统管理：四个子模块已并入「设置」页的「系统管理」分组 ----
   // 侧栏不再单独出现；旧地址保留重定向，书签 / 外链 / 深链仍然可用。

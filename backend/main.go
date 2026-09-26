@@ -19,6 +19,7 @@ import (
 	"shiftworkbench/internal/logger"
 	"shiftworkbench/internal/middleware"
 	"shiftworkbench/internal/models"
+	"shiftworkbench/internal/openapi"
 	"shiftworkbench/internal/service"
 	"shiftworkbench/internal/system"
 	"shiftworkbench/internal/wecompush"
@@ -155,6 +156,10 @@ func main() {
 			auth.POST("/auth/change-password", handlers.ChangePassword)
 			auth.POST("/auth/unlock", handlers.UnlockLogin)
 			auth.GET("/dashboard", handlers.Dashboard)
+			auth.GET("/dashboard/trends", handlers.DashboardTrends) // v0.41.2：近 N 天业务量趋势序列
+			auth.GET("/openapi.json", func(c *gin.Context) {        // v0.41.2：OpenAPI 3.0 文档（登录即可查看）
+				c.JSON(http.StatusOK, openapi.Spec())
+			})
 			auth.GET("/logs", handlers.ListLogs)
 			auth.GET("/notifications", handlers.ListNotifications)
 			auth.GET("/notifications/unread-count", handlers.UnreadNotificationCount)
