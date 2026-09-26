@@ -160,7 +160,7 @@
               <th class="sticky-col seq">序号</th>
               <th class="sticky-col name">姓名</th>
               <th class="sticky-col emp">工号</th>
-              <th v-for="d in matrixDays" :key="d" class="day-col" :class="{ wknd: matrixIsWeekend(d), hd: holidayOfDay(d) }">{{ d }}<i v-if="matrixIsWeekend(d)" class="wknd-tag">休</i><i v-if="holidayOfDay(d)" class="hd-tag" :class="holidayOfDay(d).type" :title="holidayOfDay(d).name">{{ holidayOfDay(d).type === 'rest' ? '假' : '调' }}</i></th>
+              <th v-for="d in matrixDays" :key="d" class="day-col" :class="{ wknd: matrixIsWeekend(d), hd: holidayOfDay(d) }">{{ d }}<i v-if="holidayOfDay(d)" class="hd-tag" :class="holidayOfDay(d).type" :title="holidayOfDay(d).name">{{ holidayOfDay(d).type === 'rest' ? '假' : '调' }}</i></th>
               <th class="sum-col">早</th>
               <th class="sum-col">中</th>
               <th class="sum-col">晚</th>
@@ -1025,7 +1025,6 @@ watch(viewYear, loadHolidays)
 .fd-stack { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }
 .fd-stack .fd-i { min-width: 14px; height: 14px; font-size: 9px; border-radius: 3px; padding: 0 1px; line-height: 1; }
 .fd-total { display: inline-block; min-width: 12px; font-size: 11px; color: var(--accent); margin-left: 2px; font-weight: 700; vertical-align: middle; }
-.wknd-tag { font-style: normal; font-size: 9px; color: var(--text-faint); margin-left: 2px; }
 .matrix-note { font-size: 11.5px; color: var(--text-faint); margin: 10px 0 0; line-height: 1.6; }
 
 @media (max-width: 820px) {
