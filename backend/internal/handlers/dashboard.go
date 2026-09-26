@@ -314,9 +314,15 @@ func shiftTimeRange(deptID uint, shift string, m shiftTimeLookup) string {
 			return v
 		}
 	}
-	// 跨部门兜底：同名班次取第一个配到的时间段
-	for _, d := range m {
-		if v := d[shift]; v != "" {
+	// 跨部门兜底：同名班次按部门 ID 升序取第一个配到的时间段。
+	// 必须按 ID 排序遍历——直接 range map 顺序随机会导致回退结果不确定（flaky）。
+	deptIDs := make([]uint, 0, len(m))
+	for id := range m {
+		deptIDs = append(deptIDs, id)
+	}
+	sort.Slice(deptIDs, func(i, j int) bool { return deptIDs[i] < deptIDs[j] })
+	for _, id := range deptIDs {
+		if v := m[id][shift]; v != "" {
 			return v
 		}
 	}
