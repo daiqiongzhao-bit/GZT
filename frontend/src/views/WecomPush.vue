@@ -290,11 +290,33 @@
             </label>
             <label class="wp-field"><span>发送时间 *</span><input v-model="form.send_time" placeholder="HH:MM" /></label>
           </div>
-          <label class="wp-field"><span>消息模板</span>
-            <textarea v-model="form.msg_template" class="wp-tpl" rows="3"
-              placeholder="留空用默认文案。可用变量：{title} {date} {count} {filename} {task}&#10;如：{title} {date} 共 {count} 条，详见附件《{filename}》"></textarea>
-          </label>
-          <div class="wp-hint">变量：{title}=消息标题 {date}=目标日期 {count}=条数 {filename}=附件文件名 {task}=任务名；文件名模板另支持 {prefix}（即下方文件名前缀，留空时兜底）</div>
+          <!-- 推送文案（说明文字）：v0.41.10 开关 + 变量一键插入 + 实时预览 -->
+          <div class="wp-card">
+            <div class="wp-card-h">
+              <b>推送文案（说明文字）</b>
+              <label class="wp-switch"><input type="checkbox" v-model="form.send_text" /> 发送说明文字</label>
+            </div>
+            <div class="wp-hint warn" v-if="!form.send_text">已关闭：本次只发送表格附件，不发送下方文案（当天 0 条仍会发无数据提示）。</div>
+            <template v-else>
+              <label class="wp-field"><span>消息模板</span>
+                <div class="wp-varbar">
+                  <span class="wp-var" @click="insertVar('title')">{title}</span>
+                  <span class="wp-var" @click="insertVar('date')">{date}</span>
+                  <span class="wp-var" @click="insertVar('count')">{count}</span>
+                  <span class="wp-var" @click="insertVar('filename')">{filename}</span>
+                  <span class="wp-var" @click="insertVar('task')">{task}</span>
+                  <span class="wp-var-hint">点变量即插入光标处</span>
+                </div>
+                <textarea ref="tplRef" v-model="form.msg_template" class="wp-tpl" rows="3"
+                  placeholder="留空用默认文案。可用变量：{title} {date} {count} {filename} {task}&#10;如：{title} {date} 共 {count} 条，详见附件《{filename}》"></textarea>
+              </label>
+              <div class="wp-hint">变量：{title}=消息标题 {date}=目标日期 {count}=条数 {filename}=附件文件名 {task}=任务名</div>
+              <div class="wp-preview">
+                <div class="wp-preview-h">实时预览（将以 Markdown 发送）：</div>
+                <pre class="wp-preview-b">{{ previewMsg }}</pre>
+              </div>
+            </template>
+          </div>
           <div class="wp-2col">
             <label class="wp-field"><span>文件名前缀</span><input v-model="form.file_prefix" placeholder="如：满25天到期明细" /></label>
             <label class="wp-field"><span>消息标题</span><input v-model="form.msg_title" placeholder="推送文案前缀，模板里用 {title} 引用" /></label>
@@ -477,12 +499,13 @@ async function refreshAll() {
 const showForm = ref(false)
 const editingId = ref(null)
 const form = reactive(defaultForm())
+const tplRef = ref(null)
 function defaultForm() {
   return {
     name: '', enabled: true, doc_id: '', sheet_title: '', date_field: '', offset_days: 0,
     date_cols: [], conditions: [{ field: '', op: 'is_null', value: '' }], columns: [],
     file_prefix: '', msg_title: '', empty_text: '', group_name: '', send_time: '09:00',
-    file_name_template: '', msg_template: ''
+    file_name_template: '', msg_template: '', send_text: true
   }
 }
 // v0.40.8：文档 ID 允许粘贴完整链接，自动提取 docid（query 的 docid= 或路径最后一段）
@@ -518,6 +541,38 @@ function toggleArr(arr, v) {
 }
 function autoDateCols() { form.date_cols = dateFields.value.slice() }
 function openNew() { editingId.value = null; Object.assign(form, defaultForm()); showForm.value = true }
+// v0.41.10：消息模板编辑辅助（变量一键插入 + 实时预览）
+function todayStr() {
+  const d = new Date(); const p = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function renderPreviewTpl(tpl, vars) {
+  return String(tpl).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m))
+}
+function insertVar(v) {
+  const ta = tplRef.value
+  const token = '{' + v + '}'
+  const cur = form.msg_template || ''
+  if (!ta) { form.msg_template = cur + token; return }
+  const s = ta.selectionStart ?? cur.length
+  const e = ta.selectionEnd ?? cur.length
+  form.msg_template = cur.slice(0, s) + token + cur.slice(e)
+  nextTick(() => { ta.focus(); const p = s + token.length; ta.setSelectionRange(p, p) })
+}
+const previewMsg = computed(() => {
+  if (!form.send_text) return '（已关闭：本次仅发送表格附件，不发送说明文字）'
+  const title = (form.msg_title || '').trim() || '【定时提醒】'
+  const date = todayStr()
+  const count = '6'
+  const prefix = form.file_prefix || '明细'
+  const fname = (form.file_name_template && form.file_name_template.trim())
+    ? renderPreviewTpl(form.file_name_template, { date, task: form.name || '任务名', prefix }) + '.xlsx'
+    : prefix + '_' + date + '.xlsx'
+  const task = form.name || '任务名'
+  return (form.msg_template && form.msg_template.trim())
+    ? renderPreviewTpl(form.msg_template, { title, date, count, filename: fname, task })
+    : title + ' ' + date + ' 共 **' + count + '** 条\n明细见上方附件《' + fname + '》。'
+})
 function openEdit(t) {
   editingId.value = t.id
   form.name = t.name; form.enabled = t.enabled; form.doc_id = t.doc_id; form.sheet_title = t.sheet_title
@@ -526,6 +581,7 @@ function openEdit(t) {
   form.file_prefix = t.file_prefix || ''; form.msg_title = t.msg_title || ''; form.empty_text = t.empty_text || ''
   form.file_name_template = t.file_name_template || ''; form.msg_template = t.msg_template || ''
   form.group_name = t.group_name || ''; form.send_time = t.send_time || '09:00'
+  form.send_text = t.send_text !== false // 缺省视为开启（兼容旧任务无该字段）
   showForm.value = true
   if (form.doc_id && form.sheet_title) loadFields()
 }
@@ -545,7 +601,8 @@ async function saveForm() {
     date_cols: form.date_cols, conditions: form.conditions.filter((c) => c.field && c.op),
     columns: form.columns, file_prefix: form.file_prefix, msg_title: form.msg_title,
     empty_text: form.empty_text, group_name: form.group_name, send_time: form.send_time,
-    file_name_template: form.file_name_template, msg_template: form.msg_template
+    file_name_template: form.file_name_template, msg_template: form.msg_template,
+    send_text: form.send_text
   }
   try {
     if (editingId.value) await api.put('/wecom-push/tasks/' + editingId.value, payload)
@@ -730,6 +787,19 @@ onMounted(refreshAll)
 .wp-chip:hover { border-color: var(--accent, #6366f1); }
 .wp-chip.on { background: color-mix(in srgb, var(--accent, #6366f1) 16%, transparent); border-color: var(--accent, #6366f1); color: var(--accent, #6366f1); font-weight: 600; }
 .wp-hint { font-size: 12px; color: var(--text-dim); margin: -4px 0 8px; }
+.wp-card { border: 1px solid var(--accent, #6366f1); background: color-mix(in srgb, var(--accent, #6366f1) 8%, var(--bg-1)); border-radius: 12px; padding: 12px 14px; margin: 6px 0 14px; }
+.wp-card-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 10px; }
+.wp-card-h b { font-size: 14px; color: var(--text); }
+.wp-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.wp-switch input { width: 16px; height: 16px; accent-color: var(--accent, #6366f1); }
+.wp-hint.warn { color: #e08a3c; background: color-mix(in srgb, #e08a3c 12%, transparent); border-radius: 8px; padding: 6px 8px; margin: 0 0 8px; }
+.wp-varbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.wp-var { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 3px 8px; border: 1px solid var(--glass-border); border-radius: 7px; background: var(--bg-1); color: var(--accent, #6366f1); cursor: pointer; user-select: none; }
+.wp-var:hover { border-color: var(--accent, #6366f1); background: color-mix(in srgb, var(--accent, #6366f1) 14%, transparent); }
+.wp-var-hint { font-size: 11px; color: var(--text-dim); margin-left: 4px; }
+.wp-preview { margin-top: 8px; border: 1px dashed var(--glass-border); border-radius: 10px; padding: 8px 10px; background: var(--bg-1); }
+.wp-preview-h { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.wp-preview-b { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12.5px; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.5; }
 .wp-divider { height: 1px; background: var(--glass-border); margin: 16px 0; }
 .wp-qr { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
 .wp-qrimg { width: 200px; height: 200px; border-radius: 10px; background: #fff; padding: 8px; border: 1px solid var(--glass-border); }

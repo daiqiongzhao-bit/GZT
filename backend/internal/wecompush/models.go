@@ -40,6 +40,9 @@ type WpTask struct {
 	FileTpl     string `gorm:"size:200" json:"file_name_template"`
 	MsgTemplate string `gorm:"size:1000" json:"msg_template"`
 
+	// 是否发送说明文字；关闭则只发表格附件，不发下方文案。默认 true 兼容旧任务。
+	SendText bool `gorm:"default:true" json:"send_text"`
+
 	// 投递
 	GroupName string `gorm:"size:120" json:"group_name"`
 	SendTime  string `gorm:"size:8" json:"send_time"` // HH:MM

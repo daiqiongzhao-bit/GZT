@@ -194,8 +194,11 @@ func (h *H) ExecuteTask(t *WpTask, trigger string, dryRun bool) *WpLog {
 			"filename": fname, "task": t.Name,
 		})
 	}
-	if err := h.SendMarkdown(chatID, text); err != nil {
-		return finalize("failed", "附件已发送，但说明消息发送失败："+err.Error(), fname, n)
+	// v0.41.10：说明文字可关闭（仅关正文；0 条提示语不受影响）。关闭时只发表格附件。
+	if t.SendText {
+		if err := h.SendMarkdown(chatID, text); err != nil {
+			return finalize("failed", "附件已发送，但说明消息发送失败："+err.Error(), fname, n)
+		}
 	}
 
 	return finalize("success", fmt.Sprintf("已向「%s」推送 %d 条（%s）。", t.GroupName, n, targetDate), fname, n)

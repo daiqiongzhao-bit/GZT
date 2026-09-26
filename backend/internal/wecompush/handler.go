@@ -40,6 +40,8 @@ type taskPayload struct {
 	// v0.40.8：文件名 / 消息模板（空 = 兼容原前缀拼接）
 	FileTpl     string `json:"file_name_template"`
 	MsgTemplate string `json:"msg_template"`
+	// 是否发送说明文字（关闭则只发表格附件）。可选更新，沿用 Enabled 的指针模式。
+	SendText *bool `json:"send_text"`
 }
 
 // normalizeConditions 把前端传来的条件统一成 JSON 数组字符串 + 结构化切片
@@ -150,6 +152,9 @@ func (p *taskPayload) apply(t *WpTask) {
 	if p.Enabled != nil {
 		t.Enabled = *p.Enabled
 	}
+	if p.SendText != nil {
+		t.SendText = *p.SendText
+	}
 	t.DocID = ExtractDocID(p.DocID) // v0.40.8：允许粘贴完整链接，统一提取 docid
 	t.SheetTitle = strings.TrimSpace(p.SheetTitle)
 	t.DateField = strings.TrimSpace(p.DateField)
@@ -205,7 +210,7 @@ func (h *H) CreateTask(c *gin.Context) {
 		fail(c, 400, err.Error())
 		return
 	}
-	t := &WpTask{Enabled: true}
+	t := &WpTask{Enabled: true, SendText: true}
 	p.apply(t)
 	if err := h.DB.Create(t).Error; err != nil {
 		fail(c, 500, "保存失败："+err.Error())
