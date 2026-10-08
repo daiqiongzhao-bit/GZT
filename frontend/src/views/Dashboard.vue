@@ -390,14 +390,34 @@ function whoText(t) {
   return t.assignee || '—'
 }
 
+// v0.41.13：同一条任务会同时出现在「今日任务 / 本月任务 / 当月任务」三个列表里，
+// 后端对每个列表各序列化一份，前端就是三个互相独立的对象。勾选时若只改被点击的那个，
+// 其余列表要等自动刷新（默认 60s）才同步，表现为「左边完成了、右边没跟着变」。
+// 这里按 id 把新状态广播到三个列表，实现即时联动。
+function broadcastStatus(id, status) {
+  for (const key of ['today_task_list', 'month_task_list', 'monthly_task_list']) {
+    const arr = dash.value[key]
+    if (Array.isArray(arr)) {
+      for (const x of arr) if (x.id === id) x.status = status
+    }
+  }
+}
+
 async function toggle(t) {
   const toDone = t.status !== 'done'
   const prev = t.status
-  t.status = toDone ? 'done' : 'todo'
+  const next = toDone ? 'done' : 'todo'
+  t.status = next
+  broadcastStatus(t.id, next)
   try {
     const updated = await api.post(`/tasks/${t.id}/toggle`, { to: toDone ? 'done' : 'todo' })
-    if (updated && updated.status) t.status = updated.status
-  } catch { t.status = prev }
+    const final = (updated && updated.status) ? updated.status : next
+    t.status = final
+    broadcastStatus(t.id, final)
+  } catch {
+    t.status = prev
+    broadcastStatus(t.id, prev)
+  }
 }
 
 onMounted(async () => {
