@@ -139,7 +139,7 @@
                   <td class="col-check">
                     <button class="check" :class="{ on: t.status === 'done' }" @click="toggle(t)" v-html="icons.check"></button>
                   </td>
-                  <td class="col-type"><span class="chip" :class="typeClass(t.type)">{{ typeText(t.type) }}</span></td>
+                  <td class="col-type"><span class="chip" :class="typeClass(t.type)">{{ typeText(t) }}</span></td>
                   <td class="col-title">
                     <div class="t-title-row">
                       <span class="t-title">{{ t.title }}</span>
@@ -370,7 +370,13 @@ const panelCards = computed(() => pref.value.panels.filter((id) => PANELS[id]).m
 function peopleOf(s) {
   try { return JSON.parse(s.people || '[]') } catch { return [] }
 }
-function typeText(t) { return { daily: '每周', monthly: '每月', once: '单次' }[t] || t }
+function typeText(t) {
+  // v0.41.12 修复：daily 曾被误映射为「每周」，导致工作台总览把每日任务标成每周。
+  // 与 Tasks.vue 保持一致：daily + 未设置 week_days = 每日；设置了下周几 = 每周。
+  const ty = typeof t === 'string' ? t : (t && t.type)
+  if (ty === 'daily') { const wd = (t && typeof t === 'object') ? String(t.week_days || '') : ''; return wd ? '每周' : '每日' }
+  return { monthly: '每月', once: '单次' }[ty] || ty
+}
 function typeClass(t) { return { daily: 'accent', monthly: 'warn', once: '' }[t] || '' }
 function prioClass(p) { return { high: 'danger', medium: 'warn', low: 'ok' }[p] || '' }
 function prioText(p) { return { high: '高优', medium: '中优', low: '低优' }[p] || '中优' }
