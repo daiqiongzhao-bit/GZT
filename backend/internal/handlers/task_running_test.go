@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -177,5 +178,65 @@ func TestZeroGraceNoRunningWindow(t *testing.T) {
 	}
 	if !isOverdue(task) {
 		t.Error("宽限期为 0 时到点即应逾期")
+	}
+}
+
+// TestWeeklyTaskRespectsWeekDays v0.41.14：勾选了「按周执行」的任务，
+// 只在命中星期的那一天参与「即将开始 / 正在执行 / 逾期」三类提醒。
+//
+// 背景：此前这三个判定只比「今天 + HH:MM」，没看 week_days，
+// 于是「每周三 09:30」的任务到了周六 09:05 仍会弹出「即将开始」，
+// 10:00 之后还会一直标「逾期」，首页与导航角标的逾期数也跟着虚高。
+func TestWeeklyTaskRespectsWeekDays(t *testing.T) {
+	graceMinutesCache = 30
+	defer func() { graceMinutesCache = -2 }()
+
+	// 1=周一 … 7=周日；other 取一个「不是今天」的星期
+	today := (int(time.Now().Weekday())+6)%7 + 1
+	other := today%7 + 1
+
+	now := time.Now()
+	mk := func(days string, offsetMin int) models.Task {
+		return models.Task{
+			Type:     models.TaskTypeDaily,
+			Time:     now.Add(time.Duration(offsetMin) * time.Minute).Format("15:04"),
+			WeekDays: days,
+			Status:   models.TaskStatusTodo,
+		}
+	}
+
+	// 命中今天的按周任务：与普通每日任务一样，在提前量窗口内命中
+	if !isStarting(mk(strconv.Itoa(today), 10)) {
+		t.Error("命中今天的按周任务应显示「即将开始」")
+	}
+
+	// 非命中星期：三个提醒都必须是 false
+	cases := []struct {
+		name   string
+		offset int
+	}{
+		{"提前10分钟_即将开始窗口", 10},
+		{"已过10分钟_正在执行窗口", -10},
+		{"已过1小时_逾期窗口", -60},
+	}
+	for _, c := range cases {
+		task := mk(strconv.Itoa(other), c.offset)
+		if isStarting(task) {
+			t.Errorf("非命中星期（%s）不应显示「即将开始」", c.name)
+		}
+		if isRunning(task) {
+			t.Errorf("非命中星期（%s）不应显示「正在执行」", c.name)
+		}
+		if isOverdue(task) {
+			t.Errorf("非命中星期（%s）不应显示「逾期」", c.name)
+		}
+		if isDueToday(task) {
+			t.Errorf("非命中星期（%s）不应计入今日待办", c.name)
+		}
+	}
+
+	// 未勾选星期（空）= 每天执行，仍应照常命中
+	if !isStarting(mk("", 10)) {
+		t.Error("未勾选星期的每日任务应照常显示「即将开始」")
 	}
 }

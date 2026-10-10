@@ -91,6 +91,10 @@ func isRunning(t models.Task) bool {
 	if t.Status == models.TaskStatusDone {
 		return false
 	}
+	// v0.41.14：按周执行的任务，非命中星期当天不存在「正在执行」窗口
+	if t.Type == models.TaskTypeDaily && !isWeekDayMatch(t.WeekDays) {
+		return false
+	}
 	start := taskStartTime(t)
 	if start.IsZero() {
 		return false
@@ -143,6 +147,10 @@ func runningLeftMinutes(t models.Task) int {
 //	08:30~08:59  即将开始（青色，v0.14.1 新增）
 //	09:00~09:30  正在执行（蓝色，v0.14.0）
 //	09:30 之后   逾期（红色）
+//
+// v0.41.14：以上四段状态只在「今天命中 week_days」时才成立。
+// 此前只比「今天 + HH:MM」，没看星期，导致「每周三/每周五」的任务在周六、
+// 周日也会提前 30 分钟弹出「即将开始」（过了时间还会误标「逾期」）。
 func isStarting(t models.Task) bool {
 	// v0.21.16 冻结任务不参与任何提醒
 	if t.Frozen {
@@ -152,6 +160,10 @@ func isStarting(t models.Task) bool {
 		return false
 	}
 	if t.Type != models.TaskTypeDaily {
+		return false
+	}
+	// v0.41.14：按周执行的任务，非命中星期当天不参与提醒
+	if !isWeekDayMatch(t.WeekDays) {
 		return false
 	}
 	start := taskStartTime(t)
@@ -281,6 +293,11 @@ func isOverdue(t models.Task) bool {
 			}
 		}
 	case models.TaskTypeDaily:
+		// v0.41.14：按周执行的任务，非命中星期当天不算逾期
+		// （否则「每周三」的任务到周六会一直标红，导航角标也虚高）
+		if !isWeekDayMatch(t.WeekDays) {
+			return false
+		}
 		if t.Time != "" {
 			if dt, err := time.ParseInLocation("2006-01-02T15:04", now.Format("2006-01-02")+"T"+t.Time, config.TZ()); err == nil && dt.Add(grace).Before(now) {
 				return true
