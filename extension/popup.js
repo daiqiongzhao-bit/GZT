@@ -184,6 +184,24 @@ function render(data) {
 
   // 统计
   const todayTasks = (dash.today_task_list || tasks.filter((t) => t.due_today)).filter((t) => t.status !== 'done')
+  // v0.41.15：按紧迫度排序——执行中(0) → 即将开始(1) → 逾期(2) → 普通今日(3)，
+  // 同组内再按时间升序。此前直接按服务端返回顺序渲染，导致「执行中 / 即将开始」
+  // 的任务可能排在普通任务后面，用户要点开很久才能找到正在做的活。
+  const taskRank = (t) => {
+    if (t.running && !t.overdue) return 0
+    if (t.starting && !t.running && !t.overdue) return 1
+    if (t.overdue) return 2
+    return 3
+  }
+  const taskSortKey = (t) => {
+    const w = t.time ? timeOf('T' + t.time) : timeOf(t.deadline)
+    return w || '99:99'
+  }
+  todayTasks.sort((a, b) => {
+    const ra = taskRank(a), rb = taskRank(b)
+    if (ra !== rb) return ra - rb
+    return taskSortKey(a).localeCompare(taskSortKey(b))
+  })
   const overdue = tasks.filter((t) => t.overdue && t.status !== 'done')
   const running = tasks.filter((t) => t.running && t.status !== 'done')
   // 「即将开始」dashboard 已带 starting_count；优先用字段，没有再回退到遍历

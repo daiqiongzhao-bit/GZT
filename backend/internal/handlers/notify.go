@@ -127,6 +127,17 @@ func taskShiftPeople(t models.Task, onDuty map[string][]string, scope []uint) []
 	return out
 }
 
+// taskNotifyPeople 返回任务推送应@的人员（v0.41.15 负责人优先）：
+//   - 任务指定了负责人 → 只@负责人，不再叠加班次当班人员；
+//     否则「全员」班次（taskShiftPeople 会展开为所有人员）会把全公司都@一遍。
+//   - 未指定负责人 → 按班次@当班人员（现有行为不变）。
+func taskNotifyPeople(t models.Task, onDuty map[string][]string, scope []uint) []string {
+	if ns := taskAssigneeNames(t); len(ns) > 0 {
+		return ns
+	}
+	return taskShiftPeople(t, onDuty, scope)
+}
+
 // inGroupSet 返回已入群用户姓名集合（这些人会被@，名单中不重复列出）
 func inGroupSet() map[string]bool {
 	set := map[string]bool{}
@@ -541,7 +552,7 @@ func NotifyTodayHandler(c *gin.Context) {
 		if t.Status == models.TaskStatusDone || !isDueToday(t) {
 			continue
 		}
-		for _, p := range taskShiftPeople(t, onDuty, scope) {
+		for _, p := range taskNotifyPeople(t, onDuty, scope) {
 			if !seen[p] {
 				seen[p] = true
 				allPeople = append(allPeople, p)
@@ -658,7 +669,7 @@ func reminderMobiles(scope []uint) []string {
 		if t.Status == models.TaskStatusDone || !isDueToday(t) {
 			continue
 		}
-		for _, p := range taskShiftPeople(t, onDuty, scope) {
+		for _, p := range taskNotifyPeople(t, onDuty, scope) {
 			if !seen[p] {
 				seen[p] = true
 				allPeople = append(allPeople, p)
@@ -718,20 +729,9 @@ func pushDueTasks(now time.Time) {
 		if !due {
 			continue
 		}
-		// 艾特对象：当班人员 + 任务负责人（单人/多人逐一去重加入）
-		people := taskShiftPeople(t, onDuty, nil)
-		for _, a := range taskAssigneeNames(t) {
-			exists := false
-			for _, p := range people {
-				if p == a {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				people = append(people, a)
-			}
-		}
+		// v0.41.15：艾特对象——负责人优先：指定了负责人只@负责人；
+		// 未指定才按班次@当班人员（「全员」班次不再把所有人@一遍）。
+		people := taskNotifyPeople(t, onDuty, nil)
 		// v0.15.2：名单只显示未入群的人（@对象由 peopleMobiles 按 in_group 过滤）
 		var listed []string
 		for _, p := range people {

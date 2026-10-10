@@ -16,6 +16,17 @@ function pad(n) {
 function localDateStr(d) {
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
 }
+// v0.41.15：对齐后端 isWeekDayMatch（task.go）：1=周一…7=周日；week_days 为空=每天执行。
+// 用于「按周执行」任务在插件桌面提醒里只在命中星期才弹，避免「每周六」天天弹通知。
+function isWeekDayMatch(days) {
+  const set = new Set(
+    String(days || '').split(',').map((s) => s.trim()).filter((s) => /^\d{1,2}$/.test(s)).map(Number)
+  )
+  if (set.size === 0) return true
+  const w = (new Date().getDay() + 6) % 7
+  const wd = w + 1
+  return set.has(wd)
+}
 
 // 拉取概览，把逾期/今日待办数量写到工具栏角标
 async function refreshBadge() {
@@ -90,6 +101,9 @@ async function checkReminders() {
     let dueKey = ''
     let title = '任务到点'
     if (t.type === 'daily' && t.time) {
+      // v0.41.15：按周执行的任务，非命中星期当天不弹提醒（对齐后端 isWeekDayMatch）。
+      // 此前只看 t.time，导致「每周六」这类任务天天都弹桌面通知。
+      if (t.week_days && !isWeekDayMatch(t.week_days)) continue
       const m = /^(\d{2}):(\d{2})$/.exec(String(t.time).trim())
       if (!m) continue
       at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2], 0, 0)
