@@ -692,13 +692,36 @@ func atMissHint(t models.Task, people []string) string {
 	return "\n⚠️ 未@到人：相关人员未加入通知群或未填写手机号（设置 → 人员 可补全）"
 }
 
+// taskDueAt 判断任务在给定分钟(hm, "15:04")是否到点（v0.41.16 从 pushDueTasks 提取为纯函数，便于测试）。
+// 只认排期，与任务完成状态无关：员工提前完成也照常推送。
+func taskDueAt(t models.Task, hm, today string) bool {
+	switch t.Type {
+	case models.TaskTypeDaily:
+		// 每日任务：到点且命中按周执行勾选的星期才推送（未勾选=每天都推）
+		return t.Time != "" && t.Time == hm && isWeekDayMatch(t.WeekDays)
+	case models.TaskTypeOnce:
+		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
+			return dl.Format("2006-01-02 15:04") == today+" "+hm
+		}
+	case models.TaskTypeMonthly:
+		if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
+			// 按完整日期比较，避免跨月误推
+			return dl.Format("2006-01-02") == today && dl.Format("15:04") == hm
+		}
+	}
+	return false
+}
+
 // pushDueTasks 推送当前分钟到点的任务提醒（部门隔离：任务只推给本部门的 Webhook）
 func pushDueTasks(now time.Time) {
 	ResetRecurringTasks() // 周期任务跨日/跨月自动回到待办（幂等，同一周期只落库一次）
 	hm := now.Format("15:04")
 	today := now.Format("2006-01-02")
 	var tasks []models.Task
-	db.DB.Where("status = ?", models.TaskStatusTodo).Find(&tasks)
+	// v0.41.16：不再按 status=todo 过滤。员工常在到点前提前完成并勾选，
+	// 旧逻辑会把这类任务整体跳过，导致到点不推送。到点提醒只认排期
+	//（类型+时间+星期/deadline），与是否提前完成无关。
+	db.DB.Find(&tasks)
 	var hooks []models.Webhook
 	db.DB.Find(&hooks)
 	if len(hooks) == 0 {
@@ -711,21 +734,8 @@ func pushDueTasks(now time.Time) {
 		if t.Frozen {
 			continue
 		}
-		due := false
-		switch t.Type {
-		case models.TaskTypeDaily:
-			// 每日任务：到点且命中「按周执行」勾选的星期才推送（未勾选=每天都推）
-			due = t.Time != "" && t.Time == hm && isWeekDayMatch(t.WeekDays)
-		case models.TaskTypeOnce:
-			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
-				due = dl.Format("2006-01-02 15:04") == today+" "+hm
-			}
-		case models.TaskTypeMonthly:
-			if dl, err := time.ParseInLocation("2006-01-02T15:04", t.Deadline, time.Local); err == nil {
-				// 按完整日期比较，避免跨月误推（8 月 1 日的任务不该在 9 月 1 日再推）
-				due = dl.Format("2006-01-02") == today && dl.Format("15:04") == hm
-			}
-		}
+		// v0.41.16：到点判断与完成状态无关（提前完成也照推）
+		due := taskDueAt(t, hm, today)
 		if !due {
 			continue
 		}
