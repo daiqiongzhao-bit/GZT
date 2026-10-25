@@ -38,6 +38,41 @@ function dataURLToFile(dataURL, filename) {
   return new File([arr], filename, { type: mime })
 }
 
+/**
+ * 剥掉剪贴板 HTML 里的全部注释节点。
+ * Word / Excel / WPS / 腾讯文档 复制的内容都带 <!--StartFragment--> / <!--EndFragment-->
+ * 包装注释；ProseMirror 解析时会把注释节点渲染成正文文本（还会连带产生空行），
+ * 必须在 insertContent 之前清除。
+ */
+function stripClipboardComments(html) {
+  return html.replace(/<!--[\s\S]*?-->/g, '')
+}
+
+/**
+ * 清理 Office 粘贴产物中的纯空白空段（只有空白 / &nbsp; / <br> 的 <p> 与空 <li>），
+ * 避免“粘贴后空一大格”。保留含图片或实际文字的节点。
+ */
+function dropBlankBlocks(tpl) {
+  const isBlank = (el) => {
+    if (el.querySelector('img')) return false
+    const text = (el.textContent || '').replace(/[\u00a0\s]/g, '')
+    if (text) return false
+    // 仅含 <br> 的段落视为空段（Office 空行占位）；<br> 在其它段落中有意义，这里段内无文字即视为占位
+    return true
+  }
+  for (const p of Array.from(tpl.content.querySelectorAll('p'))) {
+    if (isBlank(p)) p.remove()
+  }
+  for (const li of Array.from(tpl.content.querySelectorAll('li'))) {
+    if (isBlank(li)) {
+      const list = li.parentElement
+      li.remove()
+      // 列表被清空则连同列表容器一起移除，避免残留空列表
+      if (list && (list.tagName === 'UL' || list.tagName === 'OL') && !list.querySelector('li')) list.remove()
+    }
+  }
+}
+
 /** 构造图片节点属性（含附件机制红线属性）。
  *  width 可选：粘贴图片超过 MAX_PASTE_WIDTH 时，预先落一个合理宽度，避免「那么大」。 */
 function imgAttrs(u, width) {
@@ -102,8 +137,10 @@ export const PasteImageUpload = Extension.create({
      * blobs 为剪贴板里的图片文件，用于替换 Word 产生的 file:/// 占位图（按序消费）。
      */
     const embedImagesFromHtml = async (html, blobs) => {
+      html = stripClipboardComments(html)
       const tpl = document.createElement('template')
       tpl.innerHTML = html
+      dropBlankBlocks(tpl)
       const imgs = Array.from(tpl.content.querySelectorAll('img'))
       let bi = 0
       for (const img of imgs) {
@@ -194,7 +231,20 @@ export const PasteImageUpload = Extension.create({
               return true
             }
 
-            // ③ 纯文本：交回默认行为
+            // ③ 纯文本：部分应用（WPS / 腾讯文档）会把 <!--StartFragment--> 标记带进纯文本，
+            //    这里剥掉标记后再插入，避免注释原样出现在正文里
+            const text = cd.getData ? cd.getData('text/plain') : ''
+            if (text && /<!--\s*(Start|End)?\s*Fragment\s*-->/.test(text)) {
+              event.preventDefault()
+              const cleaned = text.replace(/<!--[\s\S]*?-->/g, '')
+              const lines = cleaned.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+              if (lines.length) {
+                editor.chain().focus()
+                  .insertContent(lines.map((t) => ({ type: 'paragraph', content: [{ type: 'text', text: t }] })))
+                  .run()
+              }
+              return true
+            }
             return false
           },
 
