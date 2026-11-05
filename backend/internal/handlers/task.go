@@ -666,6 +666,18 @@ func ListTasks(c *gin.Context) {
 		if list[i].Starting {
 			list[i].StartingIn = startingInMinutes(list[i])
 		}
+		// 今天完成的任务也属于"今日"范围（任务页「今日」页签要列出已完成项，
+		// 带 ✓ 完成记录沉底展示）。isDueToday 对已完成返回 false 是"待办"口径，
+		// dashboard 统计/推送/角标都依赖它，不能改；这里仅对列表接口补标记：
+		// 已完成且完成时间在今天 → due_today=true（跨日前每日任务已被重置，
+		// 每周/单次任务靠 CompletedAt 是否落在今天判断，不会误留到明天）。
+		if list[i].Status == models.TaskStatusDone {
+			now := config.Now()
+			dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			if ct := list[i].CompletedAt.In(now.Location()); ct.After(dayStart) {
+				list[i].DueToday = true
+			}
+		}
 	}
 	sortTasksByUrgency(list)
 	c.JSON(http.StatusOK, list)

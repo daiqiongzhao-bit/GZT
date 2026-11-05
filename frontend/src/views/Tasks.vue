@@ -631,16 +631,18 @@ const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0) + '%'
 const filtered = computed(() => {
   let list = visibleTasks.value
   if (filterDept.value) list = list.filter((t) => t.dept_id === filterDept.value)
-  if (tab.value === 'today') return list.filter((t) => t.due_today && t.status !== 'done')
-  if (tab.value === 'month') return list.filter((t) => isMonthlyTask(t) && t.status !== 'done')
+  // 今日/本月页签同样列出已完成项（自动沉底、带 ✓ 完成记录），
+  // 让人一眼看到"当天/当月要做什么、已经做完了什么"；角标数字仍只统计待办
+  if (tab.value === 'today') return list.filter((t) => t.due_today)
+  if (tab.value === 'month') return list.filter((t) => isMonthlyTask(t))
   if (tab.value === 'overdue') return list.filter((t) => t.overdue && t.status !== 'done')
   return list
 })
 
 const emptyText = computed(() => {
   if (tab.value === 'overdue') return '没有逾期事项，保持得很好 👍'
-  if (tab.value === 'today') return '今天没有待办任务 🎉'
-  if (tab.value === 'month') return '本月暂无待办任务'
+  if (tab.value === 'today') return '今天暂无任务（含已完成）'
+  if (tab.value === 'month') return '本月暂无任务（含已完成）'
   return '暂无任务'
 })
 
